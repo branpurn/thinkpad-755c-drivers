@@ -1,0 +1,51 @@
+# tc755 add-on: in-tree drivers for ThinkPad 755C hardware, all as modules.
+# Nothing in this file may be =y unless it is a pure bool sub-option of an
+# =m driver (it then lives inside that .ko and costs the core nothing).
+
+# --- Video: fbdev core + vga16fb (640x480x4 planar; 755C video BIOS has no
+# VBE, so vesafb is not an option). fbcon is linked into fb.ko when =y here.
+CONFIG_FB=m
+CONFIG_FB_DEVICE=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
+CONFIG_FB_VGA16=m
+
+# --- Audio: CS4248 = AD1848-compatible WSS codec -> snd-ad1848 thinkpad=1.
+# snd-cs4231 is built too: it drives QEMU's cs4231a for emulator tests.
+CONFIG_SOUND=m
+CONFIG_SND=m
+CONFIG_SND_OSSEMUL=y
+CONFIG_SND_PCM_OSS=m
+CONFIG_SND_ISA=y
+CONFIG_SND_AD1848=m
+CONFIG_SND_CS4231=m
+# CONFIG_SND_DRIVERS is not set
+# CONFIG_SND_SUPPORT_OLD_API is not set
+# CONFIG_SND_VERBOSE_PROCFS is not set
+
+# --- PC Card: 755C has 2x Ricoh RF5C266 (i82365-register-compatible, ISA).
+# Card drivers that need no networking stack: CF/ATA cards, serial/modem.
+CONFIG_PCCARD=m
+CONFIG_PCMCIA=m
+CONFIG_I82365=m
+CONFIG_PCMCIA_PROBE=y
+CONFIG_PATA_PCMCIA=m
+CONFIG_SERIAL_8250_CS=m
+
+# --- TrackPoint (PS/2 aux port on the i8042) + /dev/input/mice.
+CONFIG_INPUT_MOUSE=y
+CONFIG_MOUSE_PS2=m
+CONFIG_MOUSE_PS2_TRACKPOINT=y
+CONFIG_INPUT_MOUSEDEV=m
+CONFIG_INPUT_EVDEV=m
+# Only the TrackPoint protocol is needed; drop the other psmouse extensions.
+# CONFIG_MOUSE_PS2_ALPS is not set
+# CONFIG_MOUSE_PS2_BYD is not set
+# CONFIG_MOUSE_PS2_CYPRESS is not set
+# CONFIG_MOUSE_PS2_FOCALTECH is not set
+# CONFIG_MOUSE_PS2_LOGIPS2PP is not set
+# CONFIG_MOUSE_PS2_SYNAPTICS is not set
+# CONFIG_MOUSE_PS2_SYNAPTICS_SMBUS is not set
+# CONFIG_MOUSE_PS2_SENTELIC is not set
+# CONFIG_MOUSE_PS2_TOUCHKIT is not set
+# CONFIG_MOUSE_PS2_ELANTECH is not set
+# CONFIG_MOUSE_PS2_VMMOUSE is not set

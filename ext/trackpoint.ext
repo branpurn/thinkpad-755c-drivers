@@ -1,0 +1,3 @@
+DESC="TrackPoint / PS/2 mouse (psmouse with TrackPoint protocol) + /dev/input/mice + evdev"
+MODS="psmouse mousedev evdev"
+DEPS="modutils.tcz"

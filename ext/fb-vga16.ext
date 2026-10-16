@@ -1,0 +1,3 @@
+DESC="vga16fb framebuffer (640x480x16 planar) + fbcon for the WD90C24A; no VBE needed"
+MODS="vga16fb tc32-vgafb-dev"
+DEPS="modutils.tcz"

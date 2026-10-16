@@ -1,0 +1,1 @@
+obj-m += tc32-vgafb-dev.o

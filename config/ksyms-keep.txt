@@ -1,0 +1,11 @@
+# Exported symbols kept in the core kernel for OUT-OF-TREE modules when
+# TRIM_KSYMS=1 (CONFIG_TRIM_UNUSED_KSYMS). In-tree =m users are found
+# automatically. Regenerate with: make ksyms-keep  (scans modules/*/*.ko)
+ioremap
+iounmap
+memcmp
+param_ops_bool
+platform_device_register_full
+platform_device_unregister
+_printk
+screen_info

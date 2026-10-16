@@ -1,0 +1,4 @@
+DESC="PC Card: core + i82365 (755C: 2x Ricoh RF5C266 at 0x3E0) + CF/ATA (pata_pcmcia) + serial/modem (serial_cs)"
+MODS="i82365 pcmcia pata_pcmcia serial_cs"
+OPTIONAL=1
+DEPS="modutils.tcz"
