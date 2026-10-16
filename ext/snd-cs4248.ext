@@ -1,0 +1,7 @@
+DESC="ThinkPad 755C onboard Crystal CS4248 (AD1848-compatible WSS) via snd-ad1848, OSS /dev/dsp"
+MODS="snd-ad1848 snd-pcm-oss"
+# 755C factory defaults (ThinkPad Features / Easy-Setup can move them):
+# I/O 0x4E30, IRQ 10, playback DMA 0; thinkpad=1 powers the codec up via
+# the ThinkPad control port 0x15E8/0x15E9.
+ARGS_snd_ad1848="port=0x4e30 irq=10 dma1=0 thinkpad=1"
+DEPS="modutils.tcz"

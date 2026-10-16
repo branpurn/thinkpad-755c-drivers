@@ -1,0 +1,5 @@
+DESC="Generic CS4231/WSS ISA codec (snd-cs4231): QEMU -device cs4231a, WSS cards"
+MODS="snd-cs4231 snd-pcm-oss"
+# QEMU cs4231a defaults
+ARGS_snd_cs4231="port=0x534 irq=9 dma1=3 dma2=-1"
+DEPS="modutils.tcz"

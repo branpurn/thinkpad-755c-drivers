@@ -1,0 +1,15 @@
+# Static busybox carrying only the module tools (shipped as modutils.tcz so
+# the tc32 core busybox does not have to grow). allnoconfig + these.
+STATIC
+LFS
+INSMOD
+RMMOD
+LSMOD
+FEATURE_LSMOD_PRETTY_2_6_OUTPUT
+MODPROBE
+DEPMOD
+MODINFO
+FEATURE_MODUTILS_ALIAS
+FEATURE_MODUTILS_SYMBOLS
+# without this busybox silently drops every module parameter
+FEATURE_CMDLINE_MODULE_OPTIONS
