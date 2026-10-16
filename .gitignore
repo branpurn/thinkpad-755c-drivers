@@ -1,0 +1,15 @@
+# downloads, build trees and artifacts are never committed
+/dl/
+/build/
+/out/
+*.part
+*.img
+*.ko
+*.o
+*.mod
+*.mod.c
+*.cmd
+.*.cmd
+Module.symvers
+modules.order
+__pycache__/
