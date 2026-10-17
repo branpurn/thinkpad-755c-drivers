@@ -88,6 +88,16 @@ def ppm_to_png(src, dst):
     return w, h
 
 
+def ppm_lit(src):
+    """Fraction of non-black pixels (is anything on screen?)."""
+    with open(src, "rb") as f:
+        data = f.read()
+    m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+(\d+)\s", data)
+    px = data[m.end():]
+    n = len(px) // 3
+    return sum(1 for i in range(0, len(px), 3) if px[i] | px[i + 1] | px[i + 2]) / max(n, 1)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mem", type=int, default=32)
@@ -169,10 +179,39 @@ def main():
               "wd90c24fb: no Paradise/WD chip found" in d and "wd90c24fb" not in g.run("cat /proc/modules")[0], " | ".join(l.split("] ")[-1] for l in d.strip().splitlines()))
         metrics["wd90c24_probe"] = d.strip()
 
-        o, rc, mods = tce("fb-vga16")
+        def shot(tag):
+            ppm = os.path.join(a.logdir, f"screen-{tag}-{name}.ppm")
+            monitor(f"screendump {ppm}")
+            time.sleep(0.5)
+            lit = ppm_lit(ppm)
+            w, h = ppm_to_png(ppm, ppm[:-4] + ".png"); os.unlink(ppm)
+            return w, h, lit
+
+        # wd90c24fb fail-safe: fake=1 drives QEMU's std VGA as if it were a
+        # WD90C24; PR0(A) banking cannot work there, so the self-test must
+        # fail, the text mode come back intact, and nothing stay loaded.
+        g.run("clear > /dev/tty1; printf 'tc755: text console before wd90c24fb fake=1\\n' > /dev/tty1; sleep 1")
+        try:
+            w0, h0, lit0 = shot("text-before-wd90c24fb")
+            ko = g.run("find /usr/local/lib/modules -name wd90c24fb.ko")[0].strip()
+            o, rc = g.run(f"insmod {ko} fake=1; echo rc=$?; cat /proc/fb; grep -c wd90c24fb /proc/modules", 60)
+            d, _ = g.run("dmesg | grep -E 'wd90c24fb|fbcon|Console: switching' | tail -6")
+            g.run("printf 'tc755: text console after wd90c24fb fake=1\\n' > /dev/tty1; sleep 1")
+            w1, h1, lit1 = shot("text-after-wd90c24fb")
+            check("wd90c24fb fake=1: self-test fails, -ENODEV, no fb left, not loaded",
+                  "rc=0" not in o and "self-test failed: text mode restored" in d and "WD90C24" not in o
+                  and o.strip().endswith("0"), " | ".join(l.split("] ")[-1] for l in d.strip().splitlines()[-3:]))
+            check("wd90c24fb fake=1: text mode restored (screendump 720x400, text visible)",
+                  (w0, h0) == (720, 400) and (w1, h1) == (720, 400) and lit1 > 0.002,
+                  f"before {w0}x{h0} lit {lit0:.3f}, after {w1}x{h1} lit {lit1:.3f}")
+        except Exception as e:
+            check("wd90c24fb fake=1 fail-safe", False, str(e))
+
+        o, rc, mods = tce("fb-wd90c24")
         o2, _ = g.run("cat /proc/fb; ls /dev/fb0; dmesg | grep -iE 'vga16fb|frame buffer|tc32-vgafb|Console: switching' | tail -5")
-        check("fb-vga16.tcz: vga16fb bound via tc32-vgafb-dev, /dev/fb0 + fbcon",
-              rc == 0 and "VGA16" in o2 and "/dev/fb0" in o2, " | ".join(l.strip() for l in o2.strip().splitlines()[:4]))
+        check("fb-wd90c24.tcz: no WD chip in QEMU, falls back to vga16fb (/dev/fb0 + fbcon)",
+              rc == 0 and "falling back" in o and "VGA16" in o2 and "/dev/fb0" in o2,
+              " | ".join(l.strip() for l in (o.strip().splitlines()[-2:] + o2.strip().splitlines()[:2])))
         o3, rc3 = g.run("cat /sys/class/graphics/fb0/virtual_size /sys/class/graphics/fb0/bits_per_pixel")
         check("framebuffer is 640x480x4", "640,480" in o3 and o3.split()[-1] == "4", " ".join(o3.split()))
         g.run("clear > /dev/tty1; printf 'tc755: vga16fb + fbcon on tty1 (640x480, 80x30)\\n' > /dev/tty1; sleep 2")

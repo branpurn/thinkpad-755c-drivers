@@ -8,6 +8,10 @@ CONFIG_FB=m
 CONFIG_FB_DEVICE=y
 CONFIG_FRAMEBUFFER_CONSOLE=y
 CONFIG_FB_VGA16=m
+# FB_VIRTUAL (vfb) is not shipped; it is here because it is the one
+# driver that builds the system-memory fb helpers (sys_fillrect/copyarea/
+# imageblit, fb_sys_read/write) that wd90c24fb draws its shadow with.
+CONFIG_FB_VIRTUAL=m
 
 # --- Audio: CS4248 = AD1848-compatible WSS codec -> snd-ad1848 thinkpad=1.
 # snd-cs4231 is built too: it drives QEMU's cs4231a for emulator tests.

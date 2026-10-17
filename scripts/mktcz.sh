@@ -50,9 +50,11 @@ mk_modutils() {
 
 mk_ext() {
     n=$1; f="$TOP/ext/$n.ext"; [ -f "$f" ] || die "no such extension: $f"
-    DESC="" MODS="" DEPS="" OPTIONAL=""
+    DESC="" MODS="" DEPS="" OPTIONAL="" FALLBACK=""
     . "$f"
     ORDER=""; for m in $MODS; do visit "$m"; done
+    PRIMARY=$ORDER; ORDER=""; for m in $FALLBACK; do visit "$m"; done; FORDER=$ORDER
+    ORDER="$PRIMARY"; for m in $FORDER; do case " $ORDER " in *" $m "*) ;; *) ORDER="$ORDER $m";; esac; done
     d="$S/$n"; rm -rf "$d"; mkdir -p "$d/usr/local/tce.installed"
     sh="$d/usr/local/tce.installed/$n"
     {
@@ -66,10 +68,19 @@ mk_ext() {
         echo '    a=$3; for c in $(cat /proc/cmdline); do case $c in "$m".*=*) a="$a ${c#$m.}";; esac; done'
         echo '    if insmod "$MD/$2" $a; then echo "  $m loaded${a:+ ($a)}"; else echo "  $m: insmod failed${a:+ ($a)}"; rc=1; fi'
         echo '}'
-        for m in $ORDER; do
+        for m in $PRIMARY; do
             v=ARGS_$(echo "$m" | tr - _); eval "args=\${$v:-}"
             echo "load $m $(path_of "$m") \"$args\""
         done
+        if [ -n "$FALLBACK" ]; then
+            echo "if [ \$rc -ne 0 ]; then"
+            echo "    echo '  $n: falling back to$FALLBACK'; rc=0"
+            for m in $FORDER; do
+                v=ARGS_$(echo "$m" | tr - _); eval "args=\${$v:-}"
+                echo "    load $m $(path_of "$m") \"$args\""
+            done
+            echo "fi"
+        fi
         if [ -n "$OPTIONAL" ]; then echo 'exit 0'; else echo 'exit $rc'; fi
     } > "$sh"
     chmod 755 "$sh"

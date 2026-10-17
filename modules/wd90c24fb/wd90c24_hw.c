@@ -95,6 +95,7 @@ enum wd_chip wd_probe(struct wd_hw *hw)
 	hw->pr18 = hw->pr19 = 0;
 	hw->use_1meg = false;
 	hw->ext_blocks = false;
+	hw->bank = -1;
 
 	/* Paradise test: PR0A must be read-only when locked, r/w when not. */
 	gr0f = wd_rdinx(WD_GFX, PR5);
@@ -283,4 +284,179 @@ void wd_relock(struct wd_hw *hw, const struct wd_ext_state *s)
 	wd_wrinx(WD_SEQ, PR20, s->pr20);
 	wd_wrinx(hw->crtc, PR10, s->pr10);
 	wd_wrinx(WD_GFX, PR5, s->pr5);
+}
+
+/*
+ * 640x480x8, from XFree86 PVGA1Init + vgaHWInit for 256 colours, at the
+ * standard 25.175 MHz (clock 0) VGA timing: 800x525 total, both syncs
+ * negative. Differences from XFree86: PR1 bit 3 stays clear, so PR0(A)
+ * alone offsets the whole 64 KiB window (data sheet 13.1); PR68's MCLK
+ * bits are left as the BIOS set them.
+ */
+static const u8 wd_crtc_640x480x8[25] = {
+	0x5f, 0x4f, 0x50, 0x82, 0x54, 0x80, 0x0b, 0x3e,
+	0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0xea, 0x8c, 0xdf,
+	0x50,	/* offset: 640 / 8 (doubleword mode, as XFree86 sets) */
+	0x40,	/* underline: doubleword mode */
+	0xe7, 0x04,
+	0xe3,	/* mode control: byte mode */
+	0xff,
+};
+
+void wd_mode_640x480x8(const struct wd_hw *hw, const struct wd_ext_state *bios,
+		       struct wd_std *std, struct wd_ext_state *ext)
+{
+	static const u8 seq[5] = { 0x03, 0x01, 0x0f, 0x00, 0x0e };
+	static const u8 gfx[9] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x05, 0x0f, 0xff };
+	int i;
+
+	std->misc = 0xe3;
+	for (i = 0; i < 5; i++)
+		std->seq[i] = seq[i];
+	for (i = 0; i < 25; i++)
+		std->crtc[i] = wd_crtc_640x480x8[i];
+	for (i = 0; i < 9; i++)
+		std->gfx[i] = gfx[i];
+	for (i = 0; i < 16; i++)
+		std->attr[i] = i;
+	std->attr[16] = 0x41;	/* graphics, 8-bit colour */
+	std->attr[17] = 0x00;
+	std->attr[18] = 0x0f;
+	std->attr[19] = 0x00;
+	std->attr[20] = 0x00;
+
+	*ext = *bios;
+	ext->misc = std->misc;
+	ext->pr0a = 0;
+	ext->pr0b = 0;
+	ext->pr1 = bios->pr1 & ~0x08;
+	if (hw->use_1meg)
+		ext->pr1 |= 0xc0;
+	ext->pr3 = 0x00;		/* CRTCCtrl */
+	ext->pr4 = 0x01;		/* VideoCtrl: 256-colour path */
+	ext->pr13 = 0x00;		/* no interlace */
+	ext->pr14 = 0x00;
+	ext->pr15 = bios->pr15 & ~0x50;	/* MiscCtrl1: clock 0 is not MCLK */
+	ext->pr16 = 0x00;		/* MiscCtrl2 */
+	ext->pr31 = (bios->pr31 & 0x03) | 0x5c;	/* InterfaceCtrl */
+	ext->pr30a = (bios->pr30a & ~0xcf) | 0xc1;	/* MemoryInterface */
+	if (hw->chip == WD_C24)		/* VideoSelect for clock 0 */
+		ext->pr68 = (bios->pr68 & ~0x18) | 0x08;
+}
+
+void wd_screen_on(struct wd_hw *hw, bool on)
+{
+	(void)hw;
+	wd_modinx(WD_SEQ, 0x01, 0x20, on ? 0x00 : 0x20);
+}
+
+void wd_write_std(struct wd_hw *hw, const struct wd_std *std)
+{
+	u16 is1 = hw->crtc + 6;		/* input status 1 resets the ATC flip-flop */
+	int i;
+
+	wd_wrinx(WD_SEQ, 0x00, 0x01);	/* synchronous reset */
+	wd_outb(std->misc, WD_MISC_W);
+	for (i = 1; i < 5; i++)
+		wd_wrinx(WD_SEQ, i, i == 1 ? std->seq[i] | 0x20 : std->seq[i]);
+	wd_wrinx(WD_SEQ, 0x00, 0x03);
+	wd_modinx(hw->crtc, 0x11, 0x80, 0x00);
+	for (i = 0; i < 25; i++)
+		if (i != 0x11)
+			wd_wrinx(hw->crtc, i, std->crtc[i]);
+	wd_wrinx(hw->crtc, 0x11, std->crtc[0x11]);
+	for (i = 0; i < 9; i++)
+		wd_wrinx(WD_GFX, i, std->gfx[i]);
+	wd_inb(is1);
+	for (i = 0; i < 21; i++) {
+		wd_outb(i, 0x3c0);
+		wd_outb(std->attr[i], 0x3c0);
+	}
+	wd_inb(is1);
+	wd_outb(0x20, 0x3c0);		/* palette address source: video on */
+}
+
+void wd_set_mode(struct wd_hw *hw, const struct wd_std *std,
+		 const struct wd_ext_state *ext)
+{
+	wd_screen_on(hw, false);
+	wd_restore_ext(hw, ext);	/* same writer as restore, mode values */
+	wd_write_std(hw, std);
+	hw->bank = -1;
+	wd_set_bank(hw, 0);
+	wd_screen_on(hw, true);
+}
+
+void wd_set_bank(struct wd_hw *hw, u8 bank)
+{
+	if (hw->bank != bank) {
+		wd_wrinx(WD_GFX, PR0A, bank);
+		hw->bank = bank;
+	}
+}
+
+static u8 wd_marker(int i)
+{
+	return 0x5a ^ (u8)(i * 0x33);
+}
+
+int wd_selftest_banks(struct wd_hw *hw, unsigned int vram_kb)
+{
+	/* 0, 32 KiB, 64 KiB and (512K+ parts) 256 KiB */
+	static const u8 banks[4] = { 0x00, 0x08, 0x10, 0x40 };
+	int i, n = vram_kb >= 512 ? 4 : 3, ret = 0;
+
+	wd_set_bank(hw, 0x10);
+	if (wd_rdinx(WD_GFX, PR0A) != 0x10)
+		ret = -1;
+	for (i = 0; i < n && !ret; i++) {
+		wd_set_bank(hw, banks[i]);
+		wd_win_writeb(hw, 0, wd_marker(i));
+	}
+	for (i = 0; i < n && !ret; i++) {
+		wd_set_bank(hw, banks[i]);
+		if (wd_win_readb(hw, 0) != wd_marker(i))
+			ret = -1;
+	}
+	/* the window is linear: bank 0 + 32 KiB is bank 8 + 0 */
+	if (!ret) {
+		wd_set_bank(hw, 0);
+		if (wd_win_readb(hw, 0x8000) != wd_marker(1))
+			ret = -1;
+	}
+	hw->bank = -1;
+	wd_set_bank(hw, 0);
+	return ret;
+}
+
+void wd_flush_rect(struct wd_hw *hw, const u8 *shadow, unsigned int x,
+		   unsigned int y, unsigned int w, unsigned int h)
+{
+	unsigned int r;
+	u32 off, base;
+
+	if (x >= WD_XRES || y >= WD_YRES || !w || !h)
+		return;
+	if (w > WD_XRES - x)
+		w = WD_XRES - x;
+	if (h > WD_YRES - y)
+		h = WD_YRES - y;
+	for (r = 0; r < h; r++) {
+		off = (y + r) * WD_PITCH + x;
+		base = hw->bank < 0 ? 0 : (u32)hw->bank << 12;
+		if (hw->bank < 0 || off < base || off + w > base + WD_WIN_SIZE) {
+			wd_set_bank(hw, off >> 12);
+			base = (off >> 12) << 12;
+		}
+		wd_win_write(hw, off - base, shadow + off, w);
+	}
+}
+
+void wd_set_dac(u8 idx, u8 r, u8 g, u8 b)
+{
+	wd_outb(idx, 0x3c8);
+	wd_outb(r, 0x3c9);
+	wd_outb(g, 0x3c9);
+	wd_outb(b, 0x3c9);
 }

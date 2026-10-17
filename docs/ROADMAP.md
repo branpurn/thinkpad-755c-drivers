@@ -33,7 +33,7 @@ build with it by default, so module-capable kernels are the one artefact.
 |---|---|---|---|---|---|
 | 1a | `vga16fb` + fbcon + `tc32-vgafb-dev` shim: 640x480x4bpp planar, 80x30 console | fb 60 K, vga16fb 14 K, helpers ~35 K, shim 3.5 K | `fb-vga16.tcz` **40 KiB** | **152 KiB** (9 modules), MemFree drop ~0.65 MB | **done, QEMU-verified (screenshot)** |
 | 1b | `wd90c24fb` stage 1: XFree86-style detect (signature, memory, panel, C24A blocks), restores everything | 6 K | 4 KiB | 12 KiB | done; unit tests on a mock chip + QEMU negative probe; see [WD90C24.md](WD90C24.md) |
-| 1c | native `wd90c24fb`: 640x480x8 packed on the panel via Paradise banking (PR0A/PR0B, 64 KiB window at A0000), mode set from saved BIOS state + PR registers, 256-colour palette | est. 15-25 K | est. 10 KiB | est. 40-60 KiB + **300 KiB shadow** if implemented with fb deferred I/O over the banked window (no linear aperture known on VLB); 0 if fbcon draws straight through banking | new |
+| 1c | native `wd90c24fb`: 640x480x8 packed via PR0(A) banking, 300 KiB shadow, save/restore, self-test, `trial`/`keep`, `.tcz` fallback to vga16fb | 12 K | 53 KiB (`fb-wd90c24.tcz`, incl. fb stack) | ~150 KiB modules + 300 KiB shadow | done; unit tests + QEMU fail-safe; panel picture needs hardware |
 | 1d | BitBLT engine (C31-style, WD90C24A only) for fbcon copyarea/fillrect: fast scrolling; hardware cursor | +5-10 K | | | new |
 | 1e | panel/CRT: LCD only, CRT only (up to 1024x768x8), simultaneous; DSTN (755CS) frame-buffer split; follow Fn+F7 | +5 K | | | new |
 | 1f | VRAM/pixel clock programming (44.3 → 55.0 MHz), APM suspend/resume register save/restore | +2 K | | | new |
