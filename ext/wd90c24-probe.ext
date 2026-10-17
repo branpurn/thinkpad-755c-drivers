@@ -1,4 +1,5 @@
-DESC="WD90C24/A/A2 detect-only probe (stage 0 of the native driver): logs chip registers to dmesg"
-MODS="wd90c24"
+DESC="WD90C24/A/A2 detect-only probe: logs chip, memory and panel state to dmesg (loads nothing)"
+MODS="wd90c24fb"
+ARGS_wd90c24fb="probe_only=1"
 OPTIONAL=1
 DEPS="modutils.tcz"

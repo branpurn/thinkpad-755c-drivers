@@ -164,9 +164,9 @@ def main():
         check("modutils.tcz: insmod/lsmod available", rc == 0 and rc2 == 0 and "Module" in o2 and "usr/local/sbin/insmod" in o2, " ".join(o2.split()))
 
         o, rc, mods = tce("wd90c24-probe")
-        d, _ = g.run("dmesg | grep wd90c24 | tail -2")
-        check("wd90c24-probe.tcz: out-of-tree module builds+loads, reports no WD chip in QEMU",
-              "wd90c24:" in d and ("no Paradise" in d or "Paradise/WD extended" in d), " | ".join(l.split("] ")[-1] for l in d.strip().splitlines()))
+        d, _ = g.run("dmesg | grep wd90c24fb | tail -2")
+        check("wd90c24-probe.tcz: wd90c24fb probe_only runs, finds no WD chip in QEMU, stays unloaded",
+              "wd90c24fb: no Paradise/WD chip found" in d and "wd90c24fb" not in g.run("cat /proc/modules")[0], " | ".join(l.split("] ")[-1] for l in d.strip().splitlines()))
         metrics["wd90c24_probe"] = d.strip()
 
         o, rc, mods = tce("fb-vga16")

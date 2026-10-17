@@ -1,0 +1,2 @@
+obj-m += wd90c24fb.o
+wd90c24fb-y := wd90c24fb_main.o wd90c24_hw.o
