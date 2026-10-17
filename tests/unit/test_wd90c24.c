@@ -251,6 +251,105 @@ static void t_roundtrip(void)
 	CHECK(M.attr[0x10] == 0x0c, "ATC mode not restored");
 }
 
+static void live_c24a(struct wd_hw *hw, enum mock_kind k)
+{
+	struct wd_ext_state bios, ext;
+	struct wd_std std;
+
+	mock_reset(k);
+	wd_probe(hw);
+	wd_save_ext(hw, &bios);
+	wd_mode_640x480x8(hw, &bios, &std, &ext);
+	wd_set_mode(hw, &std, &ext);
+}
+
+/* reference: what a rectangle copy must produce (memmove semantics) */
+static void ref_copy(u8 *fb, u32 sx, u32 sy, u32 dx, u32 dy, u32 w, u32 h)
+{
+	static u8 tmp[WD_FB_SIZE];
+	u32 r;
+
+	for (r = 0; r < h; r++)
+		memcpy(tmp + r * w, fb + (sy + r) * WD_PITCH + sx, w);
+	for (r = 0; r < h; r++)
+		memcpy(fb + (dy + r) * WD_PITCH + dx, tmp + r * w, w);
+}
+
+static void t_blt(void)
+{
+	static u8 ref[WD_FB_SIZE];
+	struct wd_hw hw;
+	unsigned int i, bad, seed = 7;
+	u32 r;
+
+	live_c24a(&hw, M_C24A);
+	M.blt_busy_polls = 5;
+	for (i = 0; i < WD_FB_SIZE; i++)
+		M.vram[i] = ref[i] = (u8)(i * 13 + (i >> 11));
+
+	CHECK(wd_blt_fill(&hw, 10, 100, 50, 20, 0x07, false) == 0, "fill timed out");
+	for (r = 0; r < 20; r++)
+		memset(ref + (100 + r) * WD_PITCH + 10, 0x07, 50);
+	CHECK(wd_blt_fill(&hw, 600, 470, 40, 10, 0xff, true) == 0, "xor fill timed out");
+	for (r = 0; r < 10; r++) {
+		u32 k;
+
+		for (k = 0; k < 40; k++)
+			ref[(470 + r) * WD_PITCH + 600 + k] ^= 0xff;
+	}
+	/* overlapping copies in all four directions, plus fbcon's scroll */
+	{
+		static const u32 c[][6] = {
+			{ 0, 16, 0, 0, 640, 464 },	/* scroll up one text line */
+			{ 0, 0, 0, 16, 640, 464 },	/* scroll down */
+			{ 100, 50, 108, 50, 200, 100 },	/* right, same rows */
+			{ 108, 50, 100, 50, 200, 100 },	/* left */
+			{ 30, 200, 40, 210, 300, 100 },
+			{ 40, 210, 30, 200, 300, 100 },
+		};
+		for (i = 0; i < sizeof(c) / sizeof(c[0]); i++) {
+			CHECK(wd_blt_copy(&hw, c[i][0], c[i][1], c[i][2], c[i][3], c[i][4], c[i][5]) == 0,
+			      "copy %u timed out", i);
+			ref_copy(ref, c[i][0], c[i][1], c[i][2], c[i][3], c[i][4], c[i][5]);
+		}
+	}
+	for (i = 0; i < 300; i++) {
+		u32 w, h, sx, sy, dx, dy;
+
+		seed = seed * 1103515245 + 12345; w = 1 + (seed >> 8) % 320;
+		seed = seed * 1103515245 + 12345; h = 1 + (seed >> 8) % 120;
+		seed = seed * 1103515245 + 12345; sx = (seed >> 8) % (WD_XRES - w + 1);
+		seed = seed * 1103515245 + 12345; sy = (seed >> 8) % (WD_YRES - h + 1);
+		seed = seed * 1103515245 + 12345; dx = (seed >> 8) % (WD_XRES - w + 1);
+		seed = seed * 1103515245 + 12345; dy = (seed >> 8) % (WD_YRES - h + 1);
+		wd_blt_copy(&hw, sx, sy, dx, dy, w, h);
+		ref_copy(ref, sx, sy, dx, dy, w, h);
+	}
+	CHECK(wd_blt_wait(&hw) == 0, "engine busy at the end");
+	bad = 0;
+	for (i = 0; i < WD_FB_SIZE; i++)
+		bad += M.vram[i] != ref[i];
+	CHECK(bad == 0, "blits: %u bytes differ from the reference", bad);
+	CHECK(M.blt_started_while_busy == 0, "%u blits started while the engine was busy", M.blt_started_while_busy);
+}
+
+static void t_blt_selftest(void)
+{
+	struct wd_hw hw;
+
+	live_c24a(&hw, M_C24A);
+	M.blt_busy_polls = 50;
+	CHECK(wd_blt_selftest(&hw) == 0, "BITBLT self-test fails on a C24A");
+	CHECK(M.gfx[0x09] == 0, "self-test left bank %02x", M.gfx[0x09]);
+
+	live_c24a(&hw, M_C24A);
+	M.blt_stuck = true;
+	CHECK(wd_blt_selftest(&hw) != 0, "self-test passes with a stuck engine");
+
+	live_c24a(&hw, M_C24);	/* plain C24: no 23C0 blocks */
+	CHECK(!hw.ext_blocks && wd_blt_selftest(&hw) != 0, "self-test passes without a BITBLT engine");
+}
+
 int main(void)
 {
 	t_probe_kinds();
@@ -260,6 +359,8 @@ int main(void)
 	t_banks();
 	t_flush();
 	t_roundtrip();
+	t_blt();
+	t_blt_selftest();
 	printf("wd90c24 unit tests: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;
 }

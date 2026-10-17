@@ -176,6 +176,32 @@ void wd_outb(u8 v, u16 p)
 	}
 }
 
+/* Execute a packed-mode BITBLT the way data sheet section 19 describes. */
+static void mock_blt_run(void)
+{
+	u16 c1 = M.blt[0];
+	u32 src = M.blt[2] | (u32)M.blt[3] << 12, dst = M.blt[4] | (u32)M.blt[5] << 12;
+	u32 w = M.blt[6], h = M.blt[7], pitch = M.blt[8], r, x;
+	u8 rop = M.blt[9] >> 8, fg = M.blt[10] & 0xff, mask = M.blt[14] & 0xff;
+	int dir = (c1 & 0x0400) ? -1 : 1;
+
+	if (M.blt_busy_left)
+		M.blt_started_while_busy++;
+	M.blt_ops++;
+	for (r = 0; r < h; r++)
+		for (x = 0; x < w; x++) {
+			u32 so = (src + dir * (int)(r * pitch + x)) & 0xfffff;
+			u32 d = (dst + dir * (int)(r * pitch + x)) & 0xfffff;
+			u8 sv = (c1 & 0x000c) == 0x0008 ? fg : M.vram[so], nv;
+
+			nv = rop == 3 ? sv : rop == 6 ? (u8)(M.vram[d] ^ sv) : M.vram[d];
+			M.vram[d] = (M.vram[d] & ~mask) | (nv & mask);
+		}
+	M.blt_busy_left = M.blt_busy_polls;
+	if (!M.blt_busy_left && !M.blt_stuck)
+		M.blt[0] &= ~0x0800;
+}
+
 u16 wd_inw(u16 p)
 {
 	if (!has_ext())
@@ -188,8 +214,18 @@ u16 wd_inw(u16 p)
 		u8 blk = M.ext_index & 0xff;
 		if (blk == 2)
 			return M.cursor;
-		if (blk == 1)
-			return M.blt[(M.ext_index >> 8) & 0x0f];
+		if (blk == 1) {
+			u8 idx = (M.ext_index >> 8) & 0x0f;
+
+			if (idx == 0 && (M.blt[0] & 0x0800) && !M.blt_stuck) {
+				if (M.blt_busy_left)
+					M.blt_busy_left--;
+				else
+					M.blt[0] &= ~0x0800;
+				return M.blt[0] | 0x0800;
+			}
+			return M.blt[idx];
+		}
 	}
 	return 0xffff;
 }
@@ -206,8 +242,11 @@ void wd_outw(u16 v, u16 p)
 		u8 blk = M.ext_index & 0xff;
 		if (blk == 2)
 			M.cursor = v;
-		else if (blk == 1)
+		else if (blk == 1) {
 			M.blt[v >> 12] = v & 0x0fff;
+			if ((v >> 12) == 0 && (v & 0x0800))
+				mock_blt_run();
+		}
 	}
 }
 

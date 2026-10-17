@@ -39,6 +39,9 @@ struct mock {
 	u8 attr[32], attr_i, attr_ff;
 	u8 dac[256][3], dac_i, dac_c;
 	unsigned int win_oob;		/* window accesses past 64 KiB */
+	unsigned int blt_busy_polls;	/* reads that report busy after a start */
+	bool blt_stuck;			/* engine never finishes */
+	unsigned int blt_busy_left, blt_ops, blt_started_while_busy;
 	/* accounting */
 	unsigned int timing_writes;	/* CRTC 0x00-0x18 except 0x11, MISC, SEQ 0-4 */
 	unsigned int ext_port_writes;
