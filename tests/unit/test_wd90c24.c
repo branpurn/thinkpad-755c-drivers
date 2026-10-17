@@ -251,6 +251,53 @@ static void t_roundtrip(void)
 	CHECK(M.attr[0x10] == 0x0c, "ATC mode not restored");
 }
 
+/*
+ * Driver stage 5 (APM suspend) in register terms: live -> powerdown blank ->
+ * text for the BIOS (restore) -> re-save -> resume mode set -> rmmod
+ * restore. Every pass must end at the BIOS snapshot, the re-saved state
+ * must equal the first one, and MCLK (PR68 2:0, PR69) is never changed.
+ */
+static void t_suspend_cycle(void)
+{
+	struct wd_ext_state bios, bios2, ext;
+	struct mock_snap before, after;
+	struct wd_std std, text;
+	struct wd_hw hw;
+	char why[64];
+	int pass, i;
+	u8 mclk;
+
+	mock_reset(M_C24A);
+	wd_probe(&hw);
+	mclk = M.seq[0x31] & 0x07;
+	mock_snap(&before);
+	text.misc = M.misc;	/* what vgastate saves */
+	for (i = 0; i < 5; i++) text.seq[i] = M.seq[i];
+	for (i = 0; i < 25; i++) text.crtc[i] = M.crtc[i];
+	for (i = 0; i < 9; i++) text.gfx[i] = M.gfx[i];
+	for (i = 0; i < 21; i++) text.attr[i] = M.attr[i];
+	wd_save_ext(&hw, &bios);
+	wd_relock(&hw, &bios);
+	for (pass = 0; pass < 2; pass++) {
+		wd_mode_640x480x8(&hw, &bios, &std, &ext);
+		wd_set_mode(&hw, &std, &ext);
+		CHECK((M.seq[0x31] & 0x07) == mclk, "pass %d: mode set changed MCLK", pass);
+		wd_screen_on(&hw, false);
+		wd_panel_off(&hw);
+		wd_restore_ext(&hw, &bios);	/* wd_restore_text() order */
+		wd_write_std(&hw, &text);
+		wd_relock(&hw, &bios);
+		wd_screen_on(&hw, true);
+		wd_restore_panel(&hw, &bios);
+		mock_snap(&after);
+		CHECK(!mock_snap_diff(&before, &after, why, sizeof(why)), "pass %d: restore left %s", pass, why);
+		wd_save_ext(&hw, &bios2);	/* the re-save on suspend */
+		wd_relock(&hw, &bios2);
+		CHECK(!memcmp(&bios, &bios2, sizeof(bios)), "pass %d: re-saved state differs", pass);
+	}
+	CHECK(M.seq[0x32] == before.seq[0x32], "PR69 changed");
+}
+
 static void live_c24a(struct wd_hw *hw, enum mock_kind k)
 {
 	struct wd_ext_state bios, ext;
@@ -416,6 +463,7 @@ int main(void)
 	t_blt();
 	t_blt_selftest();
 	t_panel();
+	t_suspend_cycle();
 	printf("wd90c24 unit tests: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;
 }

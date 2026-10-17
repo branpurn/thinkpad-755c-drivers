@@ -18,8 +18,10 @@
  *    other WD90C2x/3x, for the 86Box C30/C31 bench), enable=0 disables;
  *  - the text-mode state (standard registers, fonts, text, palette via
  *    vgastate, Paradise registers via wd90c24_hw.c) is saved before
- *    anything changes and restored on any failure, on rmmod, and when a
- *    trial period ends without confirmation (trial=, keep);
+ *    anything changes and restored on any failure, when a trial period
+ *    ends without confirmation (trial=, keep), on "echo 1 > .../text"
+ *    (fbcon holds a module reference, so this comes before rmmod), and
+ *    around an APM suspend (stage 5);
  *  - after the mode set a banking self-test must pass, or the text mode is
  *    restored and the module returns -ENODEV (the .tcz then falls back to
  *    vga16fb);
@@ -38,6 +40,10 @@
 #include <linux/spinlock.h>
 #include <linux/delay.h>
 #include <linux/string.h>
+#include <linux/platform_device.h>
+#include <linux/pm.h>
+#include <linux/mutex.h>
+#include <linux/kstrtox.h>
 #include <video/vga.h>
 #include "wd90c24_hw.h"
 
@@ -50,9 +56,9 @@ MODULE_PARM_DESC(probe_only, "Only identify the chip and log its state");
 static bool force;
 module_param(force, bool, 0444);
 MODULE_PARM_DESC(force, "Also drive other WD90C2x/3x (e.g. C30/C31 on the 86Box bench)");
-static bool fake;
-module_param(fake, bool, 0444);
-MODULE_PARM_DESC(fake, "TESTING ONLY: treat any VGA as a WD90C24 to exercise the fail-safe path");
+static unsigned int fake;
+module_param(fake, uint, 0444);
+MODULE_PARM_DESC(fake, "TESTING ONLY: 1 = treat any VGA as a WD90C24 (fail-safe path); 2 = also skip the self-tests (QEMU suspend/resume test)");
 static unsigned int trial;
 module_param(trial, uint, 0444);
 MODULE_PARM_DESC(trial, "Seconds until text mode is restored unless keep=1 is written (0 = off)");
@@ -78,6 +84,7 @@ struct wd_par {
 	bool blt_pending;	/* a blit may still be running */
 	bool panel_off;		/* we powered the panel down (blank) */
 	bool registered;
+	bool suspended;		/* text mode put back for an APM suspend */
 	atomic_t users;
 	bool mmapped;
 	struct delayed_work mmap_work;
@@ -85,6 +92,8 @@ struct wd_par {
 };
 
 static struct fb_info *wd_info;
+static struct platform_device *wd_pdev;
+static DEFINE_MUTEX(wd_stop_lock);	/* trial end, text=1, resume failure, rmmod */
 
 /* Called with par->lock held. Returns true if the engine is idle. */
 static bool wd_blt_idle(struct wd_par *par)
@@ -376,7 +385,9 @@ static int wd_go_live(struct fb_info *info)
 
 	wd_mode_640x480x8(&par->hw, &par->bios, &std, &ext);
 	wd_set_mode(&par->hw, &std, &ext);
-	if (wd_selftest_banks(&par->hw, par->hw.vram_kb)) {
+	if (fake >= 2) {
+		pr_warn("fake=2: self-tests skipped (testing only)\n");
+	} else if (wd_selftest_banks(&par->hw, par->hw.vram_kb)) {
 		wd_restore_text(par);
 		pr_warn("banking self-test failed: text mode restored\n");
 		return -ENODEV;
@@ -396,15 +407,46 @@ static void wd_stop(struct fb_info *info)
 {
 	struct wd_par *par = info->par;
 
-	console_lock();
-	wd_restore_text(par);
-	console_unlock();
+	mutex_lock(&wd_stop_lock);
 	if (par->registered) {
+		console_lock();
+		wd_restore_text(par);
+		console_unlock();
 		/* fbcon hands the consoles back to vgacon, which redraws */
 		unregister_framebuffer(info);
 		par->registered = false;
 	}
+	mutex_unlock(&wd_stop_lock);
 }
+
+/* echo 1 > /sys/module/wd90c24fb/parameters/text: back to text now */
+static void wd_text_now(struct work_struct *work)
+{
+	struct wd_par *par = wd_info->par;
+
+	cancel_delayed_work_sync(&par->trial_work);
+	cancel_delayed_work_sync(&par->mmap_work);
+	if (par->registered)
+		pr_info("text=1: back to text mode (now rmmod wd90c24fb can unload)\n");
+	wd_stop(wd_info);
+}
+static DECLARE_WORK(wd_text_work, wd_text_now);
+
+static int wd_text_set(const char *val, const struct kernel_param *kp)
+{
+	bool v;
+	int ret = kstrtobool(val, &v);
+
+	if (ret)
+		return ret;
+	if (v && wd_info)
+		schedule_work(&wd_text_work);
+	return 0;
+}
+
+static const struct kernel_param_ops wd_text_ops = { .set = wd_text_set };
+module_param_cb(text, &wd_text_ops, NULL, 0200);
+MODULE_PARM_DESC(text, "Write 1 to restore text mode and release the console (needed before rmmod)");
 
 static void wd_trial_end(struct work_struct *work)
 {
@@ -418,6 +460,93 @@ static void wd_trial_end(struct work_struct *work)
 	cancel_delayed_work_sync(&par->mmap_work);
 	wd_stop(wd_info);
 }
+
+/*
+ * APM suspend/resume (the kernel APM driver runs the device PM callbacks
+ * around the BIOS call). Before suspend the BIOS gets back the text mode it
+ * set up, with its own outputs and panel power, so whatever the 755C BIOS
+ * saves and restores is a state it knows. On resume the whole mode set runs
+ * again from the saved BIOS state (clocks included: PR68 bits 4:3 only,
+ * MCLK is never touched) and the shadow is redrawn; if the self-test fails
+ * after resume the framebuffer is dropped and text mode stays.
+ */
+static void wd_resume_failed(struct work_struct *work)
+{
+	struct fb_info *info = wd_info;
+	struct wd_par *par = info->par;
+
+	cancel_delayed_work_sync(&par->trial_work);
+	cancel_delayed_work_sync(&par->mmap_work);
+	mutex_lock(&wd_stop_lock);
+	if (par->registered) {
+		/* go_live already restored text mode */
+		unregister_framebuffer(info);
+		par->registered = false;
+	}
+	mutex_unlock(&wd_stop_lock);
+}
+static DECLARE_WORK(wd_resume_fail_work, wd_resume_failed);
+
+static int wd_pm_suspend(struct device *dev)
+{
+	struct fb_info *info = wd_info;
+	struct wd_par *par;
+	int ret;
+
+	if (!info)
+		return 0;
+	par = info->par;
+	console_lock();
+	if (par->live) {
+		wd_restore_text(par);	/* frees the saved VGA state ... */
+		/* ... so save it again: rmmod/trial end after resume needs it */
+		par->vstate.flags = VGA_SAVE_MODE | VGA_SAVE_FONTS | VGA_SAVE_CMAP;
+		ret = save_vga(&par->vstate);
+		wd_relock(&par->hw, &par->bios);
+		if (ret)
+			pr_warn("suspend: cannot re-save the text state; text mode stays after resume\n");
+		par->suspended = !ret;
+		pr_info("suspend: text mode handed back to the BIOS\n");
+	}
+	console_unlock();
+	return 0;
+}
+
+static int wd_pm_resume(struct device *dev)
+{
+	struct fb_info *info = wd_info;
+	struct wd_par *par;
+	int ret;
+
+	if (!info)
+		return 0;
+	par = info->par;
+	if (!par->suspended)
+		return 0;
+	par->suspended = false;
+	if (!par->registered)
+		return 0;
+	console_lock();
+	ret = wd_go_live(info);
+	console_unlock();
+	if (ret) {
+		pr_warn("resume: mode set failed, staying in text mode\n");
+		schedule_work(&wd_resume_fail_work);
+		return 0;
+	}
+	wd_apply_output(par);
+	pr_info("resume: 640x480x8 restored%s\n", par->accel ? ", BITBLT" : "");
+	return 0;
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(wd_pm_ops, wd_pm_suspend, wd_pm_resume);
+
+static struct platform_driver wd_pdrv = {
+	.driver = {
+		.name	= "wd90c24fb",
+		.pm	= pm_sleep_ptr(&wd_pm_ops),
+	},
+};
 
 static void wd_log_probe(const struct wd_hw *hw)
 {
@@ -493,7 +622,7 @@ static int __init wd90c24fb_init(void)
 	if (probe_only)
 		return -ENODEV;
 	if (fake) {
-		pr_warn("fake=1: treating this VGA as a WD90C24 (testing only)\n");
+		pr_warn("fake=%u: treating this VGA as a WD90C24 (testing only)\n", fake);
 		hw.chip = WD_C24;
 		hw.vram_kb = 1024;
 		hw.ext_blocks = false;
@@ -563,6 +692,15 @@ static int __init wd90c24fb_init(void)
 		goto err_vga;
 	}
 	wd_apply_output(par);
+	if (!platform_driver_register(&wd_pdrv)) {
+		wd_pdev = platform_device_register_simple("wd90c24fb", -1, NULL, 0);
+		if (IS_ERR(wd_pdev)) {
+			wd_pdev = NULL;
+			platform_driver_unregister(&wd_pdrv);
+		}
+	}
+	if (!wd_pdev)
+		pr_warn("no platform device: suspend/resume will not restore the mode\n");
 	fb_info(info, "%s, 640x480x8 via PR0(A) banking, %u KiB shadow%s\n",
 		wd_chip_name(par->hw.chip), WD_FB_SIZE / 1024,
 		par->accel ? ", BITBLT" : "");
@@ -595,6 +733,13 @@ static void __exit wd90c24fb_exit(void)
 	struct fb_info *info = wd_info;
 	struct wd_par *par = info->par;
 
+	if (wd_pdev) {
+		platform_device_unregister(wd_pdev);
+		platform_driver_unregister(&wd_pdrv);
+		wd_pdev = NULL;
+	}
+	cancel_work_sync(&wd_resume_fail_work);
+	cancel_work_sync(&wd_text_work);
 	cancel_delayed_work_sync(&par->trial_work);
 	cancel_delayed_work_sync(&par->mmap_work);
 	if (par->registered)
