@@ -7,9 +7,11 @@ system. The floppy core stays minimal; everything here loads from the
 `tce` directory on the IDE disk / CF card with `tce-load -i`.
 
 Status: in-tree drivers packaged and **verified in QEMU** (486, ISA, 32 and
-16 MB): framebuffer, CS4248 audio driver, TrackPoint, PC Card core. Native
-WD90C24A video driver: stage 0 (detect-only). Nothing tried on a real 755C
-yet.
+16 MB): framebuffer, CS4248 audio driver, TrackPoint, PC Card core, APM
+tool. Native WD90C24A video driver: stages 1-5 (detect, 640x480x8, BITBLT,
+LCD/CRT and panel power, APM suspend/resume), unit-tested against a register
+model and QEMU-tested for the fail-safe paths. Nothing tried on a real 755C
+yet: see [docs/HW-CHECKLIST.md](docs/HW-CHECKLIST.md).
 
 | `.tcz` | contents | size |
 |---|---|---|
@@ -20,6 +22,7 @@ yet.
 | `trackpoint.tcz` | `psmouse` (TrackPoint protocol) + `mousedev` + `evdev` | 20 KiB |
 | `pcmcia.tcz` | PC Card core + `i82365` (2x Ricoh RF5C266) + `pata_pcmcia` (CF) + `serial_cs` | 48 KiB |
 | `fb-wd90c24.tcz` | native `wd90c24fb`: 640x480, 256 colours, fbcon; falls back to vga16fb; 30 s trial until confirmed ([docs/WD90C24.md](docs/WD90C24.md)) | 52 KiB |
+| `apm-tools.tcz` | static `apm`: AC/battery status, `-s` suspend, `-S` standby | 24 KiB |
 | `wd90c24-probe.tcz` | `wd90c24fb probe_only=1`: identifies the chip, memory and panel state in dmesg | 40 KiB |
 
 Cost to the floppy: **+20 KiB** of kernel for `CONFIG_MODULES` (with
