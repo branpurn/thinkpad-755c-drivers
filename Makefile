@@ -1,6 +1,7 @@
 # tc755: ThinkPad 755C drivers for tc32 (tinycore-32-ram) as modules / .tcz
 # Needs a built tinycore-32-ram checkout next to this one (or TC32_DIR=...).
 #   make            kernel + out-of-tree modules + .tcz + test floppy/disk
+#   make tools      static musl user-space tools (tools/*/, e.g. apm) into out/bin
 #   make unit       host unit tests of the WD90C24 register layer (mock chip)
 #   make test       unit + QEMU (-M isapc -cpu 486 + cs4231a): load every .tcz, 32 + 16 MB
 #   make test-core  run tinycore-32-ram's own test suite on the module-capable floppy
@@ -19,7 +20,10 @@ oot: kernel
 modutils:
 	scripts/build-modutils.sh
 
-tcz: oot modutils
+tools:
+	scripts/build-tools.sh
+
+tcz: oot modutils tools
 	scripts/mktcz.sh
 
 floppy: kernel
@@ -52,4 +56,4 @@ clean:
 distclean:
 	scripts/clean-oot.sh; rm -rf out build dl
 
-.PHONY: all kernel oot modutils tcz floppy disk sizes unit test test-core ksyms-keep scan clean distclean
+.PHONY: all kernel oot modutils tools tcz floppy disk sizes unit test test-core ksyms-keep scan clean distclean

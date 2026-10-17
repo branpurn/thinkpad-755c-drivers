@@ -9,6 +9,7 @@ One `<name>.ext` file per `.tcz`. They are sourced by `scripts/mktcz.sh`:
 | `ARGS_<mod>` | default parameters for `<mod>` (dashes become underscores), e.g. 755C defaults |
 | `DEPS` | other `.tcz` this one needs (written to `<name>.tcz.dep`) |
 | `OPTIONAL=1` | a module that fails to load (no hardware) is reported, not fatal |
+| `BINS` | static tools from `tools/<name>/` (built into `out/bin/`) shipped in `usr/local/bin/` |
 | `FALLBACK` | modules to load instead if any of `MODS` fails (e.g. vga16fb when the native driver declines the chip) |
 
 At load time the extension's `/usr/local/tce.installed/<name>` inserts the

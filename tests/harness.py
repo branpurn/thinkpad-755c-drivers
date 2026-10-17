@@ -254,6 +254,22 @@ def main():
               "pcmcia_core" in mods and "pcmcia" in mods and "i82365" not in mods,
               " | ".join(l.strip() for l in o.strip().splitlines()[-5:]))
 
+        # APM: SeaBIOS answers APM 1.2; a suspend request returns at once,
+        # which still runs the kernel's whole device suspend/resume path.
+        o, rc, _ = tce("apm-tools")
+        o2, rc2 = g.run("apm -v; apm; apm -m")
+        check("apm-tools.tcz: apm -v / status / -m read /proc/apm", rc == 0 and rc2 == 0
+              and "APM BIOS 1." in o2 and o2.startswith("kernel APM driver") and "AC " in o2,
+              " | ".join(o2.strip().splitlines()))
+        o3, rc3 = g.run("apm -s; echo up", 120)
+        o4, rc4 = g.run("uname -r; dmesg | grep -iE 'apm|suspend|resum' | tail -3")
+        check("apm -s: suspend request round-trips (kernel device suspend/resume), shell alive",
+              "resumed from suspend" in o3 and o4.startswith(metrics["uname"]),
+              " | ".join(l.strip() for l in (o3.strip().splitlines() + o4.strip().splitlines()[1:])))
+        metrics["apm_suspend"] = (o3 + o4).strip()
+        o5, rc5 = g.run("apm -x")
+        check("apm: bad option -> usage, exit 2", rc5 == 2 and "usage" in o5, "")
+
         o, _ = g.run("cat /proc/modules")
         metrics["modules"] = parse_modules(o)
         metrics["module_bytes_total"] = sum(metrics["modules"].values())

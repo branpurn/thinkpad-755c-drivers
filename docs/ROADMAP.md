@@ -71,7 +71,7 @@ over serial console (see docs/EMULATORS.md).
 | item | cost | status |
 |---|---|---|
 | APM driver: already **core** (`/proc/apm`, power-off, `/dev/apm_bios`) | 0 | core |
-| `apm` CLI (battery %, `apm -s` suspend via `APM_IOC_SUSPEND`): tiny static tool in `apm-tools.tcz` | ~8 KiB .tcz | todo |
+| `apm` CLI (status, `-m`, `-v`, `-s` suspend / `-S` standby via `APM_IOC_*`): static musl tool `tools/apm` in `apm-tools.tcz` | ~24 KiB .tcz (42 KiB static binary) | done (QEMU: status + suspend round trip; real suspend needs 755C) |
 | Fn keys: volume, blank, display switch, invert, power mode, suspend are **BIOS/EC functions**; nothing to drive. Make sure drivers survive them: vga16fb/wd90c24fb must re-read state after Fn+F7; snd must re-power after resume | 0 | verify on hardware |
 | Suspend-to-RAM (Fn+F4) and suspend-to-disk (Fn+F12, needs a type 0xA0 partition / `PHDISK` file, `tphdisk` port as a 2 KiB static tool) | ~4 KiB | todo |
 | `CONFIG_APM_CPU_IDLE` / `idle_threshold` battery tuning, `APM_DISPLAY_BLANK` | core option, ~1 KiB | proposal for core |
