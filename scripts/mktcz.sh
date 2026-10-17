@@ -5,6 +5,7 @@
 # Layout inside each .tcz (TC convention):
 #   usr/local/lib/modules/<kver>/kernel/...   (stripped .ko, uncompressed:
 #                                              the squashfs is already xz)
+#   usr/local/bin/<tool>                      (BINS: static tools from out/bin)
 #   usr/local/tce.installed/<name>            (run once by tce-load, as in
 #                                              Tiny Core; tc32 >= PR #2)
 . "$(dirname "$0")/common.sh"
@@ -50,7 +51,7 @@ mk_modutils() {
 
 mk_ext() {
     n=$1; f="$TOP/ext/$n.ext"; [ -f "$f" ] || die "no such extension: $f"
-    DESC="" MODS="" DEPS="" OPTIONAL="" FALLBACK=""
+    DESC="" MODS="" DEPS="" OPTIONAL="" FALLBACK="" BINS=""
     . "$f"
     ORDER=""; for m in $MODS; do visit "$m"; done
     PRIMARY=$ORDER; ORDER=""; for m in $FALLBACK; do visit "$m"; done; FORDER=$ORDER
@@ -85,8 +86,12 @@ mk_ext() {
     } > "$sh"
     chmod 755 "$sh"
     for m in $ORDER; do p=$(path_of "$m"); mkdir -p "$d/usr/local/lib/modules/$KV/$(dirname "$p")"; cp "$MR/$p" "$d/usr/local/lib/modules/$KV/$p"; done
+    for b in $BINS; do
+        [ -x "$OUT/bin/$b" ] || die "tool not built: $b (run 'make tools')"
+        mkdir -p "$d/usr/local/bin"; cp "$OUT/bin/$b" "$d/usr/local/bin/$b"
+    done
     printf '%s\n' $DEPS > "$T/$n.tcz.dep"
-    printf 'Title: %s.tcz\nDescription: %s\nKernel: %s\nModules (load order):%s\nLicense: GPL-2.0\n' "$n" "$DESC" "$KV" "$ORDER" > "$T/$n.tcz.info"
+    printf 'Title: %s.tcz\nDescription: %s\nKernel: %s\nModules (load order):%s\nTools:%s\nLicense: GPL-2.0\n' "$n" "$DESC" "$KV" "$ORDER" "${BINS:+ $BINS}" > "$T/$n.tcz.info"
     finish "$n" "$d"
 }
 

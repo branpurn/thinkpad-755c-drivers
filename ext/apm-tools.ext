@@ -1,0 +1,3 @@
+DESC="apm: APM battery/AC status, suspend (-s) and standby (-S) via the core APM driver"
+MODS=""
+BINS="apm"
