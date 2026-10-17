@@ -1,12 +1,15 @@
 #!/bin/sh
 # Build the module-capable tc32 kernel + all in-tree driver modules.
-#   core fragments:  $TC32_DIR/config/kernel-{base,hdd,tce}.fragment
-#   + config/kernel-modules.fragment   (CONFIG_MODULES=y: the only core change)
+#   core fragments:  $TC32_DIR/config/kernel-{base,hdd,tce,modules}.fragment
+#   + config/kernel-modules.fragment   (own vermagic: 6.18.57-tc755)
 #   + config/kernel-drivers.fragment   (755C drivers, all =m)
 # Output: build/kernel-obj (= KDIR for out-of-tree modules), out/bzImage,
 #         out/modules/lib/modules/<kver>/... (stripped), out/kernel.config
 . "$(dirname "$0")/common.sh"
-FRAGS=${KERNEL_FRAGMENTS:-base hdd tce}
+FRAGS=${KERNEL_FRAGMENTS:-base hdd tce modules}
+for f in $FRAGS; do
+    [ -f "$TC32_DIR/config/kernel-$f.fragment" ] || die "$TC32_DIR lacks config/kernel-$f.fragment: update tinycore-32-ram to main (modules + tce.installed convention, PR #2)"
+done
 ADDON=${ADDON_FRAGMENTS:-modules drivers}
 if [ ! -f "$LINUX_SRC/Makefile" ]; then
     LINUX_SRC=$BUILD/linux-$LINUX_VER

@@ -58,7 +58,7 @@ What `make` does:
    busybox + musl i486 toolchain).
 4. `scripts/mktcz.sh`: one `.tcz` per `ext/*.ext`; module dependencies come
    from `modinfo`, load order is generated into
-   `/usr/local/tce.installed/<name>.sh`, which tc32's `tce-load` runs.
+   `/usr/local/tce.installed/<name>`, which tc32's `tce-load` runs once (Tiny Core convention).
 5. `scripts/mkfloppy.sh`: `out/tc755.img` = the core floppy with the
    module-capable `vmlinuz` swapped in. `tests/mk-test-disk.sh`: IDE disk
    with all `.tcz` in `tce/optional/`.
@@ -74,7 +74,10 @@ tce-load -i snd-cs4248.tcz    # then: cat sound.ub > /dev/dsp  (8 kHz u8 default
 Module parameters can be overridden from the boot prompt with the usual
 `module.param=value` syntax, e.g.
 `tc32 tce=hda1 snd_ad1848.irq=5`. Modules are tied to the exact kernel
-build (`vermagic 6.18.57 mod_unload 486`): boot the matching `vmlinuz`.
+build (`vermagic 6.18.57-tc755 mod_unload 486`): boot the matching `vmlinuz`.
+The stock tc32 kernel (`6.18.57`) has module support too, but refuses
+these modules: the driver config makes some fb/video helpers built-in, so
+the two kernels are not ABI-compatible.
 
 ## Adding a driver
 
