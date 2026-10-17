@@ -350,6 +350,60 @@ static void t_blt_selftest(void)
 	CHECK(!hw.ext_blocks && wd_blt_selftest(&hw) != 0, "self-test passes without a BITBLT engine");
 }
 
+static void t_panel(void)
+{
+	struct mock_snap before, after;
+	struct wd_ext_state bios, ext;
+	struct wd_std std, text;
+	struct wd_hw hw;
+	char why[64];
+	int i;
+
+	mock_reset(M_C24A);
+	wd_probe(&hw);
+	CHECK(wd_panel_off(&hw), "panel_off: panel was on");
+	CHECK(!(M.fp[0x32] & 0x10) && (M.gfx[0x0e] & 0x20) && !(M.seq[0x19] & 0x04),
+	      "off: PR19 %02x PR4 %02x PR57 %02x", M.fp[0x32], M.gfx[0x0e], M.seq[0x19]);
+	CHECK(!strcmp(M.panel_log, "P47"), "off order %s, want PR19, PR4, PR57", M.panel_log);
+	CHECK(!wd_panel_off(&hw), "panel_off twice");
+	M.panel_log_n = 0; memset(M.panel_log, 0, sizeof(M.panel_log)); M.sleeps_ms = 0;
+	wd_set_outputs(&hw, true, true);
+	CHECK(!strcmp(M.panel_log, "74P"), "on order %s, want PR57, PR4, PR19", M.panel_log);
+	CHECK(M.sleeps_ms >= 200, "on: only %u ms between steps", M.sleeps_ms);
+	CHECK((M.fp[0x32] & 0x30) == 0x30 && !(M.gfx[0x0e] & 0x20) && (M.seq[0x19] & 0x04), "on: not back on");
+
+	wd_set_outputs(&hw, false, true);
+	CHECK((M.fp[0x32] & 0x30) == 0x20, "CRT only: PR19 %02x", M.fp[0x32]);
+	wd_set_outputs(&hw, true, false);
+	CHECK((M.fp[0x32] & 0x30) == 0x10, "LCD only: PR19 %02x", M.fp[0x32]);
+
+	/* blank to powerdown while live, then restore: everything as the BIOS had it */
+	mock_reset(M_C24A);
+	M.gfx[0x0e] = 0x00;
+	wd_probe(&hw);
+	mock_snap(&before);
+	text.misc = M.misc;
+	for (i = 0; i < 5; i++) text.seq[i] = M.seq[i];
+	for (i = 0; i < 25; i++) text.crtc[i] = M.crtc[i];
+	for (i = 0; i < 9; i++) text.gfx[i] = M.gfx[i];
+	for (i = 0; i < 21; i++) text.attr[i] = M.attr[i];
+	wd_save_ext(&hw, &bios);
+	wd_mode_640x480x8(&hw, &bios, &std, &ext);
+	wd_set_mode(&hw, &std, &ext);
+	wd_set_outputs(&hw, false, true);	/* output=crt */
+	wd_panel_off(&hw);
+	M.sleeps_ms = 0;
+	wd_restore_ext(&hw, &bios);
+	CHECK(M.gfx[0x0e] & 0x20, "restore_ext drove the panel pins before panel power");
+	wd_write_std(&hw, &text);
+	wd_screen_on(&hw, true);
+	wd_relock(&hw, &bios);
+	wd_restore_panel(&hw, &bios);
+	mock_snap(&after);
+	CHECK(!mock_snap_diff(&before, &after, why, sizeof(why)), "panel off + restore left %s", why);
+	CHECK(M.sleeps_ms >= 200, "restore powered the panel up without the 100 ms steps");
+}
+
 int main(void)
 {
 	t_probe_kinds();
@@ -361,6 +415,7 @@ int main(void)
 	t_roundtrip();
 	t_blt();
 	t_blt_selftest();
+	t_panel();
 	printf("wd90c24 unit tests: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;
 }

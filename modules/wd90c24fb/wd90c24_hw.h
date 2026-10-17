@@ -72,6 +72,8 @@
 #define PR69	0x32	/* SEQ: programmable VCLK frequency (C24) */
 #define PR72	0x35	/* SEQ: unlock PR68/PR69 (0x50) */
 
+#define PR4_FP_TRISTATE	0x20	/* PR4 bit 5: tri-state the flat-panel pins */
+#define PR57_PNLOFF	0x04	/* PR57 bit 2: 1 = panel power on (PNLOFF low) */
 #define PR19_LCD	0x10	/* flat panel display enable */
 #define PR19_CRT	0x20	/* CRT display enable */
 #define PR1B_FP		0xa0	/* 101xxxxx: unlock PR18/PR19/PR1A/PR36-41 */
@@ -126,7 +128,7 @@ struct wd_ext_state {
 	u8 pr10, pr11, pr13, pr14, pr15, pr16;
 	u8 pr20, pr30a, pr31, pr32;
 	u8 pr68, pr69, pr72;
-	u8 pr19;
+	u8 pr19, pr57;
 	u16 cursor;
 };
 
@@ -206,5 +208,23 @@ int wd_blt_fill(struct wd_hw *hw, u32 x, u32 y, u32 w, u32 h, u8 color, bool xor
 int wd_blt_copy(struct wd_hw *hw, u32 sx, u32 sy, u32 dx, u32 dy, u32 w, u32 h);
 /* Fill + copy in off-screen memory, verified through the window. */
 int wd_blt_selftest(struct wd_hw *hw);
+
+/*
+ * Flat panel and CRT (stage 4, WD90C24 only), ported from XFree86
+ * PVGA1lcd24power. Power-on is three steps with 100 ms between them
+ * (PNLOFF low, drive the panel pins, enable the panel); the kernel driver
+ * sleeps between steps outside its lock. Power-off is one step.
+ */
+u8 wd_read_pr19(struct wd_hw *hw);
+void wd_write_pr19(struct wd_hw *hw, u8 val);
+/* Returns true if the panel was on and is now off. */
+bool wd_panel_off(struct wd_hw *hw);
+void wd_panel_on_step(struct wd_hw *hw, int step);	/* steps 0, 1, 2 */
+#define WD_PANEL_STEPS		3
+#define WD_PANEL_STEP_MS	100
+/* Select outputs; the panel is powered up/down in order (sleeps). */
+void wd_set_outputs(struct wd_hw *hw, bool lcd, bool crt);
+/* Outputs and panel power back to the saved state (sleeps if powering up). */
+void wd_restore_panel(struct wd_hw *hw, const struct wd_ext_state *s);
 
 #endif

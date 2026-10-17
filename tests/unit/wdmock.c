@@ -26,6 +26,7 @@ void mock_reset(enum mock_kind k)
 	M.seq[0x06] = 0x00;
 	M.seq[0x31] = 0x0d;		/* PR68: VCLK sel 01, MCLK 101 */
 	M.seq[0x32] = 0x8b;
+	M.seq[0x19] = 0x04;		/* PR57: panel power on */
 	M.fp[0x31] = 0x0c;		/* PR18: single-scan TFT */
 	M.fp[0x32] = 0x30;		/* PR19: LCD + CRT on */
 	M.pr1b = 0x00;
@@ -50,10 +51,18 @@ static int seq_writable(u8 i, u8 *mask)
 	return i < 0x40;
 }
 
+static void plog(char c)
+{
+	if (M.panel_log_n < sizeof(M.panel_log) - 1)
+		M.panel_log[M.panel_log_n++] = c;
+}
+
 static void wr_seq(u8 i, u8 v)
 {
 	u8 mask;
 
+	if (i == 0x19 && paradise() && pr2x_open() && v != M.seq[i])
+		plog('7');
 	if (i <= 4)
 		M.timing_writes++;
 	if (!paradise() && i > 4)
@@ -75,6 +84,8 @@ static void wr_gfx(u8 i, u8 v)
 		return;
 	if (i >= 0x09 && i <= 0x0e && !pr04_open())
 		return;
+	if (i == 0x0e && v != M.gfx[i])
+		plog('4');
 	M.gfx[i] = v;
 }
 
@@ -99,8 +110,11 @@ static void wr_crtc(u8 i, u8 v)
 		return;
 	}
 	if ((i == 0x31 || i == 0x32) && has_fp()) {
-		if (fp_open())
+		if (fp_open()) {
+			if (i == 0x32 && v != M.fp[i])
+				plog('P');
 			M.fp[i] = v;
+		}
 		return;
 	}
 	if (i >= 0x2a && i <= 0x30) {
