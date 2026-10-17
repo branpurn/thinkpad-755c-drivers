@@ -2,6 +2,7 @@
 # TRIM_KSYMS=1 (CONFIG_TRIM_UNUSED_KSYMS). In-tree =m users are found
 # automatically. Regenerate with: make ksyms-keep  (scans modules/*/*.ko)
 cancel_delayed_work_sync
+cancel_work_sync
 console_lock
 console_unlock
 delayed_work_timer_fn
@@ -15,19 +16,25 @@ framebuffer_release
 ioremap
 iounmap
 memcpy_toio
+msleep
 param_ops_bool
+param_ops_charp
 param_ops_int
 param_ops_uint
 platform_device_register_full
 platform_device_unregister
+__platform_driver_register
+platform_driver_unregister
 _printk
 queue_delayed_work_on
+queue_work_on
 register_framebuffer
 remap_vmalloc_range
 restore_vga
 save_vga
 screen_info
 sized_strscpy
+strcmp
 sys_copyarea
 sys_fillrect
 sys_imageblit

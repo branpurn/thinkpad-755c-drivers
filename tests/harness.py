@@ -173,6 +173,8 @@ def main():
         o2, rc2 = g.run("lsmod && readlink /usr/local/sbin/insmod")
         check("modutils.tcz: insmod/lsmod available", rc == 0 and rc2 == 0 and "Module" in o2 and "usr/local/sbin/insmod" in o2, " ".join(o2.split()))
 
+        o, rc, _ = tce("apm-tools")
+        apm_ok = rc == 0
         o, rc, mods = tce("wd90c24-probe")
         d, _ = g.run("dmesg | grep wd90c24fb | tail -2")
         check("wd90c24-probe.tcz: wd90c24fb probe_only runs, finds no WD chip in QEMU, stays unloaded",
@@ -206,6 +208,29 @@ def main():
                   f"before {w0}x{h0} lit {lit0:.3f}, after {w1}x{h1} lit {lit1:.3f}")
         except Exception as e:
             check("wd90c24fb fake=1 fail-safe", False, str(e))
+
+        # wd90c24fb suspend/resume: fake=2 skips the self-tests so the driver
+        # goes "live" on QEMU's VGA; an APM suspend round trip must hand text
+        # back on suspend, redo the mode set on resume, and rmmod afterwards
+        # must still restore a working text console (the re-saved state).
+        try:
+            g.run("clear > /dev/tty1; printf 'tc755: text console before wd90c24fb fake=2\\n' > /dev/tty1; sleep 1")
+            o, rc = g.run(f"insmod {ko} fake=2 && cat /proc/fb", 60)
+            live = rc == 0 and "WD90C24" in o
+            o2, rc2 = g.run("apm -s", 120) if apm_ok else ("", 1)
+            d, _ = g.run("dmesg | grep -E 'wd90c24fb: (suspend|resume)' | tail -2")
+            check("wd90c24fb fake=2 + apm -s: text handed back on suspend, mode set redone on resume",
+                  live and "resumed from suspend" in o2 and "suspend: text mode handed back" in d
+                  and "resume: 640x480x8 restored" in d,
+                  " | ".join(l.split("] ")[-1] for l in d.strip().splitlines()))
+            o3, rc3 = g.run("rmmod wd90c24fb 2>&1 | grep -q unavailable && echo busy-as-expected; echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo rc=$?; grep -c wd90c24fb /proc/modules; cat /proc/fb | wc -l", 60)
+            g.run("printf 'tc755: text console after wd90c24fb fake=2 + suspend\\n' > /dev/tty1; sleep 1")
+            w2, h2, lit2 = shot("text-after-wd90c24fb-suspend")
+            check("wd90c24fb after suspend/resume: rmmod refused while fbcon holds it; text=1 restores text, then rmmod (720x400, text visible)",
+                  "busy-as-expected" in o3 and "rc=0" in o3 and o3.split()[-2:] == ["0", "0"] and (w2, h2) == (720, 400) and lit2 > 0.002,
+                  f"{w2}x{h2} lit {lit2:.3f}")
+        except Exception as e:
+            check("wd90c24fb fake=2 suspend/resume", False, str(e))
 
         o, rc, mods = tce("fb-wd90c24")
         o2, _ = g.run("cat /proc/fb; ls /dev/fb0; dmesg | grep -iE 'vga16fb|frame buffer|tc32-vgafb|Console: switching' | tail -5")
@@ -256,7 +281,6 @@ def main():
 
         # APM: SeaBIOS answers APM 1.2; a suspend request returns at once,
         # which still runs the kernel's whole device suspend/resume path.
-        o, rc, _ = tce("apm-tools")
         o2, rc2 = g.run("apm -v; apm; apm -m")
         check("apm-tools.tcz: apm -v / status / -m read /proc/apm", rc == 0 and rc2 == 0
               and "APM BIOS 1." in o2 and o2.startswith("kernel APM driver") and "AC " in o2,

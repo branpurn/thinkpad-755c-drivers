@@ -36,7 +36,7 @@ build with it by default, so module-capable kernels are the one artefact.
 | 1c | native `wd90c24fb`: 640x480x8 packed via PR0(A) banking, 300 KiB shadow, save/restore, self-test, `trial`/`keep`, `.tcz` fallback to vga16fb | 12 K | 53 KiB (`fb-wd90c24.tcz`, incl. fb stack) | ~150 KiB modules + 300 KiB shadow | done; unit tests + QEMU fail-safe; panel picture needs hardware |
 | 1d | BitBLT engine (C31-style, WD90C24A only) for fbcon copyarea/fillrect: fast scrolling; hardware cursor | +5-10 K | | | new |
 | 1e | panel/CRT: LCD only, CRT only (up to 1024x768x8), simultaneous; DSTN (755CS) frame-buffer split; follow Fn+F7 | +5 K | | | new |
-| 1f | VRAM/pixel clock programming (44.3 → 55.0 MHz), APM suspend/resume register save/restore | +2 K | | | new |
+| 1f | APM suspend/resume save/restore (**done**, stage 5); MCLK programming 44.3 → 55.0 MHz (**not done**: needs a stable value measured on a real 755C) | +2 K | | | partly done |
 
 Reference material for 1c-1f: XFree86 3.3.6 SVGA `wd` driver sources
 (wd90c24 chipset paths), VGADOC Paradise chapter, 86Box `vid_paradise.c`
