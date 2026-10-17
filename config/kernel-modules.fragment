@@ -1,7 +1,12 @@
-# tc755 add-on: loadable module support for the tc32 core kernel.
-# Merged AFTER tinycore-32-ram's base/hdd/tce fragments. This is the only
-# change the core kernel needs; every driver below is built =m and shipped
-# as a .tcz, so the floppy only pays for the module loader itself.
+# tc755 add-on, merged AFTER tinycore-32-ram's base/hdd/tce/modules
+# fragments. The stock tc32 kernel already has loadable modules (all exports
+# kept); this repeats the options so the tc755 build cannot drift.
+# LOCALVERSION gives the tc755 kernel its own vermagic
+# ("6.18.57-tc755 mod_unload 486"): kernel-drivers.fragment turns several
+# helpers built-in (FB_NOTIFY, VIDEO, APERTURE_HELPERS, ...), so these
+# modules are not ABI-safe on the stock kernel, and it now refuses them.
+CONFIG_LOCALVERSION="-tc755"
+# CONFIG_LOCALVERSION_AUTO is not set
 CONFIG_MODULES=y
 CONFIG_MODULE_UNLOAD=y
 # CONFIG_MODVERSIONS is not set

@@ -10,7 +10,7 @@ One `<name>.ext` file per `.tcz`. They are sourced by `scripts/mktcz.sh`:
 | `DEPS` | other `.tcz` this one needs (written to `<name>.tcz.dep`) |
 | `OPTIONAL=1` | a module that fails to load (no hardware) is reported, not fatal |
 
-At load time the extension's `/usr/local/tce.installed/<name>.sh` inserts the
+At load time the extension's `/usr/local/tce.installed/<name>` inserts the
 modules in dependency order, skipping ones already in `/sys/module`. Options
 on the kernel command line in the usual `module.param=value` form override
 the defaults (e.g. `snd_ad1848.port=0x534 snd_ad1848.irq=9`), the same

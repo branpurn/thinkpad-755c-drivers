@@ -130,7 +130,7 @@ def main():
         g.expect(r"boot: ", 60)
         # QEMU's cs4231a sits at 0x534/IRQ9/DMA3, not the 755C's 0x4E30/IRQ10/DMA0:
         # override snd-cs4248.tcz's defaults the same way a user would.
-        g.send("tc32 tce=sda1 snd_ad1848.port=0x534 snd_ad1848.irq=9 snd_ad1848.dma1=3 snd_ad1848.thinkpad=0\r", slow=True)
+        g.send("tc32 floppy=0,thinkpad tce=sda1 snd_ad1848.port=0x534 snd_ad1848.irq=9 snd_ad1848.dma1=3 snd_ad1848.thinkpad=0\r", slow=True)
         out, _ = g.expect(r"tc32: ready\.", a.boot_timeout)
         check("module-capable kernel boots to rcS", True)
         g.expect(r"root@box:[^\n#]*# ", 60)
@@ -138,6 +138,7 @@ def main():
         g.expect(r"# ", 10)
         g.run("dmesg -n 1")   # keep printk off the serial shell; read it with dmesg
         metrics["uname"] = g.run("uname -r")[0].strip()
+        check("tc755 kernel has its own vermagic (uname -r 6.18.57-tc755)", metrics["uname"].endswith("-tc755"), metrics["uname"])
         o, rc = g.run("cat /proc/modules | wc -l; cat /proc/sys/kernel/modprobe 2>/dev/null; ls /sys/module | wc -l")
         check("kernel has module support (/proc/modules present, empty)", rc == 0 and o.split()[0] == "0", " ".join(o.split()))
 
