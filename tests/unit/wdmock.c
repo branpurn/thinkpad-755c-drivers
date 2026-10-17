@@ -18,6 +18,7 @@ void mock_reset(enum mock_kind k)
 	memset(&M, 0, sizeof(M));
 	M.kind = k;
 	M.misc = 0x67;			/* colour, 28 MHz text clock */
+	M.seq[0x00] = 0x03;		/* sequencer running */
 	M.crtc[0x11] = 0x8e;		/* CRTC 0-7 write-protected (BIOS) */
 	M.gfx[0x0f] = 0x00;		/* PR0-4 locked */
 	M.gfx[0x0b] = 0xc5;		/* PR1: 1 MiB */
@@ -146,6 +147,8 @@ u8 wd_inb(u16 p)
 	case 0x3cf: return rd_gfx(M.gfx_i);
 	case 0x3d4: return M.crtc_i;
 	case 0x3d5: return rd_crtc(M.crtc_i);
+	case 0x3da: M.attr_ff = 0; return 0x00;
+	case 0x3c1: return M.attr[M.attr_i & 0x1f];
 	default: return 0xff;
 	}
 }
@@ -160,6 +163,15 @@ void wd_outb(u8 v, u16 p)
 	case 0x3cf: wr_gfx(M.gfx_i, v); break;
 	case 0x3d4: M.crtc_i = v; break;
 	case 0x3d5: wr_crtc(M.crtc_i, v); break;
+	case 0x3c0:
+		if (!M.attr_ff) M.attr_i = v; else M.attr[M.attr_i & 0x1f] = v;
+		M.attr_ff ^= 1;
+		break;
+	case 0x3c8: M.dac_i = v; M.dac_c = 0; break;
+	case 0x3c9:
+		M.dac[M.dac_i][M.dac_c] = v & 0x3f;
+		if (++M.dac_c == 3) { M.dac_c = 0; M.dac_i++; }
+		break;
 	default: break;
 	}
 }
@@ -227,4 +239,48 @@ int mock_snap_diff(const struct mock_snap *a, const struct mock_snap *b, char *w
 	if (a->pr1b != b->pr1b) { snprintf(why, n, "PR1B %02x->%02x", a->pr1b, b->pr1b); return 1; }
 	if (a->cursor != b->cursor) { snprintf(why, n, "cursor %04x->%04x", a->cursor, b->cursor); return 1; }
 	return 0;
+}
+
+/*
+ * Data sheet 13.1: with the 64 KiB map (GR6 bits 3:2 = 01), PR1 bit 3 = 0
+ * and SR11 bit 7 = 0, PR0(A) offsets the whole window in 4 KiB units. With
+ * PR1 bit 3 set, PR0(B) covers A0000-A7FFF and PR0(A) A8000-AFFFF. Plain
+ * VGA ignores the offset registers (no extra memory).
+ */
+u32 mock_win_addr(u32 off)
+{
+	u32 a;
+
+	if (off >= 0x10000)
+		M.win_oob++;
+	off &= 0xffff;
+	if (M.kind == M_VGA || (M.gfx[6] & 0x0c) != 0x04)
+		return off;
+	if (M.gfx[0x0b] & 0x08)
+		a = ((off < 0x8000 ? M.gfx[0x0a] : M.gfx[0x09]) << 12) + off;
+	else
+		a = (M.gfx[0x09] << 12) + off;
+	return a & ((1 << 20) - 1);
+}
+
+void wd_win_write(struct wd_hw *hw, u32 off, const void *src, size_t n)
+{
+	const u8 *p = src;
+	size_t i;
+
+	(void)hw;
+	for (i = 0; i < n; i++)
+		M.vram[mock_win_addr(off + i)] = p[i];
+}
+
+void wd_win_writeb(struct wd_hw *hw, u32 off, u8 v)
+{
+	(void)hw;
+	M.vram[mock_win_addr(off)] = v;
+}
+
+u8 wd_win_readb(struct wd_hw *hw, u32 off)
+{
+	(void)hw;
+	return M.vram[mock_win_addr(off)];
 }

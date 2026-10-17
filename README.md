@@ -19,7 +19,8 @@ yet.
 | `snd-cs4231.tcz` | same with `snd-cs4231` (QEMU `cs4231a`, generic WSS cards) | 96 KiB |
 | `trackpoint.tcz` | `psmouse` (TrackPoint protocol) + `mousedev` + `evdev` | 20 KiB |
 | `pcmcia.tcz` | PC Card core + `i82365` (2x Ricoh RF5C266) + `pata_pcmcia` (CF) + `serial_cs` | 48 KiB |
-| `wd90c24-probe.tcz` | `wd90c24` stage 0: identifies the WD90C24A and logs its registers | 4 KiB |
+| `fb-wd90c24.tcz` | native `wd90c24fb`: 640x480, 256 colours, fbcon; falls back to vga16fb; 30 s trial until confirmed ([docs/WD90C24.md](docs/WD90C24.md)) | 52 KiB |
+| `wd90c24-probe.tcz` | `wd90c24fb probe_only=1`: identifies the chip, memory and panel state in dmesg | 40 KiB |
 
 Cost to the floppy: **+20 KiB** of kernel for `CONFIG_MODULES` (with
 `TRIM_UNUSED_KSYMS`); 151 KiB stays free. See

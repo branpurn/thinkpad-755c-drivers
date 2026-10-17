@@ -23,6 +23,10 @@
 #define wd_outw(val, port)	outw(val, port)
 #define wd_msleep(ms)		msleep(ms)
 #define wd_udelay(us)		udelay(us)
+#define wd_win_write(hw, off, src, n) \
+	memcpy_toio((u8 __iomem *)(hw)->win + (off), (src), (n))
+#define wd_win_writeb(hw, off, v)	writeb((v), (u8 __iomem *)(hw)->win + (off))
+#define wd_win_readb(hw, off)		readb((u8 __iomem *)(hw)->win + (off))
 #else
 #include "wdmock.h"
 #endif
@@ -96,6 +100,23 @@ struct wd_hw {
 	u8 pr18, pr19;		/* flat panel status/control at probe */
 	bool use_1meg;		/* C24 at 512K: dual scan + panel off */
 	bool ext_blocks;	/* 23C0 index control answers */
+	int bank;		/* current PR0(A) value, -1 = unknown */
+};
+
+/* 640x480, 8 bpp packed, the only mode (the 755C panel is 640x480). */
+#define WD_XRES		640
+#define WD_YRES		480
+#define WD_PITCH	640
+#define WD_FB_SIZE	(WD_PITCH * WD_YRES)
+#define WD_WIN_SIZE	0x10000
+
+/* Standard VGA register set for one mode (what vgaHWInit computes). */
+struct wd_std {
+	u8 misc;
+	u8 seq[5];
+	u8 crtc[25];
+	u8 gfx[9];
+	u8 attr[21];
 };
 
 /* Saved extended state (standard VGA state is saved by vgastate). */
@@ -128,5 +149,24 @@ void wd_unlock(struct wd_hw *hw);
 void wd_save_ext(struct wd_hw *hw, struct wd_ext_state *s);
 void wd_restore_ext(struct wd_hw *hw, const struct wd_ext_state *s);
 void wd_relock(struct wd_hw *hw, const struct wd_ext_state *s);
+
+/*
+ * Mode 640x480x8 (stage 2). wd_mode_640x480x8() fills the standard and
+ * extended register sets from the saved BIOS state; wd_set_mode() programs
+ * them. The caller holds the console lock and has saved the state.
+ */
+void wd_mode_640x480x8(const struct wd_hw *hw, const struct wd_ext_state *bios,
+		       struct wd_std *std, struct wd_ext_state *ext);
+void wd_write_std(struct wd_hw *hw, const struct wd_std *std);
+void wd_set_mode(struct wd_hw *hw, const struct wd_std *std,
+		 const struct wd_ext_state *ext);
+void wd_screen_on(struct wd_hw *hw, bool on);
+/* Banking self-test after the mode set: 0, or -1 if banking does not work. */
+int wd_selftest_banks(struct wd_hw *hw, unsigned int vram_kb);
+void wd_set_bank(struct wd_hw *hw, u8 bank);
+/* Copy a rectangle of the shadow buffer into video memory. */
+void wd_flush_rect(struct wd_hw *hw, const u8 *shadow, unsigned int x,
+		   unsigned int y, unsigned int w, unsigned int h);
+void wd_set_dac(u8 idx, u8 r, u8 g, u8 b);	/* 6-bit components */
 
 #endif

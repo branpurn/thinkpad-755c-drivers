@@ -20,6 +20,10 @@ u16 wd_inw(u16 port);
 void wd_outw(u16 val, u16 port);
 void wd_msleep(unsigned int ms);
 void wd_udelay(unsigned int us);
+struct wd_hw;
+void wd_win_write(struct wd_hw *hw, u32 off, const void *src, size_t n);
+void wd_win_writeb(struct wd_hw *hw, u32 off, u8 v);
+u8 wd_win_readb(struct wd_hw *hw, u32 off);
 
 enum mock_kind { M_VGA, M_PVGA1, M_C00, M_C1X, M_C20, M_C24, M_C24A, M_C30, M_C31 };
 
@@ -32,6 +36,9 @@ struct mock {
 	u16 ext_index, cursor;
 	u16 blt[16];
 	u8 vram[1 << 20];
+	u8 attr[32], attr_i, attr_ff;
+	u8 dac[256][3], dac_i, dac_c;
+	unsigned int win_oob;		/* window accesses past 64 KiB */
 	/* accounting */
 	unsigned int timing_writes;	/* CRTC 0x00-0x18 except 0x11, MISC, SEQ 0-4 */
 	unsigned int ext_port_writes;
@@ -47,4 +54,5 @@ struct mock_snap {
 };
 void mock_snap(struct mock_snap *s);
 int mock_snap_diff(const struct mock_snap *a, const struct mock_snap *b, char *why, size_t n);
+u32 mock_win_addr(u32 off);	/* VRAM address the chip would use */
 #endif
