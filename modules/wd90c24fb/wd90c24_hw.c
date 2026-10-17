@@ -225,6 +225,7 @@ void wd_save_ext(struct wd_hw *hw, struct wd_ext_state *s)
 		wd_wrinx(WD_SEQ, PR72, s->pr72);
 	}
 	s->pr19 = hw->pr19;
+	s->pr57 = wd_rdinx(WD_SEQ, PR57);
 	s->cursor = 0;
 	if (hw->ext_blocks) {
 		wd_outw(WD_EXT_NOINC | WD_BLK_CURSOR, WD_EXT_INDEX);
@@ -261,7 +262,9 @@ void wd_restore_ext(struct wd_hw *hw, const struct wd_ext_state *s)
 		wd_wrinx(WD_GFX, PR2, s->pr2);
 	}
 	wd_wrinx(WD_GFX, PR3, s->pr3);
-	wd_wrinx(WD_GFX, PR4, s->pr4);
+	/* PR4 bit 5 (panel pins) is part of the power sequence: see below */
+	wd_wrinx(WD_GFX, PR4, (s->pr4 & ~PR4_FP_TRISTATE) |
+		 (wd_rdinx(WD_GFX, PR4) & PR4_FP_TRISTATE));
 	wd_wrinx(hw->crtc, PR13, s->pr13);
 	wd_wrinx(hw->crtc, PR14, s->pr14);
 	wd_wrinx(hw->crtc, PR16, s->pr16);
@@ -577,4 +580,109 @@ int wd_blt_selftest(struct wd_hw *hw)
 	hw->bank = -1;
 	wd_set_bank(hw, 0);
 	return ret;
+}
+
+/* ---- flat panel / CRT (port of XFree86 PVGA1lcd24power) ---- */
+
+u8 wd_read_pr19(struct wd_hw *hw)
+{
+	u8 lock = wd_rdinx(hw->crtc, PR1B), v;
+
+	wd_wrinx(hw->crtc, PR1B, (lock & 0x0f) | PR1B_FP);
+	v = wd_rdinx(hw->crtc, PR19);
+	wd_wrinx(hw->crtc, PR1B, lock);
+	return v;
+}
+
+void wd_write_pr19(struct wd_hw *hw, u8 val)
+{
+	u8 lock = wd_rdinx(hw->crtc, PR1B);
+
+	wd_wrinx(hw->crtc, PR1B, (lock & 0x0f) | PR1B_FP);
+	wd_wrinx(hw->crtc, PR19, val);
+	wd_wrinx(hw->crtc, PR1B, lock);
+}
+
+bool wd_panel_off(struct wd_hw *hw)
+{
+	u8 pr19 = wd_read_pr19(hw), lock;
+
+	if (!(pr19 & PR19_LCD))
+		return false;
+	wd_write_pr19(hw, pr19 & ~PR19_LCD);			/* panel display off */
+	lock = wd_rdinx(WD_GFX, PR5);
+	wd_wrinx(WD_GFX, PR5, (lock & 0xf8) | 0x05);
+	wd_modinx(WD_GFX, PR4, PR4_FP_TRISTATE, PR4_FP_TRISTATE);	/* pins off */
+	wd_wrinx(WD_GFX, PR5, lock);
+	lock = wd_rdinx(WD_SEQ, PR20);
+	wd_unlock_seq();
+	wd_modinx(WD_SEQ, PR57, PR57_PNLOFF, 0);		/* panel power off */
+	wd_wrinx(WD_SEQ, PR20, lock);
+	return true;
+}
+
+void wd_panel_on_step(struct wd_hw *hw, int step)
+{
+	u8 lock;
+
+	switch (step) {
+	case 0:			/* panel power on (PNLOFF low) */
+		lock = wd_rdinx(WD_SEQ, PR20);
+		wd_unlock_seq();
+		wd_modinx(WD_SEQ, PR57, PR57_PNLOFF, PR57_PNLOFF);
+		wd_wrinx(WD_SEQ, PR20, lock);
+		break;
+	case 1:			/* drive the flat-panel pins */
+		lock = wd_rdinx(WD_GFX, PR5);
+		wd_wrinx(WD_GFX, PR5, (lock & 0xf8) | 0x05);
+		wd_modinx(WD_GFX, PR4, PR4_FP_TRISTATE, 0);
+		wd_wrinx(WD_GFX, PR5, lock);
+		break;
+	case 2:			/* panel display on */
+		wd_write_pr19(hw, wd_read_pr19(hw) | PR19_LCD);
+		break;
+	}
+}
+
+void wd_set_outputs(struct wd_hw *hw, bool lcd, bool crt)
+{
+	u8 pr19 = wd_read_pr19(hw);
+	int i;
+
+	if (crt != !!(pr19 & PR19_CRT))
+		wd_write_pr19(hw, crt ? pr19 | PR19_CRT : pr19 & ~PR19_CRT);
+	if (lcd && !(pr19 & PR19_LCD)) {
+		for (i = 0; i < WD_PANEL_STEPS; i++) {
+			wd_panel_on_step(hw, i);
+			if (i < WD_PANEL_STEPS - 1)
+				wd_msleep(WD_PANEL_STEP_MS);
+		}
+	} else if (!lcd && (pr19 & PR19_LCD)) {
+		wd_panel_off(hw);
+	}
+	hw->pr19 = wd_read_pr19(hw);
+}
+
+/* After wd_restore_ext + standard registers: outputs as the BIOS had them. */
+void wd_restore_panel(struct wd_hw *hw, const struct wd_ext_state *s)
+{
+	u8 keep = PR19_LCD | PR19_CRT;
+
+	if (hw->chip != WD_C24)
+		return;
+	wd_set_outputs(hw, s->pr19 & PR19_LCD, s->pr19 & PR19_CRT);
+	wd_write_pr19(hw, (wd_read_pr19(hw) & keep) | (s->pr19 & ~keep));
+	if (!(s->pr19 & PR19_LCD)) {
+		/* BIOS had the panel off: leave its power and pins as found */
+		u8 lock = wd_rdinx(WD_SEQ, PR20);
+
+		wd_unlock_seq();
+		wd_modinx(WD_SEQ, PR57, PR57_PNLOFF, s->pr57);
+		wd_wrinx(WD_SEQ, PR20, lock);
+		lock = wd_rdinx(WD_GFX, PR5);
+		wd_wrinx(WD_GFX, PR5, (lock & 0xf8) | 0x05);
+		wd_modinx(WD_GFX, PR4, PR4_FP_TRISTATE, s->pr4);
+		wd_wrinx(WD_GFX, PR5, lock);
+	}
+	hw->pr19 = wd_read_pr19(hw);
 }

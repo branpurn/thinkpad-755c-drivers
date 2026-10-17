@@ -23,8 +23,9 @@
  *  - after the mode set a banking self-test must pass, or the text mode is
  *    restored and the module returns -ENODEV (the .tcz then falls back to
  *    vga16fb);
- *  - blanking only uses the sequencer screen-off bit and is always undone
- *    on restore.
+ *  - blanking powers the panel down with XFree86's PNLOFF sequence (stage
+ *    4); restore always brings the outputs back as the BIOS had them, with
+ *    the 100 ms power-up steps.
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/module.h>
@@ -35,6 +36,8 @@
 #include <linux/console.h>
 #include <linux/workqueue.h>
 #include <linux/spinlock.h>
+#include <linux/delay.h>
+#include <linux/string.h>
 #include <video/vga.h>
 #include "wd90c24_hw.h"
 
@@ -56,6 +59,9 @@ MODULE_PARM_DESC(trial, "Seconds until text mode is restored unless keep=1 is wr
 static bool accel = true;
 module_param(accel, bool, 0444);
 MODULE_PARM_DESC(accel, "Use the WD90C24A BITBLT engine for fills and scrolling (if its self-test passes)");
+static char *output = "auto";
+module_param(output, charp, 0444);
+MODULE_PARM_DESC(output, "auto (as the BIOS/Fn+F7 set it), lcd, crt or both (WD90C24 only)");
 static bool keep;
 module_param(keep, bool, 0644);
 MODULE_PARM_DESC(keep, "Write 1 during the trial period to keep the framebuffer");
@@ -70,6 +76,7 @@ struct wd_par {
 	bool live;		/* hardware is in our mode */
 	bool accel;		/* BITBLT engine in use */
 	bool blt_pending;	/* a blit may still be running */
+	bool panel_off;		/* we powered the panel down (blank) */
 	bool registered;
 	atomic_t users;
 	bool mmapped;
@@ -248,13 +255,85 @@ static int wd_setcolreg(unsigned int regno, unsigned int red, unsigned int green
 	return 0;
 }
 
+/* Panel power-up while live: each step under the lock, sleeps outside it. */
+static void wd_live_panel_on(struct wd_par *par)
+{
+	unsigned long flags;
+	int i;
+
+	for (i = 0; i < WD_PANEL_STEPS; i++) {
+		spin_lock_irqsave(&par->lock, flags);
+		wd_panel_on_step(&par->hw, i);
+		spin_unlock_irqrestore(&par->lock, flags);
+		if (i < WD_PANEL_STEPS - 1)
+			msleep(WD_PANEL_STEP_MS);
+	}
+}
+
+static bool wd_live_panel_off(struct wd_par *par)
+{
+	unsigned long flags;
+	bool off;
+
+	spin_lock_irqsave(&par->lock, flags);
+	off = wd_panel_off(&par->hw);
+	spin_unlock_irqrestore(&par->lock, flags);
+	return off;
+}
+
 static int wd_blank(int blank, struct fb_info *info)
 {
 	struct wd_par *par = info->par;
+	unsigned long flags;
 
-	if (par->live)
-		wd_screen_on(&par->hw, blank == FB_BLANK_UNBLANK);
+	if (!par->live)
+		return 0;
+	if (blank == FB_BLANK_UNBLANK) {
+		if (par->panel_off) {
+			wd_live_panel_on(par);
+			par->panel_off = false;
+		}
+		spin_lock_irqsave(&par->lock, flags);
+		wd_screen_on(&par->hw, true);
+		spin_unlock_irqrestore(&par->lock, flags);
+		return 0;
+	}
+	spin_lock_irqsave(&par->lock, flags);
+	wd_screen_on(&par->hw, false);
+	spin_unlock_irqrestore(&par->lock, flags);
+	/* deeper levels: panel off too (XFree86 PVGA1lcd24power) */
+	if (blank != FB_BLANK_NORMAL && par->hw.chip == WD_C24)
+		par->panel_off |= wd_live_panel_off(par);
 	return 0;
+}
+
+static void wd_apply_output(struct wd_par *par)
+{
+	bool lcd, crt;
+	unsigned long flags;
+	u8 pr19;
+
+	if (par->hw.chip != WD_C24 || !output || !strcmp(output, "auto"))
+		return;
+	if (!strcmp(output, "lcd")) {
+		lcd = true; crt = false;
+	} else if (!strcmp(output, "crt")) {
+		lcd = false; crt = true;
+	} else if (!strcmp(output, "both")) {
+		lcd = crt = true;
+	} else {
+		pr_warn("output=%s: use auto, lcd, crt or both\n", output);
+		return;
+	}
+	spin_lock_irqsave(&par->lock, flags);
+	pr19 = wd_read_pr19(&par->hw);
+	wd_write_pr19(&par->hw, crt ? pr19 | PR19_CRT : pr19 & ~PR19_CRT);
+	spin_unlock_irqrestore(&par->lock, flags);
+	if (lcd && !(pr19 & PR19_LCD))
+		wd_live_panel_on(par);
+	else if (!lcd)
+		wd_live_panel_off(par);
+	pr_info("output=%s (PR19 0x%02x)\n", output, wd_read_pr19(&par->hw));
 }
 
 static const struct fb_ops wd_ops = {
@@ -284,6 +363,8 @@ static void wd_restore_text(struct wd_par *par)
 	restore_vga(&par->vstate);
 	wd_relock(&par->hw, &par->bios);
 	wd_screen_on(&par->hw, true);	/* never leave the panel blank */
+	wd_restore_panel(&par->hw, &par->bios);	/* outputs + panel power */
+	par->panel_off = false;
 }
 
 /* Mode set + self-test. Caller holds the console lock. */
@@ -481,6 +562,7 @@ static int __init wd90c24fb_init(void)
 		par->registered = false;
 		goto err_vga;
 	}
+	wd_apply_output(par);
 	fb_info(info, "%s, 640x480x8 via PR0(A) banking, %u KiB shadow%s\n",
 		wd_chip_name(par->hw.chip), WD_FB_SIZE / 1024,
 		par->accel ? ", BITBLT" : "");

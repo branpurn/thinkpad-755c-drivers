@@ -42,6 +42,8 @@ struct mock {
 	unsigned int blt_busy_polls;	/* reads that report busy after a start */
 	bool blt_stuck;			/* engine never finishes */
 	unsigned int blt_busy_left, blt_ops, blt_started_while_busy;
+	char panel_log[64];		/* 'P' PR19, '4' PR4, '7' PR57 writes */
+	unsigned int panel_log_n;
 	/* accounting */
 	unsigned int timing_writes;	/* CRTC 0x00-0x18 except 0x11, MISC, SEQ 0-4 */
 	unsigned int ext_port_writes;
