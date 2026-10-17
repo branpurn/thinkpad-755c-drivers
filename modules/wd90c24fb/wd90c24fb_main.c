@@ -8,7 +8,10 @@
  * A0000 offset by PR0(A). fbcon and user space draw into a 300 KiB shadow
  * in system RAM (sys_* helpers); every drawing operation copies its
  * rectangle to video memory, bank by bank. mmap() clients get the shadow,
- * flushed at 10 Hz while the device is open.
+ * flushed at 10 Hz while the device is open. On the WD90C24A/A2 the BITBLT
+ * engine (stage 3) also does fillrect and copyarea (scrolling) in video
+ * memory, so those need no copy; it is self-tested at load and dropped on
+ * the first timeout.
  *
  * Fail-safe:
  *  - drives only a chip with the WD90C24 signature (force=1 also accepts
@@ -50,6 +53,9 @@ MODULE_PARM_DESC(fake, "TESTING ONLY: treat any VGA as a WD90C24 to exercise the
 static unsigned int trial;
 module_param(trial, uint, 0444);
 MODULE_PARM_DESC(trial, "Seconds until text mode is restored unless keep=1 is written (0 = off)");
+static bool accel = true;
+module_param(accel, bool, 0444);
+MODULE_PARM_DESC(accel, "Use the WD90C24A BITBLT engine for fills and scrolling (if its self-test passes)");
 static bool keep;
 module_param(keep, bool, 0644);
 MODULE_PARM_DESC(keep, "Write 1 during the trial period to keep the framebuffer");
@@ -62,6 +68,8 @@ struct wd_par {
 	u32 pseudo_palette[16];
 	spinlock_t lock;	/* bank register + window */
 	bool live;		/* hardware is in our mode */
+	bool accel;		/* BITBLT engine in use */
+	bool blt_pending;	/* a blit may still be running */
 	bool registered;
 	atomic_t users;
 	bool mmapped;
@@ -71,31 +79,95 @@ struct wd_par {
 
 static struct fb_info *wd_info;
 
+/* Called with par->lock held. Returns true if the engine is idle. */
+static bool wd_blt_idle(struct wd_par *par)
+{
+	if (!par->blt_pending)
+		return true;
+	par->blt_pending = false;
+	if (wd_blt_wait(&par->hw)) {
+		par->accel = false;
+		return false;
+	}
+	return true;
+}
+
 static void wd_damage(struct fb_info *info, u32 x, u32 y, u32 w, u32 h)
 {
 	struct wd_par *par = info->par;
 	unsigned long flags;
+	bool lost = false;
 	u32 r;
 
 	/* one row per lock hold: short interrupt-off windows on a 486 */
 	for (r = 0; r < h; r++) {
 		spin_lock_irqsave(&par->lock, flags);
-		if (par->live)
+		if (par->live) {
+			if (!wd_blt_idle(par))
+				lost = true;
 			wd_flush_rect(&par->hw, par->shadow, x, y + r, w, 1);
+		}
 		spin_unlock_irqrestore(&par->lock, flags);
 	}
+	if (lost) {
+		pr_warn("BITBLT engine timed out: acceleration off, redrawing\n");
+		wd_damage(info, 0, 0, WD_XRES, WD_YRES);
+	}
+}
+
+static bool wd_clip(u32 x, u32 y, u32 w, u32 h)
+{
+	return w && h && x < WD_XRES && y < WD_YRES &&
+	       w <= WD_XRES - x && h <= WD_YRES - y;
+}
+
+/* Start a blit; false if the CPU must copy the rectangle instead. */
+static bool wd_hw_op(struct fb_info *info, bool fill, u32 sx, u32 sy, u32 dx,
+		     u32 dy, u32 w, u32 h, u8 color, bool xor)
+{
+	struct wd_par *par = info->par;
+	unsigned long flags;
+	bool done = false, lost = false;
+	int ret;
+
+	spin_lock_irqsave(&par->lock, flags);
+	if (par->live && par->accel) {
+		ret = fill ? wd_blt_fill(&par->hw, dx, dy, w, h, color, xor) :
+			     wd_blt_copy(&par->hw, sx, sy, dx, dy, w, h);
+		if (ret) {
+			par->accel = false;
+			par->blt_pending = false;
+			lost = true;
+		} else {
+			par->blt_pending = true;
+			done = true;
+		}
+	}
+	spin_unlock_irqrestore(&par->lock, flags);
+	if (lost) {
+		pr_warn("BITBLT engine timed out: acceleration off, redrawing\n");
+		wd_damage(info, 0, 0, WD_XRES, WD_YRES);
+	}
+	return done;
 }
 
 static void wd_fillrect(struct fb_info *info, const struct fb_fillrect *r)
 {
 	sys_fillrect(info, r);
-	wd_damage(info, r->dx, r->dy, r->width, r->height);
+	if (!wd_clip(r->dx, r->dy, r->width, r->height) ||
+	    !wd_hw_op(info, true, 0, 0, r->dx, r->dy, r->width, r->height,
+		      r->color, r->rop == ROP_XOR))
+		wd_damage(info, r->dx, r->dy, r->width, r->height);
 }
 
 static void wd_copyarea(struct fb_info *info, const struct fb_copyarea *a)
 {
 	sys_copyarea(info, a);
-	wd_damage(info, a->dx, a->dy, a->width, a->height);
+	if (!wd_clip(a->sx, a->sy, a->width, a->height) ||
+	    !wd_clip(a->dx, a->dy, a->width, a->height) ||
+	    !wd_hw_op(info, false, a->sx, a->sy, a->dx, a->dy, a->width,
+		      a->height, 0, false))
+		wd_damage(info, a->dx, a->dy, a->width, a->height);
 }
 
 static void wd_imageblit(struct fb_info *info, const struct fb_image *img)
@@ -206,6 +278,7 @@ static void wd_restore_text(struct wd_par *par)
 
 	spin_lock_irqsave(&par->lock, flags);
 	par->live = false;
+	wd_blt_idle(par);	/* bounded; a stuck engine must not block restore */
 	spin_unlock_irqrestore(&par->lock, flags);
 	wd_restore_ext(&par->hw, &par->bios);
 	restore_vga(&par->vstate);
@@ -226,6 +299,11 @@ static int wd_go_live(struct fb_info *info)
 		wd_restore_text(par);
 		pr_warn("banking self-test failed: text mode restored\n");
 		return -ENODEV;
+	}
+	if (par->hw.ext_blocks && accel) {
+		par->accel = !wd_blt_selftest(&par->hw);
+		pr_info("BITBLT self-test %s\n", par->accel ? "passed: acceleration on" :
+			"failed: CPU drawing only");
 	}
 	par->live = true;
 	fb_set_cmap(&info->cmap, info);
@@ -310,6 +388,9 @@ static void wd_init_info(struct fb_info *info, struct wd_par *par)
 
 	info->fbops = &wd_ops;
 	info->flags = FBINFO_VIRTFB;
+	/* tells fbcon to scroll with copyarea; harmless if the self-test fails */
+	if (par->hw.ext_blocks && accel)
+		info->flags |= FBINFO_HWACCEL_COPYAREA | FBINFO_HWACCEL_FILLRECT;
 	info->screen_buffer = par->shadow;
 	info->screen_size = WD_FB_SIZE;
 	info->pseudo_palette = par->pseudo_palette;
@@ -400,8 +481,9 @@ static int __init wd90c24fb_init(void)
 		par->registered = false;
 		goto err_vga;
 	}
-	fb_info(info, "%s, 640x480x8 via PR0(A) banking, %u KiB shadow\n",
-		wd_chip_name(par->hw.chip), WD_FB_SIZE / 1024);
+	fb_info(info, "%s, 640x480x8 via PR0(A) banking, %u KiB shadow%s\n",
+		wd_chip_name(par->hw.chip), WD_FB_SIZE / 1024,
+		par->accel ? ", BITBLT" : "");
 	if (trial) {
 		pr_warn("trial: text mode returns in %u s unless: echo 1 > /sys/module/wd90c24fb/parameters/keep\n",
 			trial);

@@ -460,3 +460,121 @@ void wd_set_dac(u8 idx, u8 r, u8 g, u8 b)
 	wd_outb(g, 0x3c9);
 	wd_outb(b, 0x3c9);
 }
+
+/* ---- BITBLT (port of XFree86 wd90c31BitBlt and WAIT_BLIT) ---- */
+
+static void wd_blt_reg(u16 reg, u32 val)
+{
+	wd_outw(reg | (val & 0x0fff), WD_EXT_DATA);
+}
+
+int wd_blt_wait(struct wd_hw *hw)
+{
+	unsigned int n;
+
+	(void)hw;
+	wd_outw(WD_EXT_NOINC | WD_BLK_BLT, WD_EXT_INDEX);	/* CNTRL1 */
+	for (n = 0; n < WD_BLT_SPINS; n++)
+		if (!(wd_inw(WD_EXT_DATA) & BLT_ACT))
+			return 0;
+	return -1;
+}
+
+static int wd_blt_go(struct wd_hw *hw, u32 src, u32 dst, u32 pitch, u32 w,
+		     u32 h, u16 rop, u16 cntrl1, u8 color)
+{
+	if (!w || !h || w > 2048 || h > 2048 || pitch > 0x0fff)
+		return 0;
+	if (wd_blt_wait(hw))
+		return -1;
+	wd_blt_reg(BLT_SRC_LO, src & 0xfff);
+	wd_blt_reg(BLT_SRC_HI, src >> 12);
+	wd_blt_reg(BLT_DST_LO, dst & 0xfff);
+	wd_blt_reg(BLT_DST_HI, dst >> 12);
+	wd_blt_reg(BLT_PITCH, pitch);
+	wd_blt_reg(BLT_DIM_X, w);	/* pixels, 1..2048 */
+	wd_blt_reg(BLT_DIM_Y, h);
+	wd_blt_reg(BLT_MASK, 0xff);
+	wd_blt_reg(BLT_ROP, rop);
+	wd_blt_reg(BLT_CNTRL2, 0);
+	if (cntrl1 & BLT_SRC_FCOL)
+		wd_blt_reg(BLT_FGCOL, color);
+	wd_blt_reg(BLT_CNTRL1, BLT_ACT | BLT_PACKED | cntrl1);
+	return 0;
+}
+
+int wd_blt_fill_lin(struct wd_hw *hw, u32 dst, u32 pitch, u32 w, u32 h,
+		    u8 color, bool xor)
+{
+	return wd_blt_go(hw, dst, dst, pitch, w, h,
+			 xor ? BLT_ROP_XOR : BLT_ROP_SRC, BLT_SRC_FCOL, color);
+}
+
+int wd_blt_copy_lin(struct wd_hw *hw, u32 src, u32 dst, u32 pitch,
+		    u32 w, u32 h)
+{
+	/* Overlap: a destination after the source is copied from the end. */
+	if (dst > src)
+		return wd_blt_go(hw, src + (h - 1) * pitch + w - 1,
+				 dst + (h - 1) * pitch + w - 1, pitch, w, h,
+				 BLT_ROP_SRC, BLT_BACKWARD, 0);
+	return wd_blt_go(hw, src, dst, pitch, w, h, BLT_ROP_SRC, 0, 0);
+}
+
+int wd_blt_fill(struct wd_hw *hw, u32 x, u32 y, u32 w, u32 h, u8 color, bool xor)
+{
+	return wd_blt_fill_lin(hw, y * WD_PITCH + x, WD_PITCH, w, h, color, xor);
+}
+
+int wd_blt_copy(struct wd_hw *hw, u32 sx, u32 sy, u32 dx, u32 dy, u32 w, u32 h)
+{
+	return wd_blt_copy_lin(hw, sy * WD_PITCH + sx, dy * WD_PITCH + dx,
+			       WD_PITCH, w, h);
+}
+
+static int wd_check_lin(struct wd_hw *hw, u32 off, u32 n, u8 want)
+{
+	u32 i;
+
+	for (i = 0; i < n; i++) {
+		u32 a = off + i;
+
+		wd_set_bank(hw, a >> 12);
+		if (wd_win_readb(hw, a & 0xfff) != want)
+			return -1;
+	}
+	return 0;
+}
+
+int wd_blt_selftest(struct wd_hw *hw)
+{
+	/* 384 KiB: past the 300 KiB frame, inside 512 KiB parts */
+	const u32 a = 0x60000, b = 0x61000, pitch = WD_PITCH;
+	u32 r;
+	int ret = 0;
+
+	/* clear both areas (rows of 64 + 1 guard byte) with the CPU */
+	for (r = 0; r < 4; r++) {
+		u32 i;
+
+		for (i = 0; i <= 64; i++) {
+			wd_set_bank(hw, (a + r * pitch + i) >> 12);
+			wd_win_writeb(hw, (a + r * pitch + i) & 0xfff, 0x00);
+			wd_set_bank(hw, (b + r * pitch + i) >> 12);
+			wd_win_writeb(hw, (b + r * pitch + i) & 0xfff, 0x00);
+		}
+	}
+	if (wd_blt_fill_lin(hw, a, pitch, 64, 4, 0xa5, false) || wd_blt_wait(hw) ||
+	    wd_blt_copy_lin(hw, a, b, pitch, 64, 4) || wd_blt_wait(hw))
+		ret = -1;
+	for (r = 0; r < 4 && !ret; r++) {
+		if (wd_check_lin(hw, a + r * pitch, 64, 0xa5) ||
+		    wd_check_lin(hw, a + r * pitch + 64, 1, 0x00) ||
+		    wd_check_lin(hw, b + r * pitch, 64, 0xa5) ||
+		    wd_check_lin(hw, b + r * pitch + 64, 1, 0x00))
+			ret = -1;
+	}
+	hw->bank = -1;
+	wd_set_bank(hw, 0);
+	return ret;
+}

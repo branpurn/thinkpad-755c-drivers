@@ -169,4 +169,42 @@ void wd_flush_rect(struct wd_hw *hw, const u8 *shadow, unsigned int x,
 		   unsigned int y, unsigned int w, unsigned int h);
 void wd_set_dac(u8 idx, u8 r, u8 g, u8 b);	/* 6-bit components */
 
+/*
+ * BITBLT engine (stage 3; WD90C24A/A2 and C31, data sheet section 19).
+ * Registers are written through 0x23C2 with the index in bits 15:12; the
+ * block pointer at 0x23C0 must select block 1. Addresses are linear byte
+ * offsets into video memory in packed (256-colour) mode.
+ */
+#define BLT_CNTRL1	0x0000
+#define  BLT_ACT	0x0800	/* write: start; read: busy */
+#define  BLT_BACKWARD	0x0400	/* bottom-to-top, right-to-left */
+#define  BLT_PACKED	0x0100
+#define  BLT_SRC_FCOL	0x0008	/* source = foreground colour (fill) */
+#define BLT_CNTRL2	0x1000
+#define BLT_SRC_LO	0x2000
+#define BLT_SRC_HI	0x3000
+#define BLT_DST_LO	0x4000
+#define BLT_DST_HI	0x5000
+#define BLT_DIM_X	0x6000
+#define BLT_DIM_Y	0x7000
+#define BLT_PITCH	0x8000
+#define BLT_ROP		0x9000
+#define  BLT_ROP_SRC	0x0300
+#define  BLT_ROP_XOR	0x0600
+#define BLT_FGCOL	0xa000
+#define BLT_MASK	0xe000
+
+#define WD_BLT_SPINS	200000	/* ~0.2 s of ISA reads before giving up */
+
+/* All return 0, or -1 if the engine stayed busy (caller disables accel). */
+int wd_blt_wait(struct wd_hw *hw);
+int wd_blt_fill_lin(struct wd_hw *hw, u32 dst, u32 pitch, u32 w, u32 h,
+		    u8 color, bool xor);
+int wd_blt_copy_lin(struct wd_hw *hw, u32 src, u32 dst, u32 pitch,
+		    u32 w, u32 h);
+int wd_blt_fill(struct wd_hw *hw, u32 x, u32 y, u32 w, u32 h, u8 color, bool xor);
+int wd_blt_copy(struct wd_hw *hw, u32 sx, u32 sy, u32 dx, u32 dy, u32 w, u32 h);
+/* Fill + copy in off-screen memory, verified through the window. */
+int wd_blt_selftest(struct wd_hw *hw);
+
 #endif
