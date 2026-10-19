@@ -603,21 +603,28 @@ void wd_write_pr19(struct wd_hw *hw, u8 val)
 	wd_wrinx(hw->crtc, PR1B, lock);
 }
 
+/*
+ * Power-down is the power-up in reverse: PNLOFF (the panel's bias /
+ * backlight inverter enable) first, then the pins, then the panel display.
+ * PR57 bit 2 only drives PNLOFF while PR19 bit 4 (LCD enable) is set
+ * (vgadoc PARADISE.TXT), so it must be written before PR19 is: XFree86's
+ * order (PR19 first) left PNLOFF to the chip and, on the 755C, the CCFL lit.
+ */
 bool wd_panel_off(struct wd_hw *hw)
 {
 	u8 pr19 = wd_read_pr19(hw), lock;
 
 	if (!(pr19 & PR19_LCD))
 		return false;
-	wd_write_pr19(hw, pr19 & ~PR19_LCD);			/* panel display off */
-	lock = wd_rdinx(WD_GFX, PR5);
-	wd_wrinx(WD_GFX, PR5, (lock & 0xf8) | 0x05);
-	wd_modinx(WD_GFX, PR4, PR4_FP_TRISTATE, PR4_FP_TRISTATE);	/* pins off */
-	wd_wrinx(WD_GFX, PR5, lock);
 	lock = wd_rdinx(WD_SEQ, PR20);
 	wd_unlock_seq();
 	wd_modinx(WD_SEQ, PR57, PR57_PNLOFF, 0);		/* panel power off */
 	wd_wrinx(WD_SEQ, PR20, lock);
+	lock = wd_rdinx(WD_GFX, PR5);
+	wd_wrinx(WD_GFX, PR5, (lock & 0xf8) | 0x05);
+	wd_modinx(WD_GFX, PR4, PR4_FP_TRISTATE, PR4_FP_TRISTATE);	/* pins off */
+	wd_wrinx(WD_GFX, PR5, lock);
+	wd_write_pr19(hw, pr19 & ~PR19_LCD);			/* panel display off */
 	return true;
 }
 

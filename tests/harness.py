@@ -217,6 +217,21 @@ def main():
             g.run("clear > /dev/tty1; printf 'tc755: text console before wd90c24fb fake=2\\n' > /dev/tty1; sleep 1")
             o, rc = g.run(f"insmod {ko} fake=2 && cat /proc/fb", 60)
             live = rc == 0 and "WD90C24" in o
+            # fb_blank levels: 1 = black picture, 4 = panel (and backlight)
+            # off, 0 = everything back. QEMU's VGA ignores the SR01 screen-off
+            # bit and has no panel, so only the round trip is checked here:
+            # every level accepted, and the picture after 4 -> 0 is the one
+            # after 1 -> 0 (the panel/backlight itself: docs/HW-CHECKLIST.md).
+            g.run("printf 'tc755: wd90c24fb blank test\\n' > /dev/tty1; sleep 1")
+            lits = []
+            for lv in (1, 0, 4, 0):
+                ob, rcb = g.run(f"echo {lv} > /sys/class/graphics/fb0/blank; echo rc=$?; sleep 1")
+                lits.append((lv, "rc=0" in ob, shot(f"wd90c24fb-blank{lv}")[2]))
+            dm, _ = g.run("dmesg | grep -ciE 'timed out|BUG|Oops|WARNING'")
+            check("wd90c24fb fake=2 blank 1/0/4/0: every level accepted, same picture after each unblank, no driver errors",
+                  live and all(ok for _, ok, _ in lits) and abs(lits[1][2] - lits[3][2]) < 0.0005
+                  and lits[3][2] > 0.001 and dm.strip().endswith("0"),
+                  " ".join(f"{lv}:{'ok' if ok else 'err'}/{lit:.3f}" for lv, ok, lit in lits))
             o2, rc2 = g.run("apm -s", 120) if apm_ok else ("", 1)
             d, _ = g.run("dmesg | grep -E 'wd90c24fb: (suspend|resume)' | tail -2")
             check("wd90c24fb fake=2 + apm -s: text handed back on suspend, mode set redone on resume",

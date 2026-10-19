@@ -1,6 +1,14 @@
 # tc755 add-on: in-tree drivers for ThinkPad 755C hardware, all as modules.
 # Nothing in this file may be =y unless it is a pure bool sub-option of an
 # =m driver (it then lives inside that .ko and costs the core nothing).
+# One exception, APM_DISPLAY_BLANK below (a few hundred bytes of core).
+
+# --- APM display standby (CONFIG_APM=y is in tc32's base config): lets
+# wd90c24fb ask the 755C BIOS to switch the panel and its CCFL backlight
+# off on blank levels 2-4 (console_blank_hook, config/ksyms-keep.txt).
+# Side effect: the text console blanker (setterm -blank, off by default)
+# then also uses APM instead of only blanking the picture.
+CONFIG_APM_DISPLAY_BLANK=y
 
 # --- Video: fbdev core + vga16fb (640x480x4 planar; 755C video BIOS has no
 # VBE, so vesafb is not an option). fbcon is linked into fb.ko when =y here.

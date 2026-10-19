@@ -21,7 +21,7 @@ yet: see [docs/HW-CHECKLIST.md](docs/HW-CHECKLIST.md).
 | `snd-cs4231.tcz` | same with `snd-cs4231` (QEMU `cs4231a`, generic WSS cards) | 96 KiB |
 | `trackpoint.tcz` | `psmouse` (TrackPoint protocol) + `mousedev` + `evdev` | 20 KiB |
 | `pcmcia.tcz` | PC Card core + `i82365` (2x Ricoh RF5C266) + `pata_pcmcia` (CF) + `serial_cs` | 48 KiB |
-| `fb-wd90c24.tcz` | native `wd90c24fb`: 640x480, 256 colours, fbcon; falls back to vga16fb; 30 s trial until confirmed ([docs/WD90C24.md](docs/WD90C24.md)) | 52 KiB |
+| `fb-wd90c24.tcz` | native `wd90c24fb`: 640x480, 256 colours, fbcon; falls back to vga16fb; damage + BITBLT for tc32's Xfbdev ([docs/WD90C24.md](docs/WD90C24.md)) | 52 KiB |
 | `apm-tools.tcz` | static `apm`: AC/battery status, `-s` suspend, `-S` standby | 24 KiB |
 | `wd90c24-probe.tcz` | `wd90c24fb probe_only=1`: identifies the chip, memory and panel state in dmesg | 40 KiB |
 

@@ -7,11 +7,17 @@
  * The chip has no linear aperture on the 755C, only the 64 KiB window at
  * A0000 offset by PR0(A). fbcon and user space draw into a 300 KiB shadow
  * in system RAM (sys_* helpers); every drawing operation copies its
- * rectangle to video memory, bank by bank. mmap() clients get the shadow,
- * flushed at 10 Hz while the device is open. On the WD90C24A/A2 the BITBLT
+ * rectangle to video memory, bank by bank. On the WD90C24A/A2 the BITBLT
  * engine (stage 3) also does fillrect and copyarea (scrolling) in video
  * memory, so those need no copy; it is self-tested at load and dropped on
  * the first timeout.
+ *
+ * mmap() clients get the shadow. A client that says what it drew (the
+ * WDFB_IOC_OPS ioctl, wd90c24fb_ioctl.h; tc32's Xfbdev does) has only
+ * those rectangles copied, and its screen-to-screen copies and big fills
+ * done by the engine. Any other client gets the whole frame copied at
+ * 10 Hz while the device is open (also the fallback if the ioctl fails).
+ * stats= shows what reached video memory and how.
  *
  * Fail-safe:
  *  - drives only a chip with the WD90C24 signature (force=1 also accepts
@@ -25,9 +31,12 @@
  *  - after the mode set a banking self-test must pass, or the text mode is
  *    restored and the module returns -ENODEV (the .tcz then falls back to
  *    vga16fb);
- *  - blanking powers the panel down with XFree86's PNLOFF sequence (stage
- *    4); restore always brings the outputs back as the BIOS had them, with
- *    the 100 ms power-up steps.
+ *  - blank level 1 (FB_BLANK_NORMAL) only blacks the picture; levels 2-4
+ *    also power the panel down (PNLOFF, i.e. the backlight inverter, then
+ *    the panel signals, then the LCD interface) and, if the kernel has
+ *    CONFIG_APM_DISPLAY_BLANK, ask the BIOS for APM display standby;
+ *    unblank undoes all of it and redraws. Restore always brings the
+ *    outputs back as the BIOS had them, with the 100 ms power-up steps.
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/module.h>
@@ -44,8 +53,35 @@
 #include <linux/pm.h>
 #include <linux/mutex.h>
 #include <linux/kstrtox.h>
+#include <linux/uaccess.h>
+#include <linux/timekeeping.h>
 #include <video/vga.h>
 #include "wd90c24_hw.h"
+#include "wd90c24fb_ioctl.h"
+
+/*
+ * drivers/tty/vt/vt.c, set by the APM driver with CONFIG_APM_DISPLAY_BLANK.
+ * Weak: a kernel that does not export it (TRIM_UNUSED_KSYMS) still loads
+ * the module, which then blanks without the APM call.
+ */
+extern int (*console_blank_hook)(int) __weak;
+
+/*
+ * Only symbols the tc755x kernel exports already (its Module.symvers):
+ * this module can be updated without a new kernel.
+ */
+static u64 wd_now_ns(void)
+{
+	struct timespec64 t;
+
+	ktime_get_ts64(&t);
+	return timespec64_to_ns(&t);
+}
+
+static int (*wd_blank_hook(void))(int)
+{
+	return &console_blank_hook ? READ_ONCE(console_blank_hook) : NULL;
+}
 
 static bool enable = true;
 module_param(enable, bool, 0444);
@@ -58,7 +94,10 @@ module_param(force, bool, 0444);
 MODULE_PARM_DESC(force, "Also drive other WD90C2x/3x (e.g. C30/C31 on the 86Box bench)");
 static unsigned int fake;
 module_param(fake, uint, 0444);
-MODULE_PARM_DESC(fake, "TESTING ONLY: 1 = treat any VGA as a WD90C24 (fail-safe path); 2 = also skip the self-tests (QEMU suspend/resume test)");
+MODULE_PARM_DESC(fake, "TESTING ONLY: 1 = treat any VGA as a WD90C24 (fail-safe path); 2 = also skip the self-tests (QEMU suspend/resume test); 3 = also emulate the BITBLT engine on a RAM model of video memory (see verify); 4 = like 3 but the engine takes no CPU time and the model is not kept (timing: the real engine runs alongside the CPU)");
+static unsigned int fake_kbps;
+module_param(fake_kbps, uint, 0444);
+MODULE_PARM_DESC(fake_kbps, "TESTING ONLY, with fake=: model a video memory bus of this many KiB/s (CPU busy-waits per row copied)");
 static unsigned int trial;
 module_param(trial, uint, 0444);
 MODULE_PARM_DESC(trial, "Seconds until text mode is restored unless keep=1 is written (0 = off)");
@@ -71,6 +110,23 @@ MODULE_PARM_DESC(output, "auto (as the BIOS/Fn+F7 set it), lcd, crt or both (WD9
 static bool keep;
 module_param(keep, bool, 0644);
 MODULE_PARM_DESC(keep, "Write 1 during the trial period to keep the framebuffer");
+static bool xaccel = true;
+module_param(xaccel, bool, 0644);
+MODULE_PARM_DESC(xaccel, "Offer mmap clients (Xfbdev) the damage/BITBLT ioctls (0 = they get the 10 Hz full-frame flush)");
+static bool apm_blank = true;
+module_param(apm_blank, bool, 0644);
+MODULE_PARM_DESC(apm_blank, "Blank levels 2-4 (suspend/powerdown) also put the display in APM standby: the BIOS switches the backlight off (needs CONFIG_APM_DISPLAY_BLANK)");
+
+struct wd_stats {
+	u64 bytes;		/* copied from the shadow to video memory */
+	u64 rects;		/* ... in this many rectangles (rows of a rect: 1) */
+	u64 fills, copies;	/* BITBLT operations */
+	u64 ioctls;		/* WDFB_IOC_OPS calls */
+	u64 full;		/* whole-frame flushes (10 Hz mmap poll, redraws) */
+	u64 ns;			/* time spent copying to video memory */
+	u64 model_ns;		/* fake=3: CPU time of the emulated BITBLT */
+	u64 ioctl_ns;		/* time in WDFB_IOC_OPS (includes the above) */
+};
 
 struct wd_par {
 	struct wd_hw hw;
@@ -87,6 +143,10 @@ struct wd_par {
 	bool suspended;		/* text mode put back for an APM suspend */
 	atomic_t users;
 	bool mmapped;
+	bool client_ops;	/* an mmap client sends WDFB_IOC_OPS: no polling */
+	bool apm_blanked;	/* the display is in APM standby (blank) */
+	u8 *model;		/* fake=3: RAM model of video memory */
+	struct wd_stats st;
 	struct delayed_work mmap_work;
 	struct delayed_work trial_work;
 };
@@ -113,8 +173,13 @@ static void wd_damage(struct fb_info *info, u32 x, u32 y, u32 w, u32 h)
 	struct wd_par *par = info->par;
 	unsigned long flags;
 	bool lost = false;
-	u32 r;
+	u64 t0 = wd_now_ns();
+	u32 r, bus_ns = 0;
 
+	if (x >= WD_XRES || y >= WD_YRES || !w || !h)
+		return;
+	w = min(w, WD_XRES - x);
+	h = min(h, WD_YRES - y);
 	/* one row per lock hold: short interrupt-off windows on a 486 */
 	for (r = 0; r < h; r++) {
 		spin_lock_irqsave(&par->lock, flags);
@@ -122,9 +187,20 @@ static void wd_damage(struct fb_info *info, u32 x, u32 y, u32 w, u32 h)
 			if (!wd_blt_idle(par))
 				lost = true;
 			wd_flush_rect(&par->hw, par->shadow, x, y + r, w, 1);
+			if (fake && fake_kbps) {	/* QEMU maps A0000 as RAM */
+				bus_ns += div_u64((u64)w * 1000000000, fake_kbps * 1024U);
+				udelay(bus_ns / 1000);
+				bus_ns %= 1000;
+			}
+			if (par->model && fake == 3)
+				memcpy(par->model + (y + r) * WD_PITCH + x,
+				       par->shadow + (y + r) * WD_PITCH + x, w);
 		}
 		spin_unlock_irqrestore(&par->lock, flags);
 	}
+	par->st.bytes += w * h;
+	par->st.rects++;
+	par->st.ns += wd_now_ns() - t0;
 	if (lost) {
 		pr_warn("BITBLT engine timed out: acceleration off, redrawing\n");
 		wd_damage(info, 0, 0, WD_XRES, WD_YRES);
@@ -137,6 +213,45 @@ static bool wd_clip(u32 x, u32 y, u32 w, u32 h)
 	       w <= WD_XRES - x && h <= WD_YRES - y;
 }
 
+/* fake=3: the BITBLT engine's job, done on the RAM model of video memory */
+static void wd_model_op(struct wd_par *par, bool fill, u32 sx, u32 sy, u32 dx,
+			u32 dy, u32 w, u32 h, u8 color, bool xor)
+{
+	u32 r, i, c4 = color * 0x01010101u;
+	u8 *first = NULL;
+
+	/*
+	 * Kept cheap (rep movs where rows do not overlap; memmove/memset are
+	 * not exported by this kernel), since on real hardware the engine
+	 * works in parallel with the CPU: the less CPU the model takes, the
+	 * closer QEMU timings are to the 755C's.
+	 */
+	for (r = 0; r < h; r++) {
+		/* the engine copies backwards when the destination is later */
+		u32 row = !fill && dy * WD_PITCH + dx > sy * WD_PITCH + sx ? h - 1 - r : r;
+		u8 *d = par->model + (dy + row) * WD_PITCH + dx;
+		const u8 *src = par->model + (sy + row) * WD_PITCH + sx;
+
+		if (fill && !xor && first) {
+			memcpy(d, first, w);
+		} else if (fill) {
+			for (i = 0; i + 4 <= w; i += 4)
+				*(u32 *)(d + i) = xor ? *(u32 *)(d + i) ^ c4 : c4;
+			for (; i < w; i++)
+				d[i] = xor ? d[i] ^ color : color;
+			first = d;
+		} else if (d > src && d < src + w) {
+			for (i = w; i--; )
+				d[i] = src[i];
+		} else if (d < src && src < d + w) {
+			for (i = 0; i < w; i++)
+				d[i] = src[i];
+		} else {
+			memcpy(d, src, w);
+		}
+	}
+}
+
 /* Start a blit; false if the CPU must copy the rectangle instead. */
 static bool wd_hw_op(struct fb_info *info, bool fill, u32 sx, u32 sy, u32 dx,
 		     u32 dy, u32 w, u32 h, u8 color, bool xor)
@@ -147,7 +262,14 @@ static bool wd_hw_op(struct fb_info *info, bool fill, u32 sx, u32 sy, u32 dx,
 	int ret;
 
 	spin_lock_irqsave(&par->lock, flags);
-	if (par->live && par->accel) {
+	if (par->live && par->accel && par->model) {
+		u64 t = wd_now_ns();
+
+		if (fake == 3)
+			wd_model_op(par, fill, sx, sy, dx, dy, w, h, color, xor);
+		par->st.model_ns += wd_now_ns() - t;
+		done = true;
+	} else if (par->live && par->accel) {
 		ret = fill ? wd_blt_fill(&par->hw, dx, dy, w, h, color, xor) :
 			     wd_blt_copy(&par->hw, sx, sy, dx, dy, w, h);
 		if (ret) {
@@ -164,6 +286,10 @@ static bool wd_hw_op(struct fb_info *info, bool fill, u32 sx, u32 sy, u32 dx,
 		pr_warn("BITBLT engine timed out: acceleration off, redrawing\n");
 		wd_damage(info, 0, 0, WD_XRES, WD_YRES);
 	}
+	if (done && fill)
+		par->st.fills++;
+	else if (done)
+		par->st.copies++;
 	return done;
 }
 
@@ -214,7 +340,10 @@ static void wd_mmap_flush(struct work_struct *work)
 	if (!par->mmapped || !atomic_read(&par->users))
 		return;
 	wd_damage(wd_info, 0, 0, WD_XRES, WD_YRES);
-	schedule_delayed_work(&par->mmap_work, HZ / 10);
+	par->st.full++;
+	/* a client that reports its damage (WDFB_IOC_OPS) is not polled */
+	if (!par->client_ops)
+		schedule_delayed_work(&par->mmap_work, HZ / 10);
 }
 
 static int wd_mmap(struct fb_info *info, struct vm_area_struct *vma)
@@ -242,11 +371,112 @@ static int wd_release(struct fb_info *info, int user)
 {
 	struct wd_par *par = info->par;
 
-	if (user && atomic_dec_and_test(&par->users) && par->mmapped) {
-		par->mmapped = false;
-		wd_damage(info, 0, 0, WD_XRES, WD_YRES);
+	if (user && atomic_dec_and_test(&par->users)) {
+		par->client_ops = false;
+		if (par->mmapped) {
+			par->mmapped = false;
+			wd_damage(info, 0, 0, WD_XRES, WD_YRES);
+		}
 	}
 	return 0;
+}
+
+/*
+ * WDFB_IOC_OPS (wd90c24fb_ioctl.h): the client's damage, fills and copies,
+ * in order. Damage is copied to video memory right here, in the client's
+ * time slice, so a fast client cannot outrun the bus and nothing is
+ * polled. A COPY the engine cannot do (accel lost) means the frame is
+ * redrawn shortly, after the client has done its own copy in the shadow.
+ */
+static int wd_ops_ioctl(struct fb_info *info, const void __user *arg)
+{
+	struct wd_par *par = info->par;
+	const struct wdfb_op __user *uop;
+	struct wdfb_op op[16];
+	struct wdfb_ops req;
+	bool hw = false, redraw = false;
+	u32 i, k, n;
+	int ret = 0;
+
+	if (copy_from_user(&req, arg, sizeof(req)))
+		return -EFAULT;
+	if (req.n > WDFB_MAX_OPS || req.flags)
+		return -EINVAL;
+	uop = u64_to_user_ptr(req.ops);
+	par->client_ops = true;
+	par->st.ioctls++;
+	for (i = 0; i < req.n && !ret; i += n) {
+		n = min_t(u32, req.n - i, ARRAY_SIZE(op));
+		if (copy_from_user(op, uop + i, n * sizeof(*op))) {
+			ret = -EFAULT;
+			break;
+		}
+		for (k = 0; k < n && !ret; k++) {
+			const struct wdfb_op *o = &op[k];
+
+			if (!wd_clip(o->x, o->y, o->w, o->h)) {
+				ret = -EINVAL;
+				break;
+			}
+			switch (o->op) {
+			case WDFB_OP_DAMAGE:
+				wd_damage(info, o->x, o->y, o->w, o->h);
+				break;
+			case WDFB_OP_FILL:
+				hw = true;
+				if (!wd_hw_op(info, true, 0, 0, o->x, o->y, o->w,
+					      o->h, o->color, false))
+					wd_damage(info, o->x, o->y, o->w, o->h);
+				break;
+			case WDFB_OP_COPY:
+				if (!wd_clip(o->sx, o->sy, o->w, o->h)) {
+					ret = -EINVAL;
+					break;
+				}
+				hw = true;
+				if (!wd_hw_op(info, false, o->sx, o->sy, o->x,
+					      o->y, o->w, o->h, 0, false))
+					redraw = true;
+				break;
+			default:
+				ret = -EINVAL;
+			}
+		}
+	}
+	if (ret) {
+		/* a confused client: back to polling, so the screen never freezes */
+		par->client_ops = false;
+		redraw = true;
+	}
+	if (redraw)
+		schedule_delayed_work(&par->mmap_work, HZ / 25);
+	if (!ret && hw && !par->accel)
+		ret = WDFB_LOST;
+	return ret;
+}
+
+static int wd_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
+{
+	struct wd_par *par = info->par;
+	u32 caps;
+
+	if (!xaccel)
+		return -ENOTTY;
+	switch (cmd) {
+	case WDFB_IOC_CAPS:
+		caps = WDFB_CAP_DAMAGE;
+		if (par->accel)
+			caps |= WDFB_CAP_FILL | WDFB_CAP_COPY;
+		return put_user(caps, (u32 __user *)arg);
+	case WDFB_IOC_OPS: {
+		u64 t = wd_now_ns();
+		int ret = wd_ops_ioctl(info, (const void __user *)arg);
+
+		par->st.ioctl_ns += wd_now_ns() - t;
+		return ret;
+	}
+	}
+	return -ENOTTY;
 }
 
 static int wd_setcolreg(unsigned int regno, unsigned int red, unsigned int green,
@@ -290,29 +520,82 @@ static bool wd_live_panel_off(struct wd_par *par)
 	return off;
 }
 
+/*
+ * APM display standby around a blank: the 755C BIOS, like Windows 98's
+ * power management through it, switches the CCFL backlight off. Only the
+ * APM driver can make the BIOS call; with CONFIG_APM_DISPLAY_BLANK it
+ * offers it as console_blank_hook (the VT blanker calls the same hook).
+ * Returns true if the display was put in standby.
+ */
+static bool wd_apm_standby(struct wd_par *par)
+{
+	int (*hook)(int) = wd_blank_hook();
+
+	if (!apm_blank || !hook || par->apm_blanked)
+		return false;
+	par->apm_blanked = hook(1) > 0;
+	if (!par->apm_blanked)
+		pr_info_once("blank: APM display standby refused by the BIOS\n");
+	return par->apm_blanked;
+}
+
+/* Back from APM standby: the BIOS may have touched the chip, so the bank
+ * cache, the DAC and the picture are all done again. */
+static void wd_apm_resume(struct fb_info *info)
+{
+	struct wd_par *par = info->par;
+	int (*hook)(int) = wd_blank_hook();
+	unsigned long flags;
+
+	if (!par->apm_blanked)
+		return;
+	par->apm_blanked = false;
+	if (hook)
+		hook(0);
+	spin_lock_irqsave(&par->lock, flags);
+	par->hw.bank = -1;
+	spin_unlock_irqrestore(&par->lock, flags);
+	fb_set_cmap(&info->cmap, info);
+	wd_damage(info, 0, 0, WD_XRES, WD_YRES);
+}
+
+/*
+ * fb_blank levels (stage 4 + backlight):
+ *   UNBLANK          picture on, panel powered, backlight on
+ *   NORMAL           black picture (SR01 screen off); panel and backlight on
+ *   VSYNC_SUSPEND,
+ *   HSYNC_SUSPEND,
+ *   POWERDOWN        black picture, panel off (PNLOFF, pins, PR19), and the
+ *                    display in APM standby, which turns the backlight off
+ * Any level can follow any other; unblank powers everything back up in
+ * order (APM first, then the panel with its 100 ms steps, then the
+ * picture). Caller holds the console lock (fb_blank); this may sleep.
+ */
 static int wd_blank(int blank, struct fb_info *info)
 {
 	struct wd_par *par = info->par;
+	bool power_down = blank > FB_BLANK_NORMAL;
 	unsigned long flags;
 
 	if (!par->live)
 		return 0;
-	if (blank == FB_BLANK_UNBLANK) {
+	if (!power_down) {
+		wd_apm_resume(info);
 		if (par->panel_off) {
 			wd_live_panel_on(par);
 			par->panel_off = false;
 		}
 		spin_lock_irqsave(&par->lock, flags);
-		wd_screen_on(&par->hw, true);
+		wd_screen_on(&par->hw, blank == FB_BLANK_UNBLANK);
 		spin_unlock_irqrestore(&par->lock, flags);
 		return 0;
 	}
 	spin_lock_irqsave(&par->lock, flags);
 	wd_screen_on(&par->hw, false);
 	spin_unlock_irqrestore(&par->lock, flags);
-	/* deeper levels: panel off too (XFree86 PVGA1lcd24power) */
-	if (blank != FB_BLANK_NORMAL && par->hw.chip == WD_C24)
+	if (par->hw.chip == WD_C24)
 		par->panel_off |= wd_live_panel_off(par);
+	wd_apm_standby(par);
 	return 0;
 }
 
@@ -357,6 +640,7 @@ static const struct fb_ops wd_ops = {
 	.fb_fillrect	= wd_fillrect,
 	.fb_copyarea	= wd_copyarea,
 	.fb_imageblit	= wd_imageblit,
+	.fb_ioctl	= wd_ioctl,
 };
 
 /* Text mode back, in PVGA1Restore order. Caller holds the console lock. */
@@ -374,6 +658,13 @@ static void wd_restore_text(struct wd_par *par)
 	wd_screen_on(&par->hw, true);	/* never leave the panel blank */
 	wd_restore_panel(&par->hw, &par->bios);	/* outputs + panel power */
 	par->panel_off = false;
+	if (par->apm_blanked) {		/* out of APM display standby too */
+		int (*hook)(int) = wd_blank_hook();
+
+		par->apm_blanked = false;
+		if (hook)
+			hook(0);
+	}
 }
 
 /* Mode set + self-test. Caller holds the console lock. */
@@ -392,7 +683,11 @@ static int wd_go_live(struct fb_info *info)
 		pr_warn("banking self-test failed: text mode restored\n");
 		return -ENODEV;
 	}
-	if (par->hw.ext_blocks && accel) {
+	if (par->model) {
+		par->accel = accel;
+		pr_warn("fake=%u: BITBLT emulated%s\n", fake, fake == 3 ?
+			" on a RAM model of video memory" : ", taking no time (timing only)");
+	} else if (par->hw.ext_blocks && accel) {
 		par->accel = !wd_blt_selftest(&par->hw);
 		pr_info("BITBLT self-test %s\n", par->accel ? "passed: acceleration on" :
 			"failed: CPU drawing only");
@@ -401,6 +696,57 @@ static int wd_go_live(struct fb_info *info)
 	fb_set_cmap(&info->cmap, info);
 	wd_damage(info, 0, 0, WD_XRES, WD_YRES);
 	return 0;
+}
+
+/* /sys/module/wd90c24fb/parameters/stats: what reached video memory, and how */
+static int wd_stats_get(char *buf, const struct kernel_param *kp)
+{
+	const struct wd_par *par;
+	const struct wd_stats *st;
+
+	if (!wd_info)
+		return scnprintf(buf, PAGE_SIZE, "no framebuffer\n");
+	par = wd_info->par;
+	st = &par->st;
+	return scnprintf(buf, PAGE_SIZE,
+			 "bytes=%llu rects=%llu fills=%llu copies=%llu ioctls=%llu full=%llu flush_us=%llu model_us=%llu ioctl_us=%llu accel=%d client=%d\n",
+			 st->bytes, st->rects, st->fills, st->copies, st->ioctls,
+			 st->full, div_u64(st->ns, 1000), div_u64(st->model_ns, 1000),
+			 div_u64(st->ioctl_ns, 1000),
+			 par->accel, par->client_ops);
+}
+static const struct kernel_param_ops wd_stats_ops = { .get = wd_stats_get };
+module_param_cb(stats, &wd_stats_ops, NULL, 0444);
+MODULE_PARM_DESC(stats, "Read: bytes/rectangles copied to video memory, BITBLT fills/copies, time spent copying");
+
+/* fake=3 only: bytes where the video memory model differs from the frame */
+static int wd_verify_get(char *buf, const struct kernel_param *kp)
+{
+	struct wd_par *par = wd_info ? wd_info->par : NULL;
+	unsigned long flags;
+	u32 i, bad = 0, first = 0;
+
+	if (!par || !par->model || fake != 3)
+		return scnprintf(buf, PAGE_SIZE, "n/a (fake=3 only)\n");
+	spin_lock_irqsave(&par->lock, flags);
+	wd_blt_idle(par);
+	spin_unlock_irqrestore(&par->lock, flags);
+	for (i = 0; i < WD_FB_SIZE; i++)
+		if (par->model[i] != par->shadow[i] && !bad++)
+			first = i;
+	return scnprintf(buf, PAGE_SIZE, "%u differing bytes (first at %u,%u)\n",
+			 bad, first % WD_PITCH, first / WD_PITCH);
+}
+static const struct kernel_param_ops wd_verify_ops = { .get = wd_verify_get };
+module_param_cb(verify, &wd_verify_ops, NULL, 0444);
+MODULE_PARM_DESC(verify, "TESTING ONLY (fake=3): bytes where the video memory model differs from the frame");
+
+static void wd_unregister(struct fb_info *info)
+{
+	struct wd_par *par = info->par;
+
+	unregister_framebuffer(info);
+	par->registered = false;
 }
 
 static void wd_stop(struct fb_info *info)
@@ -413,8 +759,7 @@ static void wd_stop(struct fb_info *info)
 		wd_restore_text(par);
 		console_unlock();
 		/* fbcon hands the consoles back to vgacon, which redraws */
-		unregister_framebuffer(info);
-		par->registered = false;
+		wd_unregister(info);
 	}
 	mutex_unlock(&wd_stop_lock);
 }
@@ -480,8 +825,7 @@ static void wd_resume_failed(struct work_struct *work)
 	mutex_lock(&wd_stop_lock);
 	if (par->registered) {
 		/* go_live already restored text mode */
-		unregister_framebuffer(info);
-		par->registered = false;
+		wd_unregister(info);
 	}
 	mutex_unlock(&wd_stop_lock);
 }
@@ -599,7 +943,7 @@ static void wd_init_info(struct fb_info *info, struct wd_par *par)
 	info->fbops = &wd_ops;
 	info->flags = FBINFO_VIRTFB;
 	/* tells fbcon to scroll with copyarea; harmless if the self-test fails */
-	if (par->hw.ext_blocks && accel)
+	if ((par->hw.ext_blocks || par->model) && accel)
 		info->flags |= FBINFO_HWACCEL_COPYAREA | FBINFO_HWACCEL_FILLRECT;
 	info->screen_buffer = par->shadow;
 	info->screen_size = WD_FB_SIZE;
@@ -654,6 +998,11 @@ static int __init wd90c24fb_init(void)
 	par->shadow = vmalloc_user(PAGE_ALIGN(WD_FB_SIZE));
 	if (!par->shadow)
 		goto err_info;
+	if (fake >= 3) {
+		par->model = vmalloc_user(WD_FB_SIZE);	/* zeroed */
+		if (!par->model)
+			goto err_shadow;
+	}
 	par->hw.win = (void __force *)ioremap(0xa0000, WD_WIN_SIZE);
 	if (!par->hw.win)
 		goto err_shadow;
@@ -721,6 +1070,7 @@ err_cmap:
 err_win:
 	iounmap((void __iomem __force *)par->hw.win);
 err_shadow:
+	vfree(par->model);
 	vfree(par->shadow);
 err_info:
 	framebuffer_release(info);
@@ -746,6 +1096,7 @@ static void __exit wd90c24fb_exit(void)
 		wd_stop(info);
 	fb_dealloc_cmap(&info->cmap);
 	iounmap((void __iomem __force *)par->hw.win);
+	vfree(par->model);
 	vfree(par->shadow);
 	framebuffer_release(info);
 }

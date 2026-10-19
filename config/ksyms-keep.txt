@@ -3,8 +3,10 @@
 # automatically. Regenerate with: make ksyms-keep  (scans modules/*/*.ko)
 cancel_delayed_work_sync
 cancel_work_sync
+console_blank_hook
 console_lock
 console_unlock
+_copy_from_user
 delayed_work_timer_fn
 fb_alloc_cmap
 fb_dealloc_cmap
@@ -15,8 +17,12 @@ framebuffer_alloc
 framebuffer_release
 ioremap
 iounmap
+kstrtobool
+ktime_get_ts64
 memcpy_toio
 msleep
+mutex_lock
+mutex_unlock
 param_ops_bool
 param_ops_charp
 param_ops_int
@@ -26,12 +32,14 @@ platform_device_unregister
 __platform_driver_register
 platform_driver_unregister
 _printk
+__put_user_4
 queue_delayed_work_on
 queue_work_on
 register_framebuffer
 remap_vmalloc_range
 restore_vga
 save_vga
+scnprintf
 screen_info
 sized_strscpy
 strcmp
@@ -40,6 +48,7 @@ sys_fillrect
 sys_imageblit
 system_percpu_wq
 timer_init_key
+__udelay
 unregister_framebuffer
 vfree
 vmalloc_user_noprof
