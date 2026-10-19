@@ -170,7 +170,9 @@ On the framebuffer console, no X running:
     echo 3 > $P/cursor_test   # tip on the bottom-right pixel (arrow mostly off-screen)
     echo 0 > $P/cursor_test   # gone
 
-If the arrow is shifted, set `hwc_xoff`/`hwc_yoff` by the error and repeat.
+Result on the 755C (round 3): registers exactly as above, centre and
+top-left pixel-exact. If the arrow is shifted on another unit, set
+`hwc_xoff`/`hwc_yoff` by the error and repeat.
 Garbage instead of an arrow, or nothing: report the `cat` output and boot
 with `wd90c24fb.hwcursor=0`. Then `startx`: /tmp/Xfbdev.log says "wd90c24fb: hardware
 cursor" and the X pointer moves without trails; `stats` shows `cursor=`
@@ -183,7 +185,9 @@ rising. `TC32X_SOFTCURSOR=1 startx` gives the old software cursor.
     echo 1 > $P/cexp_test; cat $P/cexp_test   # re-run any time
     grep -o "cexp=[^ ]* cexp_px=[^ ]* cexp_words=[^ ]* cexp_var=[^ ]*" $P/stats
 
-Expected: at least one `PASS` line, "colour expansion on: var N" in dmesg,
+Result on the 755C (round 3): only var 0 passes, est. 1.0x, so it stays
+off with cexp=1 (`cexp_var` now defaults to 0; `echo 1 > cexp_test`
+still probes all twelve). Expected in general: at least one `PASS` line, "colour expansion on: var N" in dmesg,
 `cexp_var=N` (not -1) and `cexp=` rising while rxvt prints text. If dmesg
 says "not faster", `wd90c24fb.cexp=2` forces it on for a comparison. Text
 with wrong pixels: boot with `wd90c24fb.cexp=0` and send the report.
@@ -224,3 +228,15 @@ with wrong pixels: boot with `wd90c24fb.cexp=0` and send the report.
 - Only one mode: 640x480x8. No hardware cursor, no 16 bpp.
 - Fn+F7 while live is not tracked; restore uses the load-time PR19.
 - The CRT is driven at the panel's 640x480 timing; no separate CRT modes.
+
+## Round-3 results and open issues (755C, driver d8c5bda)
+
+- Memory: kernel reports 32732 kB; ~21-22 MB available under X (jwm,
+  rxvt, Xaw apps).
+- Blanking: no level cuts the backlight on this unit (see WD90C24.md);
+  Fn+F3 does. Parked (no battery installed).
+- `poweroff` hangs at "reboot: Power down" (APM BIOS 1.0, flags 0x03).
+  Disks are synced and stopped first, so a manual power-off is safe.
+  Open follow-up.
+- No CMOS battery: keep the machine warm and avoid cold boots during a
+  session.

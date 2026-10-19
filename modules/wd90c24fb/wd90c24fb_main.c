@@ -124,9 +124,9 @@ MODULE_PARM_DESC(hwc_yoff, "Hardware cursor Y calibration in pixels");
 static int cexp = 1;
 module_param(cexp, int, 0444);
 MODULE_PARM_DESC(cexp, "BITBLT colour expansion for two-colour damage (text): 0 off, 1 (default) on if the self-test passes and it measures faster, 2 on if the self-test passes");
-static int cexp_var = -1;
+static int cexp_var;
 module_param(cexp_var, int, 0444);
-MODULE_PARM_DESC(cexp_var, "Colour expansion word format 0-11 (see cexp_test), -1 = probe them all");
+MODULE_PARM_DESC(cexp_var, "Colour expansion word format 0-11 (default 0: the one the 755C's WD90C24A takes; see cexp_test), -1 = probe them all");
 static unsigned int fake_outw_ns = 500;
 module_param(fake_outw_ns, uint, 0644);
 MODULE_PARM_DESC(fake_outw_ns, "TESTING ONLY, with fake_kbps: modelled cost of one 16-bit port write");
@@ -1118,21 +1118,27 @@ static int wd_cursor_test_set(const char *val, const struct kernel_param *kp)
 	par = wd_info->par;
 	if (!hwcursor || !par->hw.ext_blocks || !par->live)
 		return -ENODEV;
-	/* 12x19 arrow: mask = filled arrow, image = its interior (white) */
-	for (r = 0; r < 32; r++) {
-		u32 m = 0, i = 0;
-		unsigned int w = r < 12 ? r + 1 : r < 19 ? 12 - (r - 12) : 0;
+	/* the classic 12x19 arrow: B = black outline, W = white, tip = hot spot */
+	static const char *const arrow[19] = {
+		"B", "BB", "BWB", "BWWB", "BWWWB", "BWWWWB", "BWWWWWB",
+		"BWWWWWWB", "BWWWWWWWB", "BWWWWWWWWB", "BWWWWWWWWWB",
+		"BWWWWWWBBBBB", "BWWWBWWB", "BWWB BWWB", "BWB  BWWB",
+		"BB    BWWB", "B     BWWB", "       BWWB", "        BB",
+	};
 
-		if (w)
-			m = ~0u << (32 - w);
-		if (w > 2)
-			i = (~0u << (32 - (w - 1))) & ~0x80000000u;
-		if (r == 0 || r >= 18)
-			i = 0;
-		img[r * 4] = i >> 24; img[r * 4 + 1] = i >> 16;
-		img[r * 4 + 2] = i >> 8; img[r * 4 + 3] = i;
-		msk[r * 4] = m >> 24; msk[r * 4 + 1] = m >> 16;
-		msk[r * 4 + 2] = m >> 8; msk[r * 4 + 3] = m;
+	memset(img, 0, sizeof(img));
+	memset(msk, 0, sizeof(msk));
+	for (r = 0; r < 19; r++) {
+		const char *p = arrow[r];
+		unsigned int c;
+
+		for (c = 0; p[c]; c++) {
+			if (p[c] == ' ')
+				continue;
+			msk[r * 4 + c / 8] |= 0x80 >> (c % 8);
+			if (p[c] == 'W')
+				img[r * 4 + c / 8] |= 0x80 >> (c % 8);
+		}
 	}
 	spin_lock_irqsave(&par->lock, flags);
 	if (n) {
