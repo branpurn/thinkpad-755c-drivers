@@ -10,6 +10,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#endif
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
@@ -36,6 +40,10 @@ struct mock {
 	u16 ext_index, cursor;
 	u16 curs[16];		/* cursor block 2 registers, by index */
 	u16 blt[16];
+	int cexp_var;			/* host mono word format the mock chip takes */
+	bool hm_on;			/* host mono expansion waiting for data */
+	u32 hm_r, hm_x, hm_words;
+	unsigned int hm_stray;		/* port writes with no expansion running */
 	u8 vram[1 << 20];
 	u8 attr[32], attr_i, attr_ff;
 	u8 dac[256][3], dac_i, dac_c;

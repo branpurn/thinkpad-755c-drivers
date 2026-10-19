@@ -113,14 +113,23 @@ MODULE_PARM_DESC(keep, "Write 1 during the trial period to keep the framebuffer"
 static bool xaccel = true;
 module_param(xaccel, bool, 0644);
 MODULE_PARM_DESC(xaccel, "Offer mmap clients (Xfbdev) the damage/BITBLT ioctls (0 = they get the 10 Hz full-frame flush)");
-static bool hwcursor;
+static bool hwcursor = true;
 module_param(hwcursor, bool, 0644);
-MODULE_PARM_DESC(hwcursor, "Offer Xfbdev the WD90C24 hardware cursor (default 0: X draws it in software)");
+MODULE_PARM_DESC(hwcursor, "Offer Xfbdev the WD90C24 hardware cursor (default 1; 0: X draws it in software)");
 static int hwc_xoff, hwc_yoff;
 module_param(hwc_xoff, int, 0644);
 MODULE_PARM_DESC(hwc_xoff, "Hardware cursor X calibration in pixels (if the chip shows it off by some pixels)");
 module_param(hwc_yoff, int, 0644);
 MODULE_PARM_DESC(hwc_yoff, "Hardware cursor Y calibration in pixels");
+static int cexp = 1;
+module_param(cexp, int, 0444);
+MODULE_PARM_DESC(cexp, "BITBLT colour expansion for two-colour damage (text): 0 off, 1 (default) on if the self-test passes and it measures faster, 2 on if the self-test passes");
+static int cexp_var = -1;
+module_param(cexp_var, int, 0444);
+MODULE_PARM_DESC(cexp_var, "Colour expansion word format 0-11 (see cexp_test), -1 = probe them all");
+static unsigned int fake_outw_ns = 500;
+module_param(fake_outw_ns, uint, 0644);
+MODULE_PARM_DESC(fake_outw_ns, "TESTING ONLY, with fake_kbps: modelled cost of one 16-bit port write");
 static bool apm_blank = true;
 module_param(apm_blank, bool, 0644);
 MODULE_PARM_DESC(apm_blank, "Blank levels 2-4 (suspend/powerdown) also put the display in APM standby: the BIOS switches the backlight off (needs CONFIG_APM_DISPLAY_BLANK)");
@@ -135,6 +144,7 @@ struct wd_stats {
 	u64 model_ns;		/* fake=3: CPU time of the emulated BITBLT */
 	u64 ioctl_ns;		/* time in WDFB_IOC_OPS (includes the above) */
 	u64 cursor;		/* WDFB_IOC_CURSOR calls */
+	u64 cexp, cexp_px, cexp_words;	/* colour-expanded bands, pixels, port words */
 };
 
 /* Off-screen cursor pattern: above the 300 KiB frame, below the BITBLT
@@ -169,6 +179,7 @@ struct wd_par {
 	u8 *model;		/* fake=3: RAM model of video memory */
 	struct wd_stats st;
 	struct wd_cur cur;
+	int cexp_v;		/* colour expansion variant in use, -1 = off */
 	struct delayed_work mmap_work;
 	struct delayed_work trial_work;
 };
@@ -192,6 +203,86 @@ static bool wd_blt_idle(struct wd_par *par)
 	return true;
 }
 
+/*
+ * Colour expansion: rows of a damaged rectangle that hold at most two
+ * colours (text, stipples, glyph runs) go to video memory as one BITBLT
+ * fed one bit per pixel through the host port, instead of a byte per
+ * pixel over the memory window. Returns the number of rows done (0: the
+ * first row has more than two colours, copy it as usual).
+ */
+#define WD_CEXP_MIN_W	16	/* narrower: the setup costs more than it saves */
+#define WD_CEXP_WORDS	1024	/* port words per lock hold */
+
+static int wd_row_colours(const u8 *p, u32 w, u8 c[2], int n)
+{
+	u32 i;
+
+	for (i = 0; i < w; i++) {
+		if ((n > 0 && p[i] == c[0]) || (n > 1 && p[i] == c[1]))
+			continue;
+		if (n == 2)
+			return -1;
+		c[n++] = p[i];
+	}
+	return n;
+}
+
+static u32 wd_damage_cexp(struct wd_par *par, u32 x, u32 y, u32 w, u32 h,
+			  bool *lost)
+{
+	const u8 *row = par->shadow + y * WD_PITCH + x;
+	u32 per = wd_cexp_words(w, par->cexp_v), n = 0, r, bus_ns;
+	unsigned long flags;
+	u8 c[2];
+	int nc = 0;
+
+	while (n < h && (n + 1) * per <= WD_CEXP_WORDS) {
+		int k = wd_row_colours(row + n * WD_PITCH, w, c, nc);
+
+		if (k < 0)
+			break;
+		nc = k;
+		n++;
+	}
+	if (!n)
+		return 0;
+	if (nc < 2)
+		c[1] = c[0];
+	spin_lock_irqsave(&par->lock, flags);
+	if (!par->live) {
+		spin_unlock_irqrestore(&par->lock, flags);
+		return n;
+	}
+	if (!wd_blt_idle(par))
+		*lost = true;
+	if (par->model) {
+		/* QEMU: no engine; draw it plainly, charge the port words */
+		wd_flush_rect(&par->hw, par->shadow, x, y, w, n);
+		if (fake == 3)
+			for (r = 0; r < n; r++)
+				memcpy(par->model + (y + r) * WD_PITCH + x,
+				       row + r * WD_PITCH, w);
+		if (fake_kbps) {
+			bus_ns = n * per * fake_outw_ns;
+			udelay(bus_ns / 1000);
+		}
+	} else if (par->accel &&
+		   !wd_cexp_start(&par->hw, y * WD_PITCH + x, WD_PITCH, w, n,
+				  c[0], c[1], false)) {
+		for (r = 0; r < n; r++)
+			wd_cexp_row(&par->hw, row + r * WD_PITCH, w, c[0],
+				    par->cexp_v, false);
+		par->blt_pending = true;
+	} else {
+		wd_flush_rect(&par->hw, par->shadow, x, y, w, n);
+	}
+	par->st.cexp++;
+	par->st.cexp_px += w * n;
+	par->st.cexp_words += n * per;
+	spin_unlock_irqrestore(&par->lock, flags);
+	return n;
+}
+
 static void wd_damage(struct fb_info *info, u32 x, u32 y, u32 w, u32 h)
 {
 	struct wd_par *par = info->par;
@@ -206,6 +297,14 @@ static void wd_damage(struct fb_info *info, u32 x, u32 y, u32 w, u32 h)
 	h = min(h, WD_YRES - y);
 	/* one row per lock hold: short interrupt-off windows on a 486 */
 	for (r = 0; r < h; r++) {
+		if (par->cexp_v >= 0 && w >= WD_CEXP_MIN_W) {
+			u32 n = wd_damage_cexp(par, x, y + r, w, h - r, &lost);
+
+			if (n) {
+				r += n - 1;
+				continue;
+			}
+		}
 		spin_lock_irqsave(&par->lock, flags);
 		if (par->live) {
 			if (!wd_blt_idle(par))
@@ -763,6 +862,104 @@ static void wd_cur_off(struct wd_par *par)
 	spin_unlock_irqrestore(&par->lock, flags);
 }
 
+/*
+ * Colour expansion self-test: every word format (or just cexp_var) is
+ * tried off screen at 0x60000 and compared with what the CPU would draw;
+ * then port writes and memory-window writes are timed. The report goes
+ * to dmesg and to /sys/module/wd90c24fb/parameters/cexp_test.
+ */
+static char wd_cexp_report[1024];
+
+static void wd_cexp_time(struct wd_par *par, u32 *outw_ns10, u32 *byte_ns10)
+{
+	static u8 buf[2048];
+	unsigned long flags;
+	u64 t;
+	int i;
+
+	spin_lock_irqsave(&par->lock, flags);
+	wd_blt_idle(par);
+	t = wd_now_ns();
+	for (i = 0; i < 1000; i++)	/* harmless: re-select block 1 */
+		wd_outw(WD_EXT_NOINC | WD_BLK_BLT, WD_EXT_INDEX);
+	*outw_ns10 = div_u64((wd_now_ns() - t) * 10, 1000);
+	memset(buf, 0, sizeof(buf));
+	wd_set_bank(&par->hw, 0x60);	/* off screen */
+	t = wd_now_ns();
+	for (i = 0; i < 2; i++)
+		wd_win_write(&par->hw, 0, buf, sizeof(buf));
+	*byte_ns10 = div_u64((wd_now_ns() - t) * 10, 2 * sizeof(buf));
+	par->hw.bank = -1;
+	spin_unlock_irqrestore(&par->lock, flags);
+}
+
+/* Returns the passing variant with the most pixels per word, or -1. */
+static int wd_cexp_selftest(struct wd_par *par, int only, u32 *speedup10)
+{
+	char why[96];
+	int v, len = 0, best = -1;
+	u32 on, bn;
+	unsigned long flags;
+
+	for (v = WD_CEXP_VARIANTS - 1; v >= 0; v--) {
+		int bad;
+
+		if (only >= 0 && v != only)
+			continue;
+		spin_lock_irqsave(&par->lock, flags);
+		wd_blt_idle(par);
+		bad = wd_cexp_probe(&par->hw, v, why, sizeof(why));
+		spin_unlock_irqrestore(&par->lock, flags);
+		len += scnprintf(wd_cexp_report + len, sizeof(wd_cexp_report) - len,
+				 "var %2d (%2u px/word, %s first, %s rows): %s%s%s\n",
+				 v, wd_cexp_ppw(v), v & 2 ? "lsb" : "msb",
+				 v & 1 ? "dword" : "word",
+				 bad < 0 ? "HUNG" : bad ? "FAIL " : "PASS",
+				 bad > 0 ? why : "", "");
+		if (bad < 0) {	/* engine still busy: no more probing */
+			par->accel = false;
+			break;
+		}
+		if (!bad && best < 0)
+			best = v;
+	}
+	wd_cexp_time(par, &on, &bn);
+	*speedup10 = best >= 0 && on ? wd_cexp_ppw(best) * bn * 10 / on : 0;
+	len += scnprintf(wd_cexp_report + len, sizeof(wd_cexp_report) - len,
+			 "port write %u.%u us, memory byte %u.%u us; best var %d, est. speed-up %u.%ux\n",
+			 on / 10000, (on / 1000) % 10, bn / 10000, (bn / 1000) % 10,
+			 best, *speedup10 / 10, *speedup10 % 10);
+	if (!par->accel)
+		scnprintf(wd_cexp_report + len, sizeof(wd_cexp_report) - len,
+			  "BITBLT engine stuck: acceleration off until reload\n");
+	return best;
+}
+
+static void wd_cexp_setup(struct wd_par *par)
+{
+	u32 sp;
+	int v;
+
+	par->cexp_v = -1;
+	if (!cexp || !par->accel)
+		return;
+	if (par->model) {
+		par->cexp_v = cexp_var >= 0 && cexp_var < WD_CEXP_VARIANTS ? cexp_var : 0;
+		pr_warn("fake=%u: colour expansion emulated (var %d)\n", fake, par->cexp_v);
+		return;
+	}
+	v = wd_cexp_selftest(par, cexp_var, &sp);
+	if (v < 0)
+		pr_info("colour expansion: self-test failed, CPU copies (cat parameters/cexp_test)\n");
+	else if (cexp == 1 && sp < 11)
+		pr_info("colour expansion: var %d works but is not faster (%u.%ux), off\n",
+			v, sp / 10, sp % 10);
+	else
+		par->cexp_v = v;
+	if (par->cexp_v >= 0)
+		pr_info("colour expansion on: var %d, est. %u.%ux\n", v, sp / 10, sp % 10);
+}
+
 static int wd_go_live(struct fb_info *info)
 {
 	struct wd_par *par = info->par;
@@ -787,7 +984,9 @@ static int wd_go_live(struct fb_info *info)
 		pr_info("BITBLT self-test %s\n", par->accel ? "passed: acceleration on" :
 			"failed: CPU drawing only");
 	}
+	par->cexp_v = -1;
 	par->live = true;
+	wd_cexp_setup(par);
 	fb_set_cmap(&info->cmap, info);
 	wd_damage(info, 0, 0, WD_XRES, WD_YRES);
 	par->cur.loaded = false;
@@ -812,11 +1011,12 @@ static int wd_stats_get(char *buf, const struct kernel_param *kp)
 	par = wd_info->par;
 	st = &par->st;
 	return scnprintf(buf, PAGE_SIZE,
-			 "bytes=%llu rects=%llu fills=%llu copies=%llu ioctls=%llu full=%llu flush_us=%llu model_us=%llu ioctl_us=%llu accel=%d client=%d cursor=%llu hwcursor=%d\n",
+			 "bytes=%llu rects=%llu fills=%llu copies=%llu ioctls=%llu full=%llu flush_us=%llu model_us=%llu ioctl_us=%llu accel=%d client=%d cursor=%llu hwcursor=%d cexp=%llu cexp_px=%llu cexp_words=%llu cexp_var=%d\n",
 			 st->bytes, st->rects, st->fills, st->copies, st->ioctls,
 			 st->full, div_u64(st->ns, 1000), div_u64(st->model_ns, 1000),
 			 div_u64(st->ioctl_ns, 1000),
-			 par->accel, par->client_ops, st->cursor, par->cur.on);
+			 par->accel, par->client_ops, st->cursor, par->cur.on,
+			 st->cexp, st->cexp_px, st->cexp_words, par->cexp_v);
 }
 static const struct kernel_param_ops wd_stats_ops = { .get = wd_stats_get };
 module_param_cb(stats, &wd_stats_ops, NULL, 0444);
@@ -970,6 +1170,43 @@ static int wd_cursor_test_get(char *buf, const struct kernel_param *kp)
 	spin_unlock_irqrestore(&par->lock, flags);
 	return len + scnprintf(buf + len, PAGE_SIZE - len, "\n");
 }
+
+/*
+ * echo 1 > /sys/module/wd90c24fb/parameters/cexp_test: probe all colour
+ * expansion formats off screen (works with cexp=0; nothing on screen
+ * changes), report in dmesg and here.
+ */
+static int wd_cexp_test_set(const char *val, const struct kernel_param *kp)
+{
+	struct wd_par *par;
+	u32 sp;
+	unsigned int v;
+	int ret = kstrtouint(val, 0, &v);
+
+	if (ret)
+		return ret;
+	if (v != 1)
+		return -EINVAL;
+	if (!wd_info)
+		return -ENODEV;
+	par = wd_info->par;
+	if (!par->live || !par->accel || par->model || !par->hw.ext_blocks)
+		return -ENODEV;
+	wd_cexp_selftest(par, -1, &sp);
+	pr_info("cexp_test:\n%s", wd_cexp_report);
+	return 0;
+}
+
+static int wd_cexp_test_get(char *buf, const struct kernel_param *kp)
+{
+	return scnprintf(buf, PAGE_SIZE, "%s", wd_cexp_report[0] ?
+			 wd_cexp_report : "not run (echo 1 > cexp_test)\n");
+}
+
+static const struct kernel_param_ops wd_cexp_test_ops = {
+	.set = wd_cexp_test_set, .get = wd_cexp_test_get };
+module_param_cb(cexp_test, &wd_cexp_test_ops, NULL, 0644);
+MODULE_PARM_DESC(cexp_test, "Write 1: probe the BITBLT colour expansion formats off screen; read: the report");
 
 static const struct kernel_param_ops wd_cursor_test_ops = {
 	.set = wd_cursor_test_set, .get = wd_cursor_test_get };
@@ -1176,6 +1413,7 @@ static int __init wd90c24fb_init(void)
 	par = info->par;
 	par->hw = hw;
 	spin_lock_init(&par->lock);
+	par->cexp_v = -1;
 	atomic_set(&par->users, 0);
 	INIT_DELAYED_WORK(&par->mmap_work, wd_mmap_flush);
 	INIT_DELAYED_WORK(&par->trial_work, wd_trial_end);

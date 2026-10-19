@@ -15,6 +15,7 @@
 
 #ifdef __KERNEL__
 #include <linux/types.h>
+#include <linux/kernel.h>
 #include <linux/io.h>
 #include <linux/delay.h>
 #define wd_inb(port)		inb(port)
@@ -194,6 +195,11 @@ void wd_set_dac(u8 idx, u8 r, u8 g, u8 b);	/* 6-bit components */
 #define  BLT_ROP_SRC	0x0300
 #define  BLT_ROP_XOR	0x0600
 #define BLT_FGCOL	0xa000
+#define BLT_BGCOL	0xb000
+#define  BLT_SRC_HOST	0x0002	/* source select: system I/O, 32 bits */
+#define  BLT_SRC_MONH	0x000c	/* source format: monochrome from host */
+#define  BLT_MTRNS	0x0008	/* CNTRL2: monochrome transparency */
+#define WD_BLT_PORT	0x23c4	/* BITBLT host data port (16 bit) */
 #define BLT_MASK	0xe000
 
 #define WD_BLT_SPINS	200000	/* ~0.2 s of ISA reads before giving up */
@@ -245,5 +251,33 @@ void wd_cursor_load(struct wd_hw *hw, u32 pat_off, u8 fg, u8 bg, u8 hotx,
 void wd_cursor_move(struct wd_hw *hw, unsigned int x, unsigned int y);
 void wd_cursor_enable(struct wd_hw *hw, bool on);
 u16 wd_cursor_read(struct wd_hw *hw, u8 idx);
+
+/*
+ * BITBLT colour expansion from the host (WD90C31 data book 9.12/9.14):
+ * source "monochrome from host" through the 16-bit port 23C4. The data
+ * book is ambiguous for packed (8 bpp) mode, so the word format is a
+ * variant: pixels per word 4 << (v >> 2) (4, 8, 16; v 0-11), bit 1 of v
+ * = least significant bit first (else most significant used bit first),
+ * bit 0 = rows padded to doublewords (else to words). Variant 0 is the
+ * data book's reading: the four low-order bits, leftmost pixel in bit 3.
+ */
+#define WD_CEXP_VARIANTS 12
+static inline unsigned int wd_cexp_ppw(int v) { return 4u << (v >> 2); }
+unsigned int wd_cexp_words(unsigned int w, int v);	/* per row */
+/* set up an expansion of w x h at dst; the caller then sends h rows */
+int wd_cexp_start(struct wd_hw *hw, u32 dst, u32 pitch, u32 w, u32 h,
+		  u8 fg, u8 bg, bool transparent);
+/* one row: pixel == fg -> 1. Returns words written. With careful set,
+ * a word is only written while the engine is still busy (probing). */
+unsigned int wd_cexp_row(struct wd_hw *hw, const u8 *px, unsigned int w,
+			 u8 fg, int v, bool careful);
+/* feed zero words while the engine still waits; 0 once it is idle */
+int wd_cexp_drain(struct wd_hw *hw, unsigned int max_words);
+/*
+ * Probe variant v off screen (dst at 0x60000): returns the number of
+ * wrong pixels over the test cases (0 = pass), or -1 if the engine hung.
+ * why gets a short description of the first difference.
+ */
+int wd_cexp_probe(struct wd_hw *hw, int v, char *why, size_t n);
 
 #endif
