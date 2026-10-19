@@ -226,8 +226,11 @@ u16 wd_inw(u16 p)
 	}
 	if (p == 0x23c2) {
 		u8 blk = M.ext_index & 0xff;
-		if (blk == 2)
-			return M.cursor;
+		if (blk == 2) {
+			u8 idx = (M.ext_index >> 8) & 0x0f;
+
+			return idx ? M.curs[idx] : M.cursor;
+		}
 		if (blk == 1) {
 			u8 idx = (M.ext_index >> 8) & 0x0f;
 
@@ -254,8 +257,11 @@ void wd_outw(u16 v, u16 p)
 		M.ext_index = v;
 	} else if (p == 0x23c2) {
 		u8 blk = M.ext_index & 0xff;
-		if (blk == 2)
-			M.cursor = v;
+		if (blk == 2) {
+			M.curs[v >> 12] = v & 0x0fff;
+			if (!(v >> 12))
+				M.cursor = v;
+		}
 		else if (blk == 1) {
 			M.blt[v >> 12] = v & 0x0fff;
 			if ((v >> 12) == 0 && (v & 0x0800))

@@ -693,3 +693,81 @@ void wd_restore_panel(struct wd_hw *hw, const struct wd_ext_state *s)
 	}
 	hw->pr19 = wd_read_pr19(hw);
 }
+
+/* ---- Hardware cursor (WD90C31 data book 8.0-8.6) ---- */
+
+void wd_cursor_pattern(const u8 *image, const u8 *mask, u8 out[WD_CUR_BYTES])
+{
+	unsigned int r, k;
+
+	/*
+	 * Per row, eight bytes: AND plane cols 0-7, XOR plane cols 0-7, AND
+	 * 8-15, ... (8.6.2.2). Pixel = AND:XOR: 00 secondary (bg), 01 primary
+	 * (fg), 10 transparent, 11 inverted (unused).
+	 */
+	for (r = 0; r < 32; r++)
+		for (k = 0; k < 4; k++) {
+			u8 m = mask[r * 4 + k], i = image[r * 4 + k];
+
+			out[r * 8 + 2 * k] = (u8)~m;
+			out[r * 8 + 2 * k + 1] = i & m;
+		}
+}
+
+void wd_vram_write(struct wd_hw *hw, u32 off, const u8 *src, u32 n)
+{
+	while (n) {
+		u32 base = (off >> 12) << 12, chunk = WD_WIN_SIZE - (off - base);
+
+		if (chunk > n)
+			chunk = n;
+		wd_set_bank(hw, off >> 12);
+		wd_win_write(hw, off - base, src, chunk);
+		off += chunk;
+		src += chunk;
+		n -= chunk;
+	}
+}
+
+static void wd_cur_reg(u8 idx, u16 val)
+{
+	wd_outw(((u16)idx << 12) | (val & 0x0fff), WD_EXT_DATA);
+}
+
+void wd_cursor_load(struct wd_hw *hw, u32 pat_off, u8 fg, u8 bg, u8 hotx,
+		    u8 hoty, bool on)
+{
+	u32 a = pat_off >> 2;	/* packed modes: doubleword address (8.6.1) */
+
+	(void)hw;
+	wd_outw(WD_EXT_NOINC | WD_BLK_CURSOR, WD_EXT_INDEX);
+	wd_cur_reg(1, a & 0x0fff);
+	wd_cur_reg(2, (a >> 12) & 0x01ff);
+	wd_cur_reg(3, fg);
+	wd_cur_reg(4, bg);
+	wd_cur_reg(5, ((hoty & 31) << 6) | (hotx & 31));
+	/* the address and origin take effect after the next control write */
+	wd_cur_reg(0, WD_CUR_INVERT | (on ? WD_CUR_ENABLE : 0));
+}
+
+void wd_cursor_move(struct wd_hw *hw, unsigned int x, unsigned int y)
+{
+	(void)hw;
+	wd_outw(WD_EXT_NOINC | WD_BLK_CURSOR, WD_EXT_INDEX);
+	wd_cur_reg(6, x > 0x7ff ? 0x7ff : x);
+	wd_cur_reg(7, y > 0x3ff ? 0x3ff : y);
+}
+
+void wd_cursor_enable(struct wd_hw *hw, bool on)
+{
+	(void)hw;
+	wd_outw(WD_EXT_NOINC | WD_BLK_CURSOR, WD_EXT_INDEX);
+	wd_cur_reg(0, WD_CUR_INVERT | (on ? WD_CUR_ENABLE : 0));
+}
+
+u16 wd_cursor_read(struct wd_hw *hw, u8 idx)
+{
+	(void)hw;
+	wd_outw(WD_EXT_NOINC | WD_BLK_CURSOR | ((u16)(idx & 0x0f) << 8), WD_EXT_INDEX);
+	return wd_inw(WD_EXT_DATA) & 0x0fff;
+}

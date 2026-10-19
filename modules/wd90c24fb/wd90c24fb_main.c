@@ -113,6 +113,14 @@ MODULE_PARM_DESC(keep, "Write 1 during the trial period to keep the framebuffer"
 static bool xaccel = true;
 module_param(xaccel, bool, 0644);
 MODULE_PARM_DESC(xaccel, "Offer mmap clients (Xfbdev) the damage/BITBLT ioctls (0 = they get the 10 Hz full-frame flush)");
+static bool hwcursor;
+module_param(hwcursor, bool, 0644);
+MODULE_PARM_DESC(hwcursor, "Offer Xfbdev the WD90C24 hardware cursor (default 0: X draws it in software)");
+static int hwc_xoff, hwc_yoff;
+module_param(hwc_xoff, int, 0644);
+MODULE_PARM_DESC(hwc_xoff, "Hardware cursor X calibration in pixels (if the chip shows it off by some pixels)");
+module_param(hwc_yoff, int, 0644);
+MODULE_PARM_DESC(hwc_yoff, "Hardware cursor Y calibration in pixels");
 static bool apm_blank = true;
 module_param(apm_blank, bool, 0644);
 MODULE_PARM_DESC(apm_blank, "Blank levels 2-4 (suspend/powerdown) also put the display in APM standby: the BIOS switches the backlight off (needs CONFIG_APM_DISPLAY_BLANK)");
@@ -126,6 +134,19 @@ struct wd_stats {
 	u64 ns;			/* time spent copying to video memory */
 	u64 model_ns;		/* fake=3: CPU time of the emulated BITBLT */
 	u64 ioctl_ns;		/* time in WDFB_IOC_OPS (includes the above) */
+	u64 cursor;		/* WDFB_IOC_CURSOR calls */
+};
+
+/* Off-screen cursor pattern: above the 300 KiB frame, below the BITBLT
+ * self-test area at 384 KiB. */
+#define WD_CUR_OFF	0x50000
+
+struct wd_cur {
+	bool on;		/* shown */
+	bool loaded;		/* pattern + colours are in the chip */
+	s16 x, y;
+	u8 hotx, hoty, fg, bg;
+	u8 pat[WD_CUR_BYTES];
 };
 
 struct wd_par {
@@ -147,13 +168,16 @@ struct wd_par {
 	bool apm_blanked;	/* the display is in APM standby (blank) */
 	u8 *model;		/* fake=3: RAM model of video memory */
 	struct wd_stats st;
+	struct wd_cur cur;
 	struct delayed_work mmap_work;
 	struct delayed_work trial_work;
 };
 
 static struct fb_info *wd_info;
 static struct platform_device *wd_pdev;
-static DEFINE_MUTEX(wd_stop_lock);	/* trial end, text=1, resume failure, rmmod */
+static DEFINE_MUTEX(wd_stop_lock);
+static void wd_cur_apply(struct wd_par *par, bool shape);
+static void wd_cur_off(struct wd_par *par);	/* trial end, text=1, resume failure, rmmod */
 
 /* Called with par->lock held. Returns true if the engine is idle. */
 static bool wd_blt_idle(struct wd_par *par)
@@ -373,6 +397,7 @@ static int wd_release(struct fb_info *info, int user)
 
 	if (user && atomic_dec_and_test(&par->users)) {
 		par->client_ops = false;
+		wd_cur_off(par);
 		if (par->mmapped) {
 			par->mmapped = false;
 			wd_damage(info, 0, 0, WD_XRES, WD_YRES);
@@ -467,7 +492,38 @@ static int wd_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
 		caps = WDFB_CAP_DAMAGE;
 		if (par->accel)
 			caps |= WDFB_CAP_FILL | WDFB_CAP_COPY;
+		if (hwcursor && (par->hw.ext_blocks || par->model))
+			caps |= WDFB_CAP_CURSOR;
 		return put_user(caps, (u32 __user *)arg);
+	case WDFB_IOC_CURSOR: {
+		struct wdfb_cursor c;
+		unsigned long flags;
+
+		if (!hwcursor || !(par->hw.ext_blocks || par->model))
+			return -ENOTTY;
+		if (copy_from_user(&c, (const void __user *)arg, sizeof(c)))
+			return -EFAULT;
+		if (c.flags & ~(WDFB_CUR_SHOW | WDFB_CUR_SHAPE | WDFB_CUR_POS) ||
+		    c.hotx > 31 || c.hoty > 31)
+			return -EINVAL;
+		spin_lock_irqsave(&par->lock, flags);
+		par->st.cursor++;
+		if (c.flags & WDFB_CUR_SHAPE) {
+			wd_cursor_pattern(c.image, c.mask, par->cur.pat);
+			par->cur.hotx = c.hotx;
+			par->cur.hoty = c.hoty;
+			par->cur.fg = c.fg;
+			par->cur.bg = c.bg;
+		}
+		if (c.flags & WDFB_CUR_POS) {
+			par->cur.x = c.x;
+			par->cur.y = c.y;
+		}
+		par->cur.on = !!(c.flags & WDFB_CUR_SHOW);
+		wd_cur_apply(par, c.flags & WDFB_CUR_SHAPE);
+		spin_unlock_irqrestore(&par->lock, flags);
+		return 0;
+	}
 	case WDFB_IOC_OPS: {
 		u64 t = wd_now_ns();
 		int ret = wd_ops_ioctl(info, (const void __user *)arg);
@@ -668,6 +724,45 @@ static void wd_restore_text(struct wd_par *par)
 }
 
 /* Mode set + self-test. Caller holds the console lock. */
+/* Push the cursor state to the chip. Called with par->lock held. */
+static void wd_cur_apply(struct wd_par *par, bool shape)
+{
+	struct wd_cur *c = &par->cur;
+	int x, y;
+
+	if (!par->live || !par->hw.ext_blocks || par->model)
+		return;	/* fake modes: QEMU has no cursor block, state only */
+	wd_blt_idle(par);
+	x = c->x + hwc_xoff;
+	y = c->y + hwc_yoff;
+	/* the chip cannot place the hot spot left/above the screen edge:
+	 * pin it there (the hot spot pixel is still exact at 0) */
+	x = clamp(x, 0, 0x7ff);
+	y = clamp(y, 0, 0x3ff);
+	if (shape || !c->loaded) {
+		wd_vram_write(&par->hw, WD_CUR_OFF, c->pat, WD_CUR_BYTES);
+		wd_cursor_move(&par->hw, x, y);
+		wd_cursor_load(&par->hw, WD_CUR_OFF, c->fg, c->bg, c->hotx,
+			       c->hoty, c->on);
+		c->loaded = true;
+	} else {
+		wd_cursor_move(&par->hw, x, y);
+		wd_cursor_enable(&par->hw, c->on);
+	}
+}
+
+static void wd_cur_off(struct wd_par *par)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&par->lock, flags);
+	if (par->cur.on) {
+		par->cur.on = false;
+		wd_cur_apply(par, false);
+	}
+	spin_unlock_irqrestore(&par->lock, flags);
+}
+
 static int wd_go_live(struct fb_info *info)
 {
 	struct wd_par *par = info->par;
@@ -695,6 +790,14 @@ static int wd_go_live(struct fb_info *info)
 	par->live = true;
 	fb_set_cmap(&info->cmap, info);
 	wd_damage(info, 0, 0, WD_XRES, WD_YRES);
+	par->cur.loaded = false;
+	if (par->cur.on) {	/* back from a suspend with X running */
+		unsigned long flags;
+
+		spin_lock_irqsave(&par->lock, flags);
+		wd_cur_apply(par, true);
+		spin_unlock_irqrestore(&par->lock, flags);
+	}
 	return 0;
 }
 
@@ -709,11 +812,11 @@ static int wd_stats_get(char *buf, const struct kernel_param *kp)
 	par = wd_info->par;
 	st = &par->st;
 	return scnprintf(buf, PAGE_SIZE,
-			 "bytes=%llu rects=%llu fills=%llu copies=%llu ioctls=%llu full=%llu flush_us=%llu model_us=%llu ioctl_us=%llu accel=%d client=%d\n",
+			 "bytes=%llu rects=%llu fills=%llu copies=%llu ioctls=%llu full=%llu flush_us=%llu model_us=%llu ioctl_us=%llu accel=%d client=%d cursor=%llu hwcursor=%d\n",
 			 st->bytes, st->rects, st->fills, st->copies, st->ioctls,
 			 st->full, div_u64(st->ns, 1000), div_u64(st->model_ns, 1000),
 			 div_u64(st->ioctl_ns, 1000),
-			 par->accel, par->client_ops);
+			 par->accel, par->client_ops, st->cursor, par->cur.on);
 }
 static const struct kernel_param_ops wd_stats_ops = { .get = wd_stats_get };
 module_param_cb(stats, &wd_stats_ops, NULL, 0444);
@@ -790,6 +893,88 @@ static int wd_text_set(const char *val, const struct kernel_param *kp)
 }
 
 static const struct kernel_param_ops wd_text_ops = { .set = wd_text_set };
+
+/*
+ * echo N > /sys/module/wd90c24fb/parameters/cursor_test (needs hwcursor=1):
+ * 0 hides the cursor, 1/2/3 show a test arrow (white, black outline, tip
+ * = hot spot) at the centre / top-left / bottom-right of the screen.
+ * Reading it dumps cursor registers 0-8 (block 2) as the chip has them.
+ */
+static int wd_cursor_test_set(const char *val, const struct kernel_param *kp)
+{
+	static const s16 pos[4][2] = { {0, 0}, {320, 240}, {0, 0}, {639, 479} };
+	struct wd_par *par;
+	unsigned long flags;
+	u8 img[128], msk[128];
+	unsigned int n, r;
+	int ret = kstrtouint(val, 0, &n);
+
+	if (ret)
+		return ret;
+	if (n > 3)
+		return -EINVAL;
+	if (!wd_info)
+		return -ENODEV;
+	par = wd_info->par;
+	if (!hwcursor || !par->hw.ext_blocks || !par->live)
+		return -ENODEV;
+	/* 12x19 arrow: mask = filled arrow, image = its interior (white) */
+	for (r = 0; r < 32; r++) {
+		u32 m = 0, i = 0;
+		unsigned int w = r < 12 ? r + 1 : r < 19 ? 12 - (r - 12) : 0;
+
+		if (w)
+			m = ~0u << (32 - w);
+		if (w > 2)
+			i = (~0u << (32 - (w - 1))) & ~0x80000000u;
+		if (r == 0 || r >= 18)
+			i = 0;
+		img[r * 4] = i >> 24; img[r * 4 + 1] = i >> 16;
+		img[r * 4 + 2] = i >> 8; img[r * 4 + 3] = i;
+		msk[r * 4] = m >> 24; msk[r * 4 + 1] = m >> 16;
+		msk[r * 4 + 2] = m >> 8; msk[r * 4 + 3] = m;
+	}
+	spin_lock_irqsave(&par->lock, flags);
+	if (n) {
+		wd_cursor_pattern(img, msk, par->cur.pat);
+		par->cur.hotx = 0;
+		par->cur.hoty = 0;
+		par->cur.fg = 15;	/* VGA white */
+		par->cur.bg = 0;	/* black */
+		par->cur.x = pos[n][0];
+		par->cur.y = pos[n][1];
+	}
+	par->cur.on = n != 0;
+	wd_cur_apply(par, n != 0);
+	spin_unlock_irqrestore(&par->lock, flags);
+	return 0;
+}
+
+static int wd_cursor_test_get(char *buf, const struct kernel_param *kp)
+{
+	struct wd_par *par;
+	unsigned long flags;
+	int len = 0;
+	u8 i;
+
+	if (!wd_info)
+		return scnprintf(buf, PAGE_SIZE, "no framebuffer\n");
+	par = wd_info->par;
+	if (!par->hw.ext_blocks || !par->live || par->model)
+		return scnprintf(buf, PAGE_SIZE, "no cursor block\n");
+	spin_lock_irqsave(&par->lock, flags);
+	wd_blt_idle(par);
+	for (i = 0; i <= 8; i++)
+		len += scnprintf(buf + len, PAGE_SIZE - len, "%s%u=%03x", i ? " " : "",
+				 i, wd_cursor_read(&par->hw, i));
+	spin_unlock_irqrestore(&par->lock, flags);
+	return len + scnprintf(buf + len, PAGE_SIZE - len, "\n");
+}
+
+static const struct kernel_param_ops wd_cursor_test_ops = {
+	.set = wd_cursor_test_set, .get = wd_cursor_test_get };
+module_param_cb(cursor_test, &wd_cursor_test_ops, NULL, 0644);
+MODULE_PARM_DESC(cursor_test, "Hardware cursor probe (hwcursor=1): 0 off, 1 centre, 2 top-left, 3 bottom-right; read = registers");
 module_param_cb(text, &wd_text_ops, NULL, 0200);
 MODULE_PARM_DESC(text, "Write 1 to restore text mode and release the console (needed before rmmod)");
 

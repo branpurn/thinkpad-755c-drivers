@@ -158,6 +158,25 @@ Attach an external VGA monitor for the CRT items.
   bit re-applied).
 - [ ] `rmmod snd_pcm_oss snd_ad1848 snd_wss_lib` succeeds.
 
+## 2b. Hardware cursor probe (wd90c24fb.hwcursor, off by default)
+
+On the framebuffer console, no X running:
+
+    P=/sys/module/wd90c24fb/parameters
+    echo 1 > $P/hwcursor
+    cat $P/cursor_test        # registers 0-8; 0= is 020 or 000 (cursor off)
+    echo 1 > $P/cursor_test   # white arrow, black outline, tip at the centre
+    cat $P/cursor_test        # expect 0=820 1=000 2=014 3=00f 4=000 5=000 6=140 7=0f0
+    echo 2 > $P/cursor_test   # arrow tip exactly in the top-left corner
+    echo 3 > $P/cursor_test   # tip on the bottom-right pixel (arrow mostly off-screen)
+    echo 0 > $P/cursor_test   # gone
+
+If the arrow is shifted, set `hwc_xoff`/`hwc_yoff` by the error and repeat.
+Garbage instead of an arrow, or nothing: report the `cat` output and leave
+hwcursor=0. Then `startx`: /tmp/Xfbdev.log says "wd90c24fb: hardware
+cursor" and the X pointer moves without trails; `stats` shows `cursor=`
+rising. `TC32X_SOFTCURSOR=1 startx` gives the old software cursor.
+
 ## 3. TrackPoint (trackpoint.tcz)
 - [ ] `/dev/input/mice` appears; `hexdump -C /dev/input/mice`
   prints bytes when moving the TrackPoint and pressing both buttons.

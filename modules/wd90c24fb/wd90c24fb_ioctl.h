@@ -51,4 +51,29 @@ struct wdfb_ops {
 #define WDFB_IOC_CAPS	_IOR('W', 0x24, __u32)
 #define WDFB_IOC_OPS	_IOW('W', 0x25, struct wdfb_ops)
 
+/*
+ * Hardware cursor (WDFB_CAP_CURSOR; only offered with wd90c24fb.hwcursor=1).
+ * A 32x32 two-colour cursor: image/mask are 1 bit per pixel, 4 bytes per
+ * row, most significant bit = leftmost pixel; mask 0 = transparent, else
+ * image 1 = fg, 0 = bg (palette indices). x,y is the hot spot's screen
+ * position; hotx/hoty its place in the 32x32 image.
+ */
+#define WDFB_CAP_CURSOR	0x08
+
+#define WDFB_CUR_SHOW	0x01	/* cursor visible (else hidden) */
+#define WDFB_CUR_SHAPE	0x02	/* image, mask, hotx/hoty, fg/bg are new */
+#define WDFB_CUR_POS	0x04	/* x, y are new */
+
+struct wdfb_cursor {
+	__u16 flags;
+	__s16 x, y;
+	__u8 hotx, hoty;
+	__u8 fg, bg;
+	__u8 pad[2];
+	__u8 image[128];
+	__u8 mask[128];
+};
+
+#define WDFB_IOC_CURSOR	_IOW('W', 0x26, struct wdfb_cursor)
+
 #endif
