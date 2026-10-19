@@ -451,6 +451,40 @@ static void t_panel(void)
 	CHECK(M.sleeps_ms >= 200, "restore powered the panel up without the 100 ms steps");
 }
 
+static void test_cursor(void)
+{
+	struct wd_ext_state bios, ext;
+	struct wd_std std;
+	struct wd_hw hw;
+	u8 img[128] = {0}, msk[128] = {0}, pat[WD_CUR_BYTES];
+
+	mock_reset(M_C24A);
+	wd_probe(&hw);
+	wd_save_ext(&hw, &bios);
+	wd_mode_640x480x8(&hw, &bios, &std, &ext);
+	wd_set_mode(&hw, &std, &ext);
+	/* row 0: col 0 fg, col 1 bg, col 2+ transparent; row 31 col 31 fg */
+	msk[0] = 0xc0; img[0] = 0x80;
+	msk[127] = 0x01; img[127] = 0x01;
+	wd_cursor_pattern(img, msk, pat);
+	CHECK(pat[0] == 0x3f && pat[1] == 0x80, "pat[0] == 0x3f && pat[1] == 0x80");	/* AND, XOR cols 0-7 */
+	CHECK(pat[2] == 0xff && pat[3] == 0x00, "pat[2] == 0xff && pat[3] == 0x00");	/* cols 8-15 transparent */
+	CHECK(pat[254] == 0xfe && pat[255] == 0x01, "pat[254] == 0xfe && pat[255] == 0x01");
+
+	wd_cursor_load(&hw, 0x50000, 15, 0, 3, 5, true);
+	CHECK(M.curs[1] == 0x000 && M.curs[2] == 0x014, "M.curs[1] == 0x000 && M.curs[2] == 0x014");	/* 0x50000 >> 2 */
+	CHECK(M.curs[3] == 15 && M.curs[4] == 0, "M.curs[3] == 15 && M.curs[4] == 0");
+	CHECK(M.curs[5] == ((5 << 6) | 3), "M.curs[5] == ((5 << 6) | 3)");
+	CHECK(M.cursor == 0x0820, "M.cursor == 0x0820");	/* enable, two colours + invert */
+	wd_cursor_move(&hw, 639, 479);
+	CHECK(M.curs[6] == 639 && M.curs[7] == 479, "M.curs[6] == 639 && M.curs[7] == 479");
+	CHECK(wd_cursor_read(&hw, 6) == 639, "wd_cursor_read(&hw, 6) == 639");
+	wd_cursor_enable(&hw, false);
+	CHECK(M.cursor == 0x0020, "M.cursor == 0x0020");
+	wd_vram_write(&hw, 0x50000 - 2, pat, 4);	/* across a bank */
+	CHECK(M.vram[0x50000 - 2] == pat[0] && M.vram[0x50001] == pat[3], "M.vram[0x50000 - 2] == pat[0] && M.vram[");
+}
+
 int main(void)
 {
 	t_probe_kinds();
@@ -464,6 +498,7 @@ int main(void)
 	t_blt_selftest();
 	t_panel();
 	t_suspend_cycle();
+	test_cursor();
 	printf("wd90c24 unit tests: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;
 }

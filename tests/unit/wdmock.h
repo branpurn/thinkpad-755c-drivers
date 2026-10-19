@@ -34,6 +34,7 @@ struct mock {
 	u8 pr1b;		/* CR34, write-only on the chip */
 	u8 fp[256];		/* flat-panel registers behind PR1B */
 	u16 ext_index, cursor;
+	u16 curs[16];		/* cursor block 2 registers, by index */
 	u16 blt[16];
 	u8 vram[1 << 20];
 	u8 attr[32], attr_i, attr_ff;

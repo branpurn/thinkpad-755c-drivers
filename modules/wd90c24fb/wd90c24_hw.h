@@ -227,4 +227,23 @@ void wd_set_outputs(struct wd_hw *hw, bool lcd, bool crt);
 /* Outputs and panel power back to the saved state (sleeps if powering up). */
 void wd_restore_panel(struct wd_hw *hw, const struct wd_ext_state *s);
 
+/*
+ * Hardware cursor, WD90C31 data book section 8 (the C24A has the same
+ * register block 2): 32x32, 2 bits per pixel, pattern in off-screen
+ * memory at a doubleword address, colours are palette indices, the
+ * origin (hot spot) is shown at the display position.
+ */
+#define WD_CUR_ENABLE	0x0800	/* control bit 11 */
+#define WD_CUR_INVERT	0x0020	/* colour mode 001: two colours + inversion */
+#define WD_CUR_BYTES	256	/* 32x32 pattern */
+/* 1 bpp image/mask (MSB = left, 4 bytes per row) -> chip pattern */
+void wd_cursor_pattern(const u8 *image, const u8 *mask, u8 out[WD_CUR_BYTES]);
+/* any bytes into video memory at a linear offset (moves the bank) */
+void wd_vram_write(struct wd_hw *hw, u32 off, const u8 *src, u32 n);
+void wd_cursor_load(struct wd_hw *hw, u32 pat_off, u8 fg, u8 bg, u8 hotx,
+		    u8 hoty, bool on);
+void wd_cursor_move(struct wd_hw *hw, unsigned int x, unsigned int y);
+void wd_cursor_enable(struct wd_hw *hw, bool on);
+u16 wd_cursor_read(struct wd_hw *hw, u8 idx);
+
 #endif
