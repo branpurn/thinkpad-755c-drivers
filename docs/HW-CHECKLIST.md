@@ -50,9 +50,11 @@ Collect for every later section: `dmesg | tail -40` after each step.
 - [ ] The text screen is unchanged after the probe (it must touch nothing).
 
 ### 1.2 Mode set and fail-safe (stage 2)
-Load with a long trial first, so text comes back on its own:
+For a first test on a new machine, load with a long trial, so text
+comes back on its own:
 `insmod /usr/local/lib/modules/6.18.57-tc755/extra/wd90c24fb.ko trial=60`
-(or `tce-load -i fb-wd90c24.tcz`, which uses `trial=30`).
+(`tce-load -i fb-wd90c24.tcz` uses no trial; boot with
+`wd90c24fb.trial=60` to get one).
 - [ ] dmesg: `banking self-test` did not fail; `fb0: WD90C24..., 640x480x8`.
 - [ ] Panel: picture fills the 640x480 TFT, not shifted, no wrap or
   doubled lines, no flicker; the console text is readable (fbcon 80x30).
@@ -89,9 +91,18 @@ Attach an external VGA monitor for the CRT items.
 - [ ] `output=auto` keeps what Fn+F7 / the BIOS chose.
 - [ ] `output=lcd`, `output=crt`, `output=both`: each shows the picture on
   the right outputs; CRT timing is 640x480 @ 60 Hz (monitor OSD).
-- [ ] Blank: `echo 1 > /sys/class/graphics/fb0/blank` (screen off, panel
-  lit), `echo 4 > ...` (powerdown: backlight/panel off), `echo 0` brings
-  the picture back after ~200 ms with no garbage or flash of noise.
+- [ ] Blank levels (docs/WD90C24.md "Blank levels"), each followed by
+  `echo 0 > /sys/class/graphics/fb0/blank` (picture back after ~200 ms,
+  no garbage or flash of noise, colours right):
+  - `echo 1 > /sys/class/graphics/fb0/blank`: black picture, backlight
+    still lit (look at the panel edge in a dark room);
+  - `echo 2`, `echo 3`, `echo 4`: backlight off too (panel dark);
+  - `echo 0 > /sys/module/wd90c24fb/parameters/apm_blank`, then `echo 4`:
+    backlight off by PNLOFF alone (the register path); `echo 1 >
+    .../apm_blank` again. With the old kernel (no
+    `CONFIG_APM_DISPLAY_BLANK`) this is the only path.
+  - X: `xset dpms force off` (if xset is installed) or wait for the screen
+    saver: picture off; a key press brings X back fully redrawn.
 - [ ] Console blanking: `printf '\033[9;1]' > /dev/tty1` (blank after
   1 min), wait, then a key press on the 755C keyboard brings it back.
 - [ ] After `text=1` / trial end following `output=crt`: the panel comes
@@ -113,7 +124,23 @@ Attach an external VGA monitor for the CRT items.
 - [ ] If resume fails: dmesg `resume: mode set failed`, text mode visible,
   `/proc/fb` empty. Record it.
 
-### 1.6 86Box bench (before or alongside the 755C)
+### 1.6 X speed (stage 6)
+- [ ] Xfbdev.log says `wd90c24fb: damage, BITBLT copies, BITBLT fills to
+  the driver` (only `damage` on a plain C24 or with `accel=0`).
+- [ ] Idle X: `top` shows next to no CPU (before: about a third went to
+  the 10 Hz flush); `cat /sys/module/wd90c24fb/parameters/stats` twice,
+  10 s apart: `bytes` barely moves, `full` not at all.
+- [ ] Bus speed (text console, X stopped): `cat .../stats; for i in 1 2 3
+  4 5 6 7 8 9 10; do dd if=/dev/zero of=/dev/fb0 bs=307200 count=1
+  2>/dev/null; done; cat .../stats`: KiB/s = (bytes difference / 1024) /
+  (flush_us difference / 1e6). Record it: it sets how much the BITBLT
+  and damage paths save.
+- [ ] rxvt scrolling (`ls -lR /usr`), dragging and resizing windows,
+  opening xcalc/xedit: the picture follows smoothly and is right
+  (compare with `echo 0 > /sys/module/wd90c24fb/parameters/xaccel` and a
+  new startx, which gives the old 10 Hz flush).
+
+### 1.7 86Box bench (before or alongside the 755C)
 - [ ] WD90C30/C31 card in 86Box: `wd90c24-probe` names the chip;
   `insmod wd90c24fb.ko force=1 trial=30`: mode set, banking self-test,
   (C31) BITBLT self-test, text back after the trial (see docs/WD90C24.md).

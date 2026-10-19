@@ -411,7 +411,7 @@ static void t_panel(void)
 	CHECK(wd_panel_off(&hw), "panel_off: panel was on");
 	CHECK(!(M.fp[0x32] & 0x10) && (M.gfx[0x0e] & 0x20) && !(M.seq[0x19] & 0x04),
 	      "off: PR19 %02x PR4 %02x PR57 %02x", M.fp[0x32], M.gfx[0x0e], M.seq[0x19]);
-	CHECK(!strcmp(M.panel_log, "P47"), "off order %s, want PR19, PR4, PR57", M.panel_log);
+	CHECK(!strcmp(M.panel_log, "74P"), "off order %s, want PR57 (while PR19 bit 4 still gives it PNLOFF), PR4, PR19", M.panel_log);
 	CHECK(!wd_panel_off(&hw), "panel_off twice");
 	M.panel_log_n = 0; memset(M.panel_log, 0, sizeof(M.panel_log)); M.sleeps_ms = 0;
 	wd_set_outputs(&hw, true, true);

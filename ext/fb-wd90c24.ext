@@ -1,8 +1,8 @@
 DESC="Native WD90C24A framebuffer (640x480, 256 colours) + fbcon; falls back to vga16fb if the chip is not a WD90C24 or the self-test fails"
 MODS="wd90c24fb"
-# Until confirmed on real hardware: revert to text after 30 s unless
-# 'echo 1 > /sys/module/wd90c24fb/parameters/keep'. Boot with
-# wd90c24fb.trial=0 once the panel shows a good picture.
-ARGS_wd90c24fb="trial=30"
+# No trial period by default (confirmed on the 755C). To try a risky
+# setting, boot with e.g. wd90c24fb.trial=30: text mode comes back after
+# 30 s unless 'echo 1 > /sys/module/wd90c24fb/parameters/keep'.
+ARGS_wd90c24fb=""
 FALLBACK="vga16fb tc32-vgafb-dev"
 DEPS="modutils.tcz"
