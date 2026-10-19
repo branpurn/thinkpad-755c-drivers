@@ -771,3 +771,139 @@ u16 wd_cursor_read(struct wd_hw *hw, u8 idx)
 	wd_outw(WD_EXT_NOINC | WD_BLK_CURSOR | ((u16)(idx & 0x0f) << 8), WD_EXT_INDEX);
 	return wd_inw(WD_EXT_DATA) & 0x0fff;
 }
+
+/* ---- BITBLT colour expansion from the host (data book 9.14) ---- */
+
+unsigned int wd_cexp_words(unsigned int w, int v)
+{
+	unsigned int ppw = wd_cexp_ppw(v), n = (w + ppw - 1) / ppw;
+
+	return (v & 1) ? (n + 1) & ~1u : n;
+}
+
+int wd_cexp_start(struct wd_hw *hw, u32 dst, u32 pitch, u32 w, u32 h,
+		  u8 fg, u8 bg, bool transparent)
+{
+	if (!w || !h || w > 2048 || h > 2048 || pitch > 0x0fff)
+		return -1;
+	if (wd_blt_wait(hw))
+		return -1;
+	wd_blt_reg(BLT_SRC_LO, 0);	/* alignment: first pixel of a word */
+	wd_blt_reg(BLT_SRC_HI, 0);
+	wd_blt_reg(BLT_DST_LO, dst & 0xfff);
+	wd_blt_reg(BLT_DST_HI, dst >> 12);
+	wd_blt_reg(BLT_PITCH, pitch);
+	wd_blt_reg(BLT_DIM_X, w);
+	wd_blt_reg(BLT_DIM_Y, h);
+	wd_blt_reg(BLT_MASK, 0xff);
+	wd_blt_reg(BLT_ROP, BLT_ROP_SRC);
+	wd_blt_reg(BLT_CNTRL2, transparent ? BLT_MTRNS : 0);
+	wd_blt_reg(BLT_FGCOL, fg);
+	wd_blt_reg(BLT_BGCOL, bg);
+	wd_blt_reg(BLT_CNTRL1, BLT_ACT | BLT_PACKED | BLT_SRC_MONH | BLT_SRC_HOST);
+	/* the index register is left on CNTRL1: reads give the busy bit */
+	return 0;
+}
+
+static bool wd_blt_busy(void)
+{
+	return wd_inw(WD_EXT_DATA) & BLT_ACT;
+}
+
+unsigned int wd_cexp_row(struct wd_hw *hw, const u8 *px, unsigned int w,
+			 u8 fg, int v, bool careful)
+{
+	unsigned int ppw = wd_cexp_ppw(v), words = wd_cexp_words(w, v), i, k;
+	bool lsb = v & 2;
+
+	(void)hw;
+	for (i = 0; i < words; i++) {
+		u16 word = 0;
+
+		for (k = 0; k < ppw; k++) {
+			unsigned int x = i * ppw + k;
+
+			if (x < w && px[x] == fg)
+				word |= lsb ? 1u << k : 1u << (ppw - 1 - k);
+		}
+		if (careful && !wd_blt_busy())
+			return i;
+		wd_outw(word, WD_BLT_PORT);
+	}
+	return words;
+}
+
+int wd_cexp_drain(struct wd_hw *hw, unsigned int max_words)
+{
+	unsigned int i;
+
+	(void)hw;
+	for (i = 0; i < max_words; i++) {
+		if (!wd_blt_busy())
+			return 0;
+		wd_outw(0, WD_BLT_PORT);
+	}
+	return wd_blt_busy() ? -1 : 0;
+}
+
+static u8 wd_cexp_pat(unsigned int t, unsigned int r, unsigned int c)
+{
+	return ((r * 7 + c * 3 + t) % 5) < 2;
+}
+
+int wd_cexp_probe(struct wd_hw *hw, int v, char *why, size_t n)
+{
+	static const struct { u16 x, w, h; bool trans; } t[] = {
+		{ 0, 37, 5, false }, { 3, 13, 4, false }, { 8, 16, 3, false },
+		{ 1, 1, 2, false }, { 5, 29, 3, true },
+	};
+	const u32 base = 0x60000, pitch = WD_PITCH;
+	const u8 fg = 0x5a, bg = 0xa5, fill = 0x33;
+	u8 row[64];
+	unsigned int i, r, c;
+	int bad = 0;
+
+	if (why && n)
+		why[0] = 0;
+	for (i = 0; i < ARRAY_SIZE(t); i++) {
+		u32 dst = base + i * 8 * pitch;
+
+		/* prefill w + 2 guard pixels on each side, h rows (+1 below) */
+		for (r = 0; r <= t[i].h; r++)
+			for (c = 0; c < (unsigned int)t[i].w + 4; c++) {
+				u32 a = dst + r * pitch + t[i].x + c - 2;
+
+				wd_set_bank(hw, a >> 12);
+				wd_win_writeb(hw, a & 0xfff, fill);
+			}
+		if (wd_cexp_start(hw, dst + t[i].x, pitch, t[i].w, t[i].h, fg, bg,
+				  t[i].trans))
+			return -1;
+		for (r = 0; r < t[i].h; r++) {
+			for (c = 0; c < t[i].w; c++)
+				row[c] = wd_cexp_pat(i, r, c) ? fg : bg;
+			wd_cexp_row(hw, row, t[i].w, fg, v, true);
+		}
+		if (wd_cexp_drain(hw, 4096) || wd_blt_wait(hw))
+			return -1;
+		for (r = 0; r <= t[i].h; r++)
+			for (c = 0; c < (unsigned int)t[i].w + 4; c++) {
+				u32 a = dst + r * pitch + t[i].x + c - 2;
+				int x = (int)c - 2;
+				u8 want = fill, got;
+
+				if (r < t[i].h && x >= 0 && x < t[i].w)
+					want = wd_cexp_pat(i, r, x) ? fg :
+						t[i].trans ? fill : bg;
+				wd_set_bank(hw, a >> 12);
+				got = wd_win_readb(hw, a & 0xfff);
+				if (got != want && !bad++ && why && n)
+					snprintf(why, n, "case %u (w=%u%s) row %u col %d: %02x not %02x",
+						 i, t[i].w, t[i].trans ? " transparent" : "",
+						 r, x, got, want);
+			}
+	}
+	hw->bank = -1;
+	wd_set_bank(hw, 0);
+	return bad;
+}

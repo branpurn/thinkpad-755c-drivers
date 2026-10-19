@@ -158,12 +158,11 @@ Attach an external VGA monitor for the CRT items.
   bit re-applied).
 - [ ] `rmmod snd_pcm_oss snd_ad1848 snd_wss_lib` succeeds.
 
-## 2b. Hardware cursor probe (wd90c24fb.hwcursor, off by default)
+## 2b. Hardware cursor probe (wd90c24fb.hwcursor, on by default)
 
 On the framebuffer console, no X running:
 
     P=/sys/module/wd90c24fb/parameters
-    echo 1 > $P/hwcursor
     cat $P/cursor_test        # registers 0-8; 0= is 020 or 000 (cursor off)
     echo 1 > $P/cursor_test   # white arrow, black outline, tip at the centre
     cat $P/cursor_test        # expect 0=820 1=000 2=014 3=00f 4=000 5=000 6=140 7=0f0
@@ -172,10 +171,22 @@ On the framebuffer console, no X running:
     echo 0 > $P/cursor_test   # gone
 
 If the arrow is shifted, set `hwc_xoff`/`hwc_yoff` by the error and repeat.
-Garbage instead of an arrow, or nothing: report the `cat` output and leave
-hwcursor=0. Then `startx`: /tmp/Xfbdev.log says "wd90c24fb: hardware
+Garbage instead of an arrow, or nothing: report the `cat` output and boot
+with `wd90c24fb.hwcursor=0`. Then `startx`: /tmp/Xfbdev.log says "wd90c24fb: hardware
 cursor" and the X pointer moves without trails; `stats` shows `cursor=`
 rising. `TC32X_SOFTCURSOR=1 startx` gives the old software cursor.
+
+## 2c. Colour expansion (wd90c24fb.cexp, on by default)
+
+    dmesg | grep -i "colour expansion"
+    cat $P/cexp_test          # per-variant PASS/FAIL, timings, best var
+    echo 1 > $P/cexp_test; cat $P/cexp_test   # re-run any time
+    grep -o "cexp=[^ ]* cexp_px=[^ ]* cexp_words=[^ ]* cexp_var=[^ ]*" $P/stats
+
+Expected: at least one `PASS` line, "colour expansion on: var N" in dmesg,
+`cexp_var=N` (not -1) and `cexp=` rising while rxvt prints text. If dmesg
+says "not faster", `wd90c24fb.cexp=2` forces it on for a comparison. Text
+with wrong pixels: boot with `wd90c24fb.cexp=0` and send the report.
 
 ## 3. TrackPoint (trackpoint.tcz)
 - [ ] `/dev/input/mice` appears; `hexdump -C /dev/input/mice`

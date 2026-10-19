@@ -485,6 +485,40 @@ static void test_cursor(void)
 	CHECK(M.vram[0x50000 - 2] == pat[0] && M.vram[0x50001] == pat[3], "M.vram[0x50000 - 2] == pat[0] && M.vram[");
 }
 
+static void t_cexp(void)
+{
+	struct wd_ext_state bios, ext;
+	struct wd_std std;
+	struct wd_hw hw;
+	char why[96];
+	int v, want, pass;
+
+	CHECK(wd_cexp_words(37, 0) == 10 && wd_cexp_words(37, 1) == 10 &&
+	      wd_cexp_words(13, 1) == 4 && wd_cexp_words(16, 8) == 1 &&
+	      wd_cexp_words(17, 9) == 2, "word counts");
+	for (want = 0; want < WD_CEXP_VARIANTS; want++) {
+		mock_reset(M_C24A);
+		wd_probe(&hw);
+		wd_save_ext(&hw, &bios);
+		wd_mode_640x480x8(&hw, &bios, &std, &ext);
+		wd_set_mode(&hw, &std, &ext);
+		M.cexp_var = want;
+		pass = -1;
+		for (v = WD_CEXP_VARIANTS - 1; v >= 0; v--) {
+			int bad = wd_cexp_probe(&hw, v, why, sizeof(why));
+
+			CHECK(bad >= 0, "variant %d hung on chip variant %d", v, want);
+			if (!bad && pass < 0)
+				pass = v;
+		}
+		/* a doubleword-padded chip also passes the word-padded probe
+		 * when rows need an even number of words; never the reverse */
+		CHECK(pass == want || pass == (want | 1), "chip %d: probe picked %d", want, pass);
+		CHECK(!wd_cexp_probe(&hw, want, why, sizeof(why)), "chip %d own variant: %s", want, why);
+		CHECK(M.hm_stray == 0, "chip %d: %u port writes with no expansion running", want, M.hm_stray);
+	}
+}
+
 int main(void)
 {
 	t_probe_kinds();
@@ -499,6 +533,7 @@ int main(void)
 	t_panel();
 	t_suspend_cycle();
 	test_cursor();
+	t_cexp();
 	printf("wd90c24 unit tests: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;
 }

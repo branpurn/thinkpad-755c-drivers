@@ -202,6 +202,11 @@ static void mock_blt_run(void)
 	if (M.blt_busy_left)
 		M.blt_started_while_busy++;
 	M.blt_ops++;
+	if ((c1 & 0x000f) == 0x000e) {	/* mono from host: wait for data */
+		M.hm_on = true;
+		M.hm_r = M.hm_x = M.hm_words = 0;
+		return;
+	}
 	for (r = 0; r < h; r++)
 		for (x = 0; x < w; x++) {
 			u32 so = (src + dir * (int)(r * pitch + x)) & 0xfffff;
@@ -234,6 +239,8 @@ u16 wd_inw(u16 p)
 		if (blk == 1) {
 			u8 idx = (M.ext_index >> 8) & 0x0f;
 
+			if (idx == 0 && M.hm_on)
+				return M.blt[0] | 0x0800;
 			if (idx == 0 && (M.blt[0] & 0x0800) && !M.blt_stuck) {
 				if (M.blt_busy_left)
 					M.blt_busy_left--;
@@ -247,8 +254,46 @@ u16 wd_inw(u16 p)
 	return 0xffff;
 }
 
+static void mock_hm_word(u16 v)
+{
+	u32 dst = M.blt[4] | (u32)M.blt[5] << 12, w = M.blt[6], h = M.blt[7];
+	u32 pitch = M.blt[8], ppw = 4u << (M.cexp_var >> 2), k, words;
+	bool lsb = M.cexp_var & 2, trans = M.blt[1] & 0x0008;
+
+	if (!M.hm_on) {
+		M.hm_stray++;
+		return;
+	}
+	words = (w + ppw - 1) / ppw;
+	if (M.cexp_var & 1)
+		words = (words + 1) & ~1u;
+	for (k = 0; k < ppw; k++, M.hm_x++) {
+		bool bit = lsb ? (v >> k) & 1 : (v >> (ppw - 1 - k)) & 1;
+		u32 d = (dst + M.hm_r * pitch + M.hm_x) & 0xfffff;
+
+		if (M.hm_x >= w)
+			continue;
+		if (bit)
+			M.vram[d] = M.blt[10] & 0xff;
+		else if (!trans)
+			M.vram[d] = M.blt[11] & 0xff;
+	}
+	if (++M.hm_words == words) {
+		M.hm_words = M.hm_x = 0;
+		if (++M.hm_r == h) {
+			M.hm_on = false;
+			M.blt[0] &= ~0x0800;
+		}
+	}
+}
+
 void wd_outw(u16 v, u16 p)
 {
+	if (p == 0x23c4) {
+		if (has_ext())
+			mock_hm_word(v);
+		return;
+	}
 	if (p == 0x23c0 || p == 0x23c2)
 		M.ext_port_writes++;
 	if (!has_ext())
