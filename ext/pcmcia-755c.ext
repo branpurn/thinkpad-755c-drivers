@@ -1,0 +1,9 @@
+DESC="PC Card on the 755C: core + i82365 (0x3E0, 2 sockets) + CF/ATA (pata_pcmcia) + serial/modem (serial_cs); sets the ISA socket resources at load"
+MODS="i82365 pcmcia pata_pcmcia serial_cs"
+OPTIONAL=1
+QUIET=1
+# No PCI, so nothing hands the sockets their I/O and memory windows: the
+# hook does it (see the file). Boot with e.g. i82365.irq_list=3,5 to
+# override the driver's IRQ scan.
+HOOK=pcmcia-755c.hook
+DEPS="modutils.tcz"

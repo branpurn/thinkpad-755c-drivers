@@ -1,0 +1,33 @@
+# pcmcia-755c.tcz: socket resources, appended to the generated
+# /usr/local/tce.installed/pcmcia-755c by scripts/mktcz.sh (runs after the
+# module loads, sees $rc).
+#
+# On PCI systems pcmcia_rsrc takes the windows from the bridge's parent
+# bus. Without PCI (ISA i82365) every card stays at "no resources
+# available, delaying card_add" until user space (pcmciautils on full
+# distributions) lists free I/O and memory ranges per socket and writes
+# available_resources_setup_done. These are pcmciautils' config.opts
+# defaults; pcmcia_rsrc probes each range and drops what is in use
+# (on the 755C it excludes the BIOS at 0xf0000-0xfffff by itself).
+# Idempotent: a socket that already says "yes" is left alone, so the script
+# can be re-run by hand. One console line, as with the other hooks.
+IO="0x100-0x3af 0x3e8-0x4ff 0x820-0x8ff 0xc00-0xcf7 0xa00-0xaff"
+MEM="0xc0000-0xfffff"
+n=0 cards=""
+for s in /sys/class/pcmcia_socket/pcmcia_socket*; do
+    [ -d "$s" ] || continue
+    n=$((n + 1))
+    if [ "$(cat "$s/available_resources_setup_done")" != yes ]; then
+        for r in $IO; do echo "${r%-*} - ${r#*-}" > "$s/available_resources_io" || rc=1; done
+        for r in $MEM; do echo "${r%-*} - ${r#*-}" > "$s/available_resources_mem" || rc=1; done
+        echo 1 > "$s/available_resources_setup_done" || rc=1
+    fi
+    cat "$s/card_type" >/dev/null 2>&1 && cards="$cards ${s##*socket}"
+done
+if [ $n -eq 0 ]; then
+    echo "pcmcia-755c: no PC Card socket (i82365 found no bridge, see dmesg)"
+elif [ "$rc" -ne 0 ]; then
+    echo "pcmcia-755c: $n socket(s), errors above (see dmesg)"
+else
+    echo "pcmcia-755c: $n socket(s) ready, card in:${cards:- none}"
+fi

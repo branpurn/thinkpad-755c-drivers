@@ -26,7 +26,7 @@ Legend for **Linux status**:
 | RAM | 4 MB on board, parity; IC DRAM card or DIMM card adapter, **max 36 MB** | | core | | [1][3] |
 | Video | **WD90C24A** or **WD90C24A2** (Paradise), VL-bus 2.0, 1 MB DRAM; 10.4" TFT 640x480x8 (755C) / 9.5" DSTN (755CS); CRT up to 1024x768x8 | VGA ports 0x3C0-0x3DF, A0000 window; **video BIOS at E0000** (not C0000); **no VBE** in the video BIOS | **core**: vgacon text. **existing**: `vga16fb` 640x480x4bpp (+ fbcon). **new**: native WD90C24A fbdev (8 bpp, panel/CRT, BitBLT) | `fb-vga16.tcz` (now), `wd90c24-probe.tcz` (stage 0 of native) | vesafb/uvesafb impossible (no VBE BIOS; vesafb is also `bool`). Linux never had a WD90C2x fbdev; XFree86 3.3.x SVGA server's `wd90c24` support never made it to 4.x [4][5][6][7] |
 | Audio | **Crystal CS4248** (AD1848-compatible WSS codec, 16-bit 48 kHz). **No OPL FM, no MPU-401, no game port** (SB/AdLib were DOS TSR emulation) | default I/O **0x4E30** (alt 0x0030/0x8E30/0xCE30), **IRQ 10** (alt 5/11/15), DMA 0 play / DMA 1 capture; power control via ThinkPad port **0x15E8/0x15E9** bit 2 | **existing**: `snd-ad1848` with `thinkpad=1` (that exact case is in mainline `wss_lib`) | `snd-cs4248.tcz` | `snd_ad1848 port=0x4e30 irq=10 dma1=0 thinkpad=1`. ad1848 driver is single-DMA (half-duplex) [5][8] |
-| PC Card | **2x Ricoh RF5C266** (one per slot), Intel 82365SL ExCA register-compatible, ISA. 2x Type II or 1x Type III, PCMCIA 2.1, 16-bit only (no CardBus) | index/data 0x3E0/0x3E1 (dock: 0x3E2/0x3E3) | **existing** in 6.18: `i82365` + `pcmcia` + card drivers. **Removed from mainline in 7.1** (i82365, tcic, i82092) | `pcmcia.tcz` (core + i82365 + `pata_pcmcia` CF/ATA + `serial_cs` modem) | NIC cards need `CONFIG_NET` (bool, large: see ROADMAP). Ricoh RF5C266 Rev. A cannot use C0000/D0000 windows [9][10][11] |
+| PC Card | **2x Ricoh RF5C266** (one per slot), Intel 82365SL ExCA register-compatible, ISA. 2x Type II or 1x Type III, PCMCIA 2.1, 16-bit only (no CardBus) | index/data 0x3E0/0x3E1 (dock: 0x3E2/0x3E3) | **existing** in 6.18: `i82365` + `pcmcia` + card drivers. **Removed from mainline in 7.1** (i82365, tcic, i82092) | `pcmcia-755c.tcz` (core + i82365 + `pata_pcmcia` CF/ATA + `serial_cs` modem + socket-resource hook) | **Verified**: probes as "Intel i82365sl B step", 2 sockets at 0x3E0. NIC cards need `CONFIG_NET` (bool, large: see ROADMAP). Ricoh RF5C266 Rev. A is said not to use C0000/D0000 windows [9][10][11]; a D0000 window worked on the unit tested |
 | IDE | internal 2.5" IDE on the system board (legacy ports, PIO) | 0x1F0-0x1F7, 0x3F6, IRQ 14 | **core** `pata_legacy` | floppy | old drivers/ide removed in 5.14; libata `pata_legacy` is the only ISA path [12] |
 | Floppy | internal 3.5" 1.44 MB, 82077-class FDC | 0x3F0, IRQ 6, DMA 2 | **core** `floppy` | floppy | ThinkPads invert the disk-change line: kernel option **`floppy=thinkpad`** is documented for this [5][13] |
 | Keyboard | 85-key, i8042-compatible controller; Fn keys handled by BIOS/EC | 0x60/0x64, IRQ 1 | **core** `atkbd` + `i8042` | floppy | Fn combos (battery info, blank, suspend, volume, display switch, invert, power mode, hibernate) are firmware functions [14] |
@@ -97,8 +97,49 @@ Legend for **Linux status**:
   755CD/CE/CSE/CV/CX used three IBM "Zipang" [9][10]. The ThinkPad
   controller is always at 0x3E0-0x3E1, docks at 0x3E2-0x3E3 [9].
 * Linux `i82365` drives 82365-compatible ExCA bridges and knows the Ricoh
-  RF5C296/396 family; the RF5C266 is expected to probe as an 82365SL-class
-  (or Ricoh) socket. To verify on hardware.
+  RF5C296/396 family. The RF5C266 has no Ricoh extension registers the
+  driver checks, so it probes as a plain 82365SL (verified, below).
+
+### Verified on a 755C (kernel 6.18.57-tc755x, pcmcia-755c.tcz)
+
+* dmesg: `Intel i82365sl B step ISA-to-PCMCIA at port 0x3e0 ofs 0x00, 2
+  sockets`; ISA IRQs scanned 3, 5, 7, 9, 11, 15; card status change on
+  IRQ 15. Both slots are one controller (one index/data pair).
+* Card in slot 0 (a CompactFlash card in a passive PC Card adapter): memory
+  probe of 0xd0000-0xdffff clean, card IRQ 3, `pata_pcmcia` makes it
+  `ata2` (PIO0, cmd 0x110, ctl 0x11e). An 8 GB CFA card (15625216 sectors)
+  shows up as the next `sdX`; its FAT32 partition mounts.
+* The default resource ranges below just worked; `pcmcia_rsrc`'s own probe
+  dropped the BIOS area 0xf0000-0xfffff.
+* **Load order** (what `/usr/local/tce.installed/pcmcia-755c` does, from
+  `modinfo` dependencies): `pcmcia_core`, `pcmcia_rsrc`, `i82365`,
+  `firmware_class`, `pcmcia`, `pata_pcmcia`, `serial_cs`.
+* **Socket resources are mandatory without PCI.** On PCI systems
+  `pcmcia_rsrc` takes windows from the bridge's bus
+  (`nonstatic_autoadd_resources` is PCI-only); on the ISA 755C every card
+  waits at `no resources available, delaying card_add` until user space
+  writes, for each `/sys/class/pcmcia_socket/pcmcia_socketN`:
+  ```sh
+  for r in "0x100 - 0x3af" "0x3e8 - 0x4ff" "0x820 - 0x8ff" "0xc00 - 0xcf7" "0xa00 - 0xaff"; do
+      echo "$r" > available_resources_io; done
+  echo "0xc0000 - 0xfffff" > available_resources_mem
+  echo 1 > available_resources_setup_done
+  ```
+  (pcmciautils' `config.opts` defaults; `ext/pcmcia-755c.hook`). The hook
+  skips a socket that already reads `yes`, so it can be re-run by hand,
+  and prints one line, e.g. `pcmcia-755c: 2 socket(s) ready, card in: 0`.
+* **Kernel side:** the tc755 kernel config already has `PCCARD`,
+  `PCMCIA`, `I82365`, `PATA_PCMCIA`, `SERIAL_8250_CS` as modules, so
+  the `.tcz` loads into an existing `vmlinuz.x`. Modules need only the
+  same vermagic (`6.18.57-tc755x mod_unload 486`; `MODVERSIONS` is off):
+  a rebuilt `.tcz` loaded into a kernel whose image hash differed from the
+  rebuild. **`TRIM_UNUSED_KSYMS`** keeps only the exports that the
+  in-tree modules of the same build use (plus `config/ksyms-keep.txt`):
+  a module that was not built with the kernel can fail with unknown
+  symbols. `tcic` (Databook TCIC-2, not in the 755C) needs
+  `platform_device_register`, which this kernel does not export, so it
+  needs a kernel rebuild. `pd6729` (Cirrus PD6729) is a PCI driver and
+  cannot be built without `CONFIG_PCI`.
 * **Mainline removal timeline:** PCMCIA char drivers (cm4000/cm4040/scr24x/
   synclink_cs) removed in 2023 [21]; the ISA host controllers
   **i82365, tcic** and the PCI i82092 removed in **7.1** [22][23]. 7.1 is

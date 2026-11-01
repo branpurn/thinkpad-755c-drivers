@@ -199,11 +199,13 @@ with wrong pixels: boot with `wd90c24fb.cexp=0` and send the report.
   record which. External PS/2 mouse: same test.
 - [ ] Still works after suspend/resume.
 
-## 4. PC Card (pcmcia.tcz)
-- [ ] `tce-load -i pcmcia.tcz`: i82365 finds two Ricoh RF5C266 sockets at
-  0x3E0; dmesg shows the socket count and IRQ probing.
-- [ ] CF card in a PC Card adapter: `pata_pcmcia` binds, `/dev/sdb` (or
-  next) appears, `mount` and read a file.
+## 4. PC Card (pcmcia-755c.tcz)
+- [x] `tce-load -i pcmcia-755c.tcz`: i82365 finds two sockets at 0x3E0
+  ("Intel i82365sl B step", 2 sockets, IRQs 3,5,7,9,11,15 scanned, status
+  change IRQ 15). Results: [HARDWARE.md](HARDWARE.md#verified-on-a-755c-kernel-61857-tc755x-pcmcia-755ctcz).
+- [x] CF card in a PC Card adapter: `pata_pcmcia` binds (ata2, PIO0,
+  IRQ 3), the card appears as the next `sdX`, FAT32 mounts read-only and
+  reads. Needed the socket resources the hook now sets.
 - [ ] Modem/serial card (if available): `serial_cs` binds, `/dev/ttyS1`.
 - [ ] Hot eject and re-insert: no oops, device comes back.
 - [ ] After suspend/resume with a card inserted.
