@@ -59,10 +59,10 @@ over serial console (see docs/EMULATORS.md).
 
 | item | .ko | .tcz | resident | status |
 |---|---|---|---|---|
-| `pcmcia_core` + `pcmcia_rsrc` + `i82365` + `pcmcia` (ds) | 17+12+20+37 K | `pcmcia.tcz` **48 KiB** (incl. below) | ~104 KiB (all 7) | built; QEMU has no bridge: core loads, i82365 reports no device |
-| `pata_pcmcia`: CompactFlash/ATA cards as a `tce=` disk or root, the cheapest storage upgrade | 18 K | (in pcmcia.tcz) | | built |
-| `serial_cs`: PC Card modems / serial | 35 K | (in pcmcia.tcz) | | built |
-| userspace: none needed for 16-bit cards on 6.18 (CIS parsed in kernel, `PCMCIA_LOAD_CIS` uses firmware loader only for broken CIS) | | | | |
+| `pcmcia_core` + `pcmcia_rsrc` + `i82365` + `pcmcia` (ds) | 17+12+20+37 K | `pcmcia-755c.tcz` **48 KiB** (incl. below) | ~104 KiB (all 7) | **done**: real 755C, i82365 finds 2 sockets at 0x3E0. QEMU has no bridge: core loads, i82365 reports no device |
+| `pata_pcmcia`: CompactFlash/ATA cards as a `tce=` disk or root, the cheapest storage upgrade | 18 K | (in pcmcia-755c.tcz) | | **done**: an 8 GB CF card reads and mounts on the 755C |
+| `serial_cs`: PC Card modems / serial | 35 K | (in pcmcia-755c.tcz) | | built, no card tried |
+| userspace: the CIS is parsed in the kernel (no cardmgr), but **socket resources are not**: without PCI nothing gives the ISA sockets I/O and memory windows, and every card waits at "no resources available, delaying card_add". The `.tcz` hook writes pcmciautils' defaults to `available_resources_{io,mem,setup_done}` (no pcmciautils needed) | | (hook in pcmcia-755c.tcz) | | **done** |
 | **networking (NE2000-class `pcnet_cs`, 3c589, xirc2ps, smc91c92)** needs `CONFIG_NET` + `INET` + `NETDEVICES` in the **core** (bool, cannot be a module): est. **+250-350 KiB** compressed. Does **not** fit the 151 KiB left on the floppy | | | 1-2 MB | blocked on a core decision (open question) |
 | out-of-tree copy of `i82365.c` in case the core ever moves past 7.0 (removed in 7.1) | | | | only if needed |
 
@@ -92,4 +92,4 @@ over serial console (see docs/EMULATORS.md).
 27 modules, **516 KiB resident**; MemFree 24.4 MB → 19.3 MB (includes
 page cache and 7 loop devices). Same run at **16 MB**: MemFree 8.2 MB →
 2.8 MB, every check still passes. Realistic 755C set (fb + sound +
-trackpoint + pcmcia) ≈ 470 KiB resident.
+trackpoint + pcmcia-755c) ≈ 470 KiB resident.

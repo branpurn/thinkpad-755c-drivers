@@ -289,9 +289,10 @@ def main():
         check("snd-cs4231.tcz: snd-cs4231 binds QEMU cs4231a", rc == 0 and "CS4231" in o2.upper(), " ".join(o2.split()))
         play("snd-cs4231")
 
-        o, rc, mods = tce("pcmcia")
-        check("pcmcia.tcz: core modules load; i82365 finds no bridge in QEMU (expected)",
-              "pcmcia_core" in mods and "pcmcia" in mods and "i82365" not in mods,
+        o, rc, mods = tce("pcmcia-755c")
+        check("pcmcia-755c.tcz: core modules load; i82365 finds no bridge in QEMU (expected), hook says so",
+              "pcmcia_core" in mods and "pcmcia" in mods and "i82365" not in mods
+              and "pcmcia-755c: no PC Card socket" in o,
               " | ".join(l.strip() for l in o.strip().splitlines()[-5:]))
 
         # APM: SeaBIOS answers APM 1.2; a suspend request returns at once,
