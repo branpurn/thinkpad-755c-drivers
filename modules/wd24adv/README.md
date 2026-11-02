@@ -14,8 +14,9 @@ Doom), direct mapping and, later, page flipping on the **internal panel only**.
   do. No port is touched.
 - **Live only with `dryrun=0 live=1`** (both; either alone is refused). The
   live backend (`wd24adv_port.c`) executes the *same* plan code on the real
-  ports; see "Live backend" below. **It has never run on a 755C.** The first
-  live test needs the owner's explicit approval and follows
+  ports; see "Live backend" below. On the 755C it has run load, unload and
+  `640x480-8` with trial auto-revert (PROVEN live, 2026-11-02); each live
+  step needs the owner's explicit approval and follows
   [`docs/WD24ADV-LIVE-TEST.md`](../../docs/WD24ADV-LIVE-TEST.md).
 - **There is no panel/CRT routing at all.** The scaffold's routing and panel
   power sequences were deleted. `allow_routing` and `allow_crt` are refused
@@ -188,7 +189,7 @@ No vendor code or disassembly is reproduced here.
 
 | mode | status | writes | standard VGA part | extended part | evidence |
 |---|---|---|---|---|---|
-| 640x480x8, banked | **PROVEN** | 88 | `wd90c24fb` `wd_mode_640x480x8` values | the `wd90c24fb` packed-8 ext set (PR0A=0, then SR06 restored) | The running `wd90c24fb` mode: live 3CC=E3, GR0F=05, GR0E=01, CR11=8C, CR29=85, SR11=5D, SR31=0D, SR06=0F, with the panel fine. `xcheck` matches `wd90c24fb` write for write. |
+| 640x480x8, banked | **PROVEN** | 88 | `wd90c24fb` `wd_mode_640x480x8` values | the `wd90c24fb` packed-8 ext set (PR0A=0, then SR06 restored) | The running `wd90c24fb` mode: live 3CC=E3, GR0F=05, GR0E=01, CR11=8C, CR29=85, SR11=5D, SR31=0D, SR06=0F, with the panel fine. `xcheck` matches `wd90c24fb` write for write. **Seen live with wd24adv** (ccfb5a9: full-frame bars, 93/263, revert 896/336, 0 mismatches). |
 | 640x400x8, banked | **PROVEN** | 88 | 640x480 horizontals + standard VGA 400-line verticals (MISC 63, CR06 BF, CR07 1F, CR10 9C, CR11 8E, CR12 8F, CR15 96, CR16 B9) | same as 640x480 | Listed on the panel in the vendor driver's VESA list. Centred via the existing PR19=54h. Not yet seen live. |
 | 320x200x8 (13h), direct A0000 | **PROVEN** | 91 | standard VGA mode 13h set (chain-4, AR10=41, CR09=41 doublescan, CR14=40, CR17=A3) | the BIOS text-mode ext block, as the `wd90c24fb` text restore writes it | The vbios trace shows mode 13h programs only standard VGA registers. The ext values are the BIOS ones `wd90c24fb` restores on exit. This is the Doom fast path. Not yet seen live. |
 | 320x240x8 Mode X | UNPROVEN | 0 | – | – | Unchained 480-line verticals on the panel never observed; disabled. |
