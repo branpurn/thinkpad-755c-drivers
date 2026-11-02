@@ -146,8 +146,14 @@ static void memw(void *priv, u32 off, u8 v)
 
 	m->mem_writes++;
 	if (m->sr[4] & 0x08) {		/* chain 4 */
-		if (m->sr[2] & (1 << (off & 3)))
-			m->vram[off & 3][(off >> 2) & 0xffff] = v;
+		u32 lin = ((m->gr[0x09] & 0x7f) << 12) + (off & 0xffff);
+
+		if (m->sr[2] & (1 << (lin & 3))) {
+			if (lin >> 18)
+				m->vram_hi[lin & 3][(lin >> 2) & 0xffff] = v;
+			else
+				m->vram[lin & 3][lin >> 2] = v;
+		}
 		return;
 	}
 	for (p = 0; p < 4; p++) {	/* write mode 0 (all wd24adv uses) */
@@ -174,8 +180,12 @@ static u8 memr(void *priv, u32 off)
 	struct vgamodel *m = priv;
 	int p;
 
-	if (m->sr[4] & 0x08)
-		return m->vram[off & 3][(off >> 2) & 0xffff];
+	if (m->sr[4] & 0x08) {
+		u32 lin = ((m->gr[0x09] & 0x7f) << 12) + (off & 0xffff);
+
+		return lin >> 18 ? m->vram_hi[lin & 3][(lin >> 2) & 0xffff]
+				 : m->vram[lin & 3][lin >> 2];
+	}
 	for (p = 0; p < 4; p++)
 		m->latch[p] = m->vram[p][off & 0xffff];
 	return m->latch[m->gr[4] & 3];

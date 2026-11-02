@@ -200,6 +200,31 @@ int main(void)
 	memcpy(m.vram[2], snap.vram[2], WD24_PLANE);
 	T(vm_cmp(&m, &snap, "ro plane") == 0, "plane 2 not restored: everything else restored");
 
+	/* 7. pattern covers the whole 640x480 frame (banks 0-4, 300 KiB): every
+	 * packed pixel (scanout: linear L = plane L&3, offset L>>2) is a bar,
+	 * order reversed from 256 KiB; PR0A back to 0; trial revert identical */
+	setup(VM_WD24, 60);
+	RUN(wd24_plan_load(&c));
+	RUN(wd24_plan_mode(&c, m480));
+	err = RUN(wd24_pattern(&c, m480));
+	{
+		u32 L, bad = 0;
+
+		for (L = 0; L < 640 * 480; L++) {
+			u32 b = (L % 640) / 40;
+			u8 want = c.vga.attr[L >> 18 ? 15 - b : b] & 0x3f;
+			u8 got = L >> 18 ? m.vram_hi[L & 3][(L >> 2) & 0xffff]
+					 : m.vram[L & 3][L >> 2];
+
+			bad += got != want;
+		}
+		T(err == 0 && bad == 0 && c.nmismatch == 0, "pattern: all 480 lines drawn, no stale pixel");
+		T(m.gr[0x09] == 0x00, "pattern: PR0A back to bank 0");
+	}
+	err = RUN(wd24_trial_expire(&c));
+	T(err == 0 && vm_cmp(&m, &snap, "full-frame pattern revert") == 0,
+	  "full-frame pattern: trial revert leaves the model identical");
+
 	printf("wd24adv vga model test: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;
 }

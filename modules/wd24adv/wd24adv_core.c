@@ -1006,24 +1006,49 @@ int wd24_plan_text(struct wd24_ctx *c)
 /*
  * Optional test picture after a packed mode set: 16 vertical bars, 40
  * pixels wide, in the 16 text colours (the DAC is still the BIOS text DAC;
- * pixel values are the BIOS mode 03h AR00-0F entries), first 64 KiB of the
- * frame (bank 0, 102 lines at 640 bytes per line).  Write-only.
+ * pixel values are the BIOS mode 03h AR00-0F entries), over the WHOLE
+ * frame (xres * yres bytes), one 64 KiB PR0A bank at a time, so no stale
+ * video memory (e.g. wd90c24fb's last fbcon frame) is ever shown.  From
+ * 256 KiB on (the part of the frame outside the 4 x 64 KiB planar window
+ * that text mode, vgastate and wd24adv's save/restore can reach) the bar
+ * order is reversed: a correct picture shows reversed bars in the bottom
+ * lines, a CRTC wrap at 256 KiB would show normal-order bars there.
+ * Write-only; PR0A is left at bank 0 (as mode_steps() set it).
+ * Video memory at and above 256 KiB is not saved/restored (not visible
+ * in text mode).
  */
 int wd24_pattern(struct wd24_ctx *c, const struct wd24_mode *m)
 {
-	static u8 line[640];
-	u32 y, x, lines;
+	static u8 line[2][640];
+	u32 x, size, bank, L, end;
 
-	if (m->ext != WD24_EXT_PACKED8 || c->in_text)
+	if (m->ext != WD24_EXT_PACKED8 || c->in_text || m->xres > sizeof(line[0]))
 		return -EINVAL;
-	for (x = 0; x < m->xres && x < sizeof(line); x++)
-		line[x] = c->vga.attr[(x / 40) & 15] & 0x3f;
-	lines = WD24_PLANE / m->xres;
-	if (c->be->mem_write)
-		for (y = 0; y < lines; y++)
-			c->be->mem_write(c, y * m->xres, line, m->xres);
-	ev_bulk(c, 0, c->be->mem_write ? "pattern: 16 colour bars, bank 0 (first 64 KiB)"
-				      : "pattern: (dry-run: memory not written)");
+	for (x = 0; x < m->xres; x++) {
+		line[0][x] = c->vga.attr[(x / 40) & 15] & 0x3f;
+		line[1][x] = c->vga.attr[15 - ((x / 40) & 15)] & 0x3f;
+	}
+	size = m->xres * m->yres;
+	if (!c->be->mem_write) {
+		ev_bulk(c, 0, "pattern: (dry-run: memory not written)");
+		return 0;
+	}
+	c->tag = "pattern: PR0A bank per 64 KiB";
+	for (bank = 0; bank * WD24_PLANE < size; bank++) {
+		TRY(wd24_write(c, WD24_GR, WD24_GR_PR0A, bank * (WD24_PLANE >> 12)));
+		end = (bank + 1) * WD24_PLANE < size ? (bank + 1) * WD24_PLANE : size;
+		for (L = bank * WD24_PLANE; L < end; ) {
+			u32 x0 = L % m->xres, n = m->xres - x0;
+
+			if (n > end - L)
+				n = end - L;
+			c->be->mem_write(c, L - bank * WD24_PLANE,
+					 line[L >= 4 * WD24_PLANE] + x0, n);
+			L += n;
+		}
+	}
+	TRY(wd24_write(c, WD24_GR, WD24_GR_PR0A, 0x00));
+	ev_bulk(c, 0, "pattern: 16 colour bars, whole frame (banks 0-4), reversed from 256 KiB");
 	return 0;
 }
 

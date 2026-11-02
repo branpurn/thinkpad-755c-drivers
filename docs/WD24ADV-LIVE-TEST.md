@@ -1,7 +1,8 @@
-# wd24adv: first live test plan (NOT DONE)
+# wd24adv: first live test plan (steps 1-5 done live, 2026-11-02)
 
-Status: **never run on a 755C.** Everything below is a plan. It needs the
-owner's explicit approval before step 3. The live backend has been tested
+Status: steps 1-5 (load, unload, one `640x480-8` trial with auto-revert)
+have run on the 755C, twice for step 5; steps 6-8 have not. Each live step
+needs the owner's explicit approval. The live backend has been tested
 only against a host port model (`make wd24adv-test`) and against QEMU's
 standard VGA, where it is refused by the entry check with zero data writes
 (`make wd24adv-qemu`). QEMU has no WD90C24, so no live mode set has ever
@@ -42,16 +43,44 @@ First attempt at steps 1-3 (load only, no mode command):
   self-test and the port-model round trip from 3CC=67 GR0F=00 GR0E=40
   CR11=AE CR29=85). **H**
 
-Still not verified in the text state: the SR06 3C4 index-width "locked"
-test and AR10 b0 = 0 (the refusal came before both). They stay strict.
+Retry with the fix (301080b), steps 3-4: entry check passed in this text
+state, including the SR06 3C4 index-width "locked" test and AR10 b0 = 0;
+`live load: 0 (port data writes 46, index writes 224, mismatches 0)`
+(= model); rmmod `live text: 0`, 0 mismatches; wd24probe3 header
+identical before/after. **L**
+
+Step 5, twice (17:35 and 17:49 UTC; the second time watched on the panel):
+- `live mode 640x480-8: 0 (port data writes 87, index writes 251,
+  mismatches 0)`: exactly the host model's counts. **L**
+- `live trial expiry: 0 (port data writes 896, index writes 336,
+  mismatches 0)` after 15 s, no confirm; rmmod `live text: 0 (896, 336,
+  0)`; 3CC/GR0F/GR0E/SR06/CR11/CR29 and indexes identical before/after;
+  the normal text console came back by itself. **L**
+- Panel: 16 colour bars over the top ~1/5 (the pattern fills only bank 0:
+  65280 bytes = 102 lines), so chain-4 + doubleword scan-out, CR13 pitch
+  640, start address 0 and the 8-bit PEL path are as modelled. **L**
+- Below the bars: the old wd90c24fb fbcon picture (stale video memory,
+  not text-mode data), mostly legible. Lines up to ~409 lie in the 4 x 64
+  KiB planar window; wd90c24fb's unload `restore_vga()` rewrote plane 3
+  offsets 0-64K, plane 2 0-32K and plane 1 16K-24K there, i.e. every
+  4th pixel column (x mod 4 = 3, and = 2 / = 1 in part of it), which
+  explains "mostly". The bottom ~1/5 of that text (from about line 410 =
+  linear 256 KiB, which no text-mode, vgastate or wd24adv access can
+  reach) was garbled: the owner saw it as **shifted text**, and there
+  were **no bars at the bottom** (so the CRTC did not wrap to 0 at
+  256 KiB). Shifted text suggests stale fbcon content (e.g. from an
+  earlier scroll position) rather than lost memory; the cause is **U**
+  (not a write by any of this code). The full-frame pattern below tests
+  it: reversed bars from ~line 410 down mean that memory is addressed and
+  scanned out correctly.
 
 ## Prerequisites
 
 | # | step | evidence | risk |
 |---|---|---|---|
-| P1 | Build from the `wd24adv` branch; `make wd24adv-test` (92 + 18 + 52) and `make wd24adv-qemu` (26/26) pass. | H, Q | none |
+| P1 | Build from the `wd24adv` branch; `make wd24adv-test` (92 + 18 + 55) and `make wd24adv-qemu` (26/26) pass. | H, Q | none |
 | P2 | Serial cable to a second machine with a capture program at the console's speed; log everything to a file. | – | none |
-| P3 | Serial login on ttyS0 (getty) so the test can be driven while the panel shows graphics. **U**: a serial getty on the 755C image is not verified; if absent, drive from the local keyboard and rely on the trial auto-revert (see "Without serial"). | U | low |
+| P3 | Serial login on ttyS0 (getty) so the test can be driven while the panel shows graphics. A root shell on ttyS0 drove all live steps so far (L). | L | low |
 | P4 | Owner's explicit go-ahead for the live load. | – | – |
 
 ## Steps
@@ -62,7 +91,7 @@ test and AR10 b0 = 0 (the refusal came before both). They stay strict.
 | 2 | If wd90c24fb is loaded: `echo 1 > /sys/module/wd90c24fb/parameters/text`, wait 2 s, `rmmod wd90c24fb`. Check `grep -c wd90c24fb /proc/modules` = 0 and `cat /proc/fb` is empty. Also no vga16fb. | text console back via vgacon | **Q only** (fake=3, `make wd24adv-qemu`); `text=1` on the 755C is **U** (the rmmod restore path itself is what wd90c24fb always runs on unload) | low-medium: if the console does not come back, cold boot and start at step 3 without loading wd90c24fb at all |
 | 3 | `dmesg -n 1; printf '\033[9;0]' > /dev/tty1` (no console blanking), then `insmod wd24adv.ko dryrun=0 live=1; dmesg \| tail -20; cat /proc/wd24adv/live` | `LIVE: text state saved (4 planes, DAC, VGA + ext regs); trial 15 s`, `live load: 0 (port data writes 46, index writes 224, mismatches 0)` (model counts; real counts may differ slightly). The panel may blink once (screen off during the plane copy). If the chip is not in the expected state: `entry check: ...` and `REFUSED by the entry check: no data register written`, insmod fails `No such device` (twice in dmesg: busybox insmod retries). | H (model identical after load); Q (refusal, zero data writes); the load's data writes are value-identical idioms + the vgastate plane-copy sequence that wd90c24fb's load already runs on the 755C (L) | low |
 | 4 | `rmmod wd24adv; dmesg \| tail` | `live text: 0 (... mismatches 0)`; text console unchanged | H | low |
-| 5 | Load again (step 3), then `echo "mode 640x480-8" > /proc/wd24adv/control` and **wait**, typing nothing. | 16 colour bars at the top of the panel for 15 s, then text returns by itself: `live trial expiry: 0`. Redraw the text with `clear` or Alt+F2/Alt+F1 if the screen shows stale content. | H (round trip identical, trial revert); register values identical to wd90c24fb 640x480x8 (xcheck), which runs live (L); the standard-VGA/plane restore on real hardware is **U** | medium |
+| 5 | Load again (step 3), then `echo "mode 640x480-8" > /proc/wd24adv/control` and **wait**, typing nothing. | 16 colour bars over the whole panel for 15 s (from 256 KiB, about line 410 down, in reverse order), `live mode 640x480-8: 0 (port data writes 93, index writes 263, mismatches 0)` (model; 87/251 with the bank-0-only pattern), then text returns by itself: `live trial expiry: 0`. Redraw the text with `clear` or Alt+F2/Alt+F1 if the screen shows stale content. | Bank-0-only pattern (301080b): bars at the top, round trip and revert **L** (2026-11-02, counts = model); full-frame pattern: H only | medium |
 | 6 | `echo "mode 640x480-8" > /proc/wd24adv/control; sleep 3; echo confirm > /proc/wd24adv/control`, look, then `echo text > /proc/wd24adv/control` | bars stay after 15 s; `text` restores; `cat /proc/wd24adv/live` shows `-> 0` | H | medium |
 | 7 | `rmmod wd24adv` | text restored (no-op if already text) | H | low |
 | 8 | Later, separate sessions: `640x400-8`, then `320x200-8` (13h; no pattern, shows whatever is in memory). | centred picture for 15 s, then revert | H only; both never seen live (**U**) | medium |
@@ -107,9 +136,12 @@ The trial brings text back after 15 s. Do not use `confirm` without serial.
   the SR06 latch readbacks are proven live. Others are assumptions; a wrong
   mask shows up as a `MISMATCH` and the plan stops and restores (fail-safe,
   but it would block the test).
-- **SR06 latch** index-width test: from live probes (L); the SR06 value
-  reads 0Fh in the text state after wd90c24fb unloads (L), but the
-  index-width test there is **U** (same check refuses if different).
+- **SR06 latch** index-width test: from live probes (L); passed in the
+  text state after wd90c24fb unloads (L, 301080b load).
+- **Video memory above 256 KiB** (lines ~410-479 at 640x480x8): outside
+  the planar window, so never saved or restored (not visible in text
+  mode). The full-frame pattern overwrites it; it showed garbled stale
+  content in the 301080b test (**U** why).
 - **wd90c24fb `text=1` + rmmod** before the test: QEMU (fake=3) and live
   (L, see "Live observations").
 - **Serial getty**: a root shell on ttyS0 drove the first attempt (L).

@@ -17,6 +17,9 @@ struct vgamodel {
 	bool ar_ff;		/* false: next 3C0 write is an index */
 	u8 pel, dac[768], dac_wi, dac_ri, dac_sub;
 	u8 vram[4][WD24_PLANE];
+	/* plane offsets 64K-128K (linear 256-512 KiB): only reachable through
+	 * PR0A banking in chain-4; not part of vm_cmp (never saved/restored) */
+	u8 vram_hi[4][WD24_PLANE];
 	u8 latch[4];
 	/* fault injection: register that ignores writes and reads 'stuck' */
 	int stuck_rf, stuck_idx;
