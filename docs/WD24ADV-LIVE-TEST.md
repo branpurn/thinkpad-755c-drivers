@@ -5,7 +5,9 @@ have run on the 755C: step 5 three times, the last with the full-frame
 pattern (ccfb5a9), confirmed on the panel by the owner. **`640x480-8` is
 PROVEN live**, including the full 300 KiB frame and scan-out above 256 KiB.
 **`640x400-8` is PROVEN live** too (one run with auto-revert; owner: bars,
-letterboxed). Step 6 (`confirm`) and `320x200-8` have not run. Each live
+letterboxed). `320x200-8` ran once with auto-revert (5f275b4): counts =
+model, 0 mismatches, clean revert; panel picture pending. Step 6
+(`confirm`) has not run. Each live
 step needs the owner's explicit approval. Off the 755C the live backend is
 tested against a host port model (`make wd24adv-test`) and QEMU's standard
 VGA, where the entry check refuses with zero data writes
@@ -118,6 +120,26 @@ af7e3f19..., owner watching):
   frame is shown whole, centred with black bands (PR19 = 54h centring, no
   stretch), no stale content. **640x400-8 PROVEN live.** **L**
 
+Step 8, `320x200-8` (13h) once with auto-revert (module 5f275b4, sha256
+7861b185..., 47368 bytes, sha verified on the 755C after XMODEM; owner
+watching):
+- New in 5f275b4: the 13h pattern, 16 bars (colours 0-15 via the text AR
+  map, 20 px each) over all 64000 bytes of the A0000 window, chain-4,
+  no PR0A/bank write and no register write (refused if BIOS PR0A != 0).
+  Model: mode 90/258, pattern 64000 memory writes and 0 port writes,
+  revert 896/336, model identical after revert. **H**, **Q**
+- Pre-check (wd24probe3): 3CC=67 GR0F=00 GR0E=40 SR06=0F CR11=AE CR29=85,
+  indexes 0F/0F/01, RC=19, trace=20. Load: `live load: 0 (46, 224,
+  mismatches 0)`. **L**
+- Mode write ~19:18:27 UTC: `live mode 320x200-8: 0 (port data writes 90,
+  index writes 258, mismatches 0)`, exactly the model's counts. **L**
+- Auto-revert ~19:18:42 UTC (15 s, no confirm): `live trial expiry: 0
+  (896, 336, mismatches 0)`; rmmod `live text: 0 (896, 336, 0)`. **L**
+- After: registers and indexes identical to the pre-check; tty1, no
+  wd24/wd90/vga16 module loaded, no X. **L**
+- Panel (owner): picture pending. Not marked proven until the owner
+  reports what the panel showed.
+
 ## Prerequisites
 
 | # | step | evidence | risk |
@@ -138,7 +160,7 @@ af7e3f19..., owner watching):
 | 5 | Load again (step 3), then `echo "mode 640x480-8" > /proc/wd24adv/control` and **wait**, typing nothing. | 16 colour bars over the whole panel for 15 s (from 256 KiB, about line 410 down, in reverse order), `live mode 640x480-8: 0 (port data writes 93, index writes 263, mismatches 0)` (model; 87/251 with the bank-0-only pattern), then text returns by itself: `live trial expiry: 0`. Redraw the text with `clear` or Alt+F2/Alt+F1 if the screen shows stale content. | **L, PROVEN live**: full-frame pattern (ccfb5a9) seen on the panel, 93/263 and 896/336, 0 mismatches, registers identical (2026-11-02); earlier bank-0-only runs (301080b) 87/251 | medium |
 | 6 | `echo "mode 640x480-8" > /proc/wd24adv/control; sleep 3; echo confirm > /proc/wd24adv/control`, look, then `echo text > /proc/wd24adv/control` | bars stay after 15 s; `text` restores; `cat /proc/wd24adv/live` shows `-> 0` | H | medium |
 | 7 | `rmmod wd24adv` | text restored (no-op if already text) | H | low |
-| 8 | Later, separate sessions: `640x400-8`, then `320x200-8` (13h; pattern: 16 bars of 20 px over all 64000 bytes of the A0000 window, no register write; `live mode 320x200-8: 0 (port data writes 90, index writes 258, mismatches 0)` (model), revert 896/336). | centred picture for 15 s (320x200 pixel-doubled to 640x400, letterboxed), then revert | 640x400-8: **L, PROVEN live** (counts = model, 0 mismatches, owner saw 16 bars letterboxed, 2026-11-02); 320x200-8: H only (**U**) | medium |
+| 8 | Later, separate sessions: `640x400-8`, then `320x200-8` (13h; pattern: 16 bars of 20 px over all 64000 bytes of the A0000 window, no register write; `live mode 320x200-8: 0 (port data writes 90, index writes 258, mismatches 0)` (model), revert 896/336). | centred picture for 15 s (320x200 pixel-doubled to 640x400, letterboxed), then revert | 640x400-8: **L, PROVEN live** (counts = model, 0 mismatches, owner saw 16 bars letterboxed, 2026-11-02); 320x200-8: H, **L** ran once (counts = model, 0 mismatches, 2026-11-02; picture pending) | medium |
 
 After every step: `dmesg | grep wd24adv` and `cat /proc/wd24adv/live`
 into the serial log.
