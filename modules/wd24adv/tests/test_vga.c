@@ -69,6 +69,32 @@ int main(void)
 	T(c.have == (WD24_HAVE_LOCKS | WD24_HAVE_EXT | WD24_HAVE_CMAP |
 		     WD24_HAVE_STD | WD24_HAVE_PLANES), "load: all state saved");
 
+	/* 1b. live 755C text state after wd90c24fb text=1 + rmmod (wd24probe3):
+	 * 3CC=67 GR0F=00 GR0E=40 CR11=AE CR29=85 SR06=0F: load and unload
+	 * leave the whole model identical */
+	setup(VM_WD24, 2);
+	m.misc = 0x67; m.gr[0x0f] = 0x00; m.gr[0x0e] = 0x40;
+	m.cr[0x11] = 0xae; m.cr[0x29] = 0x85; m.sr[6] = 0x0f;
+	snap = m;
+	err = RUN(wd24_plan_load(&c));
+	T(err == 0 && c.nmismatch == 0 && c.nrefused == 0, "00/85 text state: load ok");
+	if (err)
+		dump("load 00/85");
+	T(m.violations == 0 && vm_cmp(&m, &snap, "load 00/85") == 0,
+	  "00/85 text state: load leaves the whole model identical");
+	err = RUN(wd24_plan_text(&c));
+	T(err == 0 && c.nmismatch == 0 && m.violations == 0 &&
+	  vm_cmp(&m, &snap, "unload 00/85") == 0,
+	  "00/85 text state: unload restore, whole model identical");
+	setup(VM_WD24, 3);
+	m.cr[0x11] = 0xae; m.cr[0x29] = 0x85; snap = m;
+	RUN(wd24_plan_load(&c));
+	err = RUN(wd24_plan_mode(&c, m480));
+	T(err == 0 && c.nmismatch == 0 && m.violations == 0, "00/85 text state: 640x480-8 plan ok (model)");
+	err = RUN(wd24_trial_expire(&c));
+	T(err == 0 && vm_cmp(&m, &snap, "trial 00/85") == 0,
+	  "00/85 text state: trial revert, whole model identical");
+
 	/* 2. every PROVEN mode, trial expiry: back to identical */
 	for (k = 0; k < 3; k++) {
 		setup(VM_WD24, 10 + k);

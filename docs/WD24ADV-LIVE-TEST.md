@@ -21,11 +21,35 @@ nothing persists. A blank or garbled panel for a few seconds is the
 expected failure mode, not panel damage: the panel route (PR18/PR19) and
 panel power are not touched.
 
+## Live observations so far (755C, 2026-11-02)
+
+First attempt at steps 1-3 (load only, no mode command):
+
+- Step 1: X on this image is `Xfbdev` (started by `startx`, not respawned);
+  stopping it by its PID left tty1 active. **L**
+- Step 2: `text=1` then `rmmod wd90c24fb` worked: `text=1: back to text
+  mode`, `Console: switching to colour VGA+ 80x25`, no fb left. **L**
+- Text state after step 2 (wd24probe3 header reads): 3CC=67, GR0F=00,
+  GR0E=40, CR11=AE, CR29=85, SR06=0F (latch register value). **L**
+  So wd90c24fb's unload relock leaves GR0F/CR29 = **00/85**, not the 00/00
+  of the POST trace.
+- Step 3: the entry check refused that state (`GR0F/CR29 ... not 00/00 or
+  05/85`), `live load: -19 (port data writes 0, index writes 9)`, insmod
+  `No such device`, nothing written, registers unchanged afterwards. **L**
+  Because the check got as far as GR0F/CR29, CR34 read A0h twice and PR18 =
+  C7h, PR19 = 54h in this text state too. **L**
+- Fix: the load entry check now also accepts 00/85 (host tests: core
+  self-test and the port-model round trip from 3CC=67 GR0F=00 GR0E=40
+  CR11=AE CR29=85). **H**
+
+Still not verified in the text state: the SR06 3C4 index-width "locked"
+test and AR10 b0 = 0 (the refusal came before both). They stay strict.
+
 ## Prerequisites
 
 | # | step | evidence | risk |
 |---|---|---|---|
-| P1 | Build from the `wd24adv` branch; `make wd24adv-test` (88 + 18 + 47) and `make wd24adv-qemu` (26/26) pass. | H, Q | none |
+| P1 | Build from the `wd24adv` branch; `make wd24adv-test` (92 + 18 + 52) and `make wd24adv-qemu` (26/26) pass. | H, Q | none |
 | P2 | Serial cable to a second machine with a capture program at the console's speed; log everything to a file. | – | none |
 | P3 | Serial login on ttyS0 (getty) so the test can be driven while the panel shows graphics. **U**: a serial getty on the 755C image is not verified; if absent, drive from the local keyboard and rely on the trial auto-revert (see "Without serial"). | U | low |
 | P4 | Owner's explicit go-ahead for the live load. | – | – |
@@ -76,13 +100,16 @@ The trial brings text back after 15 s. Do not use `confirm` without serial.
   the panel route. Its B8000h text writes are not decoded while GR06 maps
   A0000h. The restore writes the saved values in any case. **U**
 - **CR34 readback.** The entry check requires CR34 to read A0h with no write
-  first (seen in the wd90c24fb state, L). In the pure BIOS text state it is
+  first: seen in the wd90c24fb state and in the text state after wd90c24fb
+  unloads (L). In a fresh BIOS text state (wd90c24fb never loaded) it is
   **U**; if it differs, the load is refused with zero writes.
 - **Readback masks** (`rb_mask()` in `wd24adv_core.c`): only CR34, SR35 and
   the SR06 latch readbacks are proven live. Others are assumptions; a wrong
   mask shows up as a `MISMATCH` and the plan stops and restores (fail-safe,
   but it would block the test).
-- **SR06 latch** index-width test: from live probes (L); behaviour in BIOS
-  text state **U** (same check refuses if different).
-- **wd90c24fb `text=1` + rmmod** before the test: QEMU (fake=3) only.
-- **Serial getty** availability: **U**.
+- **SR06 latch** index-width test: from live probes (L); the SR06 value
+  reads 0Fh in the text state after wd90c24fb unloads (L), but the
+  index-width test there is **U** (same check refuses if different).
+- **wd90c24fb `text=1` + rmmod** before the test: QEMU (fake=3) and live
+  (L, see "Live observations").
+- **Serial getty**: a root shell on ttyS0 drove the first attempt (L).

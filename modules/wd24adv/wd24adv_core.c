@@ -361,9 +361,10 @@ int wd24_check_panel(struct wd24_ctx *c)
  *    that could read A0 while not open is UNPROVEN; the C7/54 reads below
  *    would then fail, which refuses (fail-safe);
  *  - PR18 = C7, PR19 = 54 (live: wd90c24fb load message, wd24probe3);
- *  - load: GR0F/CR29 = 00/00 (POST trace; what wd90c24fb's relock leaves)
- *    or 05/85 (wd24probe3, read while wd90c24fb was live); later plans:
- *    exactly what the previous wd24adv plan left (c->exp_*);
+ *  - load: GR0F/CR29 = 00/00 (POST trace), 00/85 (live: the 755C text
+ *    state after wd90c24fb text=1 + rmmod, wd24probe3 read 3CC=67 GR0E=40
+ *    CR11=AE SR06=0F) or 05/85 (wd24probe3, read while wd90c24fb was live);
+ *    later plans: exactly what the previous wd24adv plan left (c->exp_*);
  *  - SR06 reads 0F and the 3C4 index width test says "locked" (wd24probe3:
  *    "3C4test pre=01").  The task's literal "GR0F=05, CR29=85" is the
  *    wd90c24fb-live state; after wd90c24fb's unload relock the BIOS values
@@ -408,9 +409,10 @@ int wd24_entry_check(struct wd24_ctx *c, enum wd24_phase ph)
 	gr0f = wd24_read(c, WD24_GR, WD24_GR_PR5);
 	cr29 = wd24_read(c, WD24_CR, WD24_CR_PR10);
 	if (load) {
-		if (!((gr0f == 0x00 && cr29 == 0x00) || (gr0f == 0x05 && cr29 == 0x85)))
+		if (!((gr0f == 0x00 && cr29 == 0x00) || (gr0f == 0x00 && cr29 == 0x85) ||
+		      (gr0f == 0x05 && cr29 == 0x85)))
 			ENTRY_FAIL(WD24_GR, WD24_GR_PR5, gr0f, cr29,
-				   "GR0F/CR29 (val/old) not 00/00 (BIOS) or 05/85 (wd90c24fb)", true);
+				   "GR0F/CR29 (val/old) not 00/00 (BIOS), 00/85 (after wd90c24fb) or 05/85 (wd90c24fb)", true);
 	} else {
 		if (gr0f != c->exp_gr0f)
 			ENTRY_FAIL(WD24_GR, WD24_GR_PR5, gr0f, c->exp_gr0f, "GR0F changed since the last plan", strict);
@@ -1287,6 +1289,19 @@ int wd24_selftest(struct wd24_ctx *t, wd24_report_fn report, void *arg)
 	t->reg[WD24_CR][WD24_CR_PR10] = 0x85;
 	CHECK(wd24_plan_load(t) == 0 && t->nrefused == 0,
 	      "entry: GR0F/CR29 = 05/85 (wd90c24fb live state) accepted");
+	st_fresh(t, WD24_LIVE_PR19);
+	t->reg[WD24_CR][WD24_CR_PR10] = 0x85;
+	CHECK(wd24_plan_load(t) == 0 && t->nrefused == 0,
+	      "entry: GR0F/CR29 = 00/85 (live text state after wd90c24fb unload) accepted");
+	CHECK(t->bios.pr5 == 0x00 && t->bios.pr10 == 0x85,
+	      "entry 00/85: saved relock values are 00/85");
+	CHECK(wd24_plan_text(t) == 0 && t->nrefused == 0 &&
+	      t->reg[WD24_GR][WD24_GR_PR5] == 0x00 && t->reg[WD24_CR][WD24_CR_PR10] == 0x85,
+	      "entry 00/85: unload restore relocks to 00/85");
+	st_fresh(t, WD24_LIVE_PR19);
+	t->reg[WD24_CR][WD24_CR_PR10] = 0x05;
+	CHECK(wd24_plan_load(t) == -ENODEV && t->nwrites == 0,
+	      "entry: GR0F/CR29 = 00/05 refused, 0 writes");
 	st_fresh(t, WD24_LIVE_PR19);
 	t->reg[WD24_SR][WD24_SR_PR20] = 0x08;
 	CHECK(wd24_plan_load(t) == -ENODEV && t->nwrites == 0,

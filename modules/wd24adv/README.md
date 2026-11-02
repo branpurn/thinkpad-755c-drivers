@@ -88,7 +88,7 @@ memory, begin/end). Dry-run, host model and kernel run the identical code.
 **Entry check (read-only, before every plan):** `wd24_entry_check()`.
 MISC b0 = 1; MISC unchanged since the last plan (mode set); CR34 reads A0h
 twice (PR18/PR19 readable without any write); PR18 = C7h, PR19 = 54h (the
-live-verified panel route); GR0F/CR29 = 00/00 (BIOS) or 05/85 (wd90c24fb)
+live-verified panel route); GR0F/CR29 = 00/00 (BIOS), 00/85 (live, after wd90c24fb unloads) or 05/85 (wd90c24fb)
 at load, or as left by the last plan; SR06 reads 0Fh and the 3C4
 index-width test says locked; AR10 b0 = 0 (text) at load. Any difference
 aborts with `-ENODEV` and **zero data-register writes** (the only writes
@@ -208,10 +208,10 @@ Differences from `wd90c24fb`'s own sequence, all deliberate and checked by
 ## Tests
 
 - `make wd24adv-test` builds and runs:
-  - `tests/test_core` (88 checks: the shared self-test + host checks);
+  - `tests/test_core` (92 checks: the shared self-test + host checks);
   - `tests/xcheck` (18 checks; fails if `wd90c24fb` and `wd24adv` ever
     diverge; a one-bit PR16 mutation was seen to fail it);
-  - `tests/test_vga` (47 checks on the port model): load leaves the model
+  - `tests/test_vga` (52 checks on the port model): load leaves the model
     byte-identical and saves the exact planes and DAC; each PROVEN mode +
     pattern, then trial expiry, gives an identical model; 640x480 matches
     the live probe values; confirm path; refusals with **0 data writes**
