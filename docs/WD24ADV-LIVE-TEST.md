@@ -4,7 +4,8 @@ Status: steps 1-5 (load, unload, one `640x480-8` trial with auto-revert)
 have run on the 755C: step 5 three times, the last with the full-frame
 pattern (ccfb5a9), confirmed on the panel by the owner. **`640x480-8` is
 PROVEN live**, including the full 300 KiB frame and scan-out above 256 KiB.
-Steps 6-8 (`confirm`, `640x400-8`, `320x200-8`) have not run. Each live
+`640x400-8` has run once with auto-revert (register side **L**, picture
+pending the owner's report). Steps 6 and 8's `320x200-8` have not run. Each live
 step needs the owner's explicit approval. Off the 755C the live backend is
 tested against a host port model (`make wd24adv-test`) and QEMU's standard
 VGA, where the entry check refuses with zero data writes
@@ -95,6 +96,27 @@ watched on the panel by the owner):
   revert. So PR0A banking in chain-4 (banks 0-4) and scan-out of video
   memory above 256 KiB (lines ~410-479) work as modelled; no wrap. **L**
 
+Step 8, `640x400-8` once with auto-revert (same ccfb5a9 module, sha256
+af7e3f19..., owner watching):
+- Box check first: the plan writes exactly the 640x480-8 register set;
+  the only differences are MISC 63 (E3 for 640x480; 63 = same 25 MHz clock,
+  mode 13h sync polarity) and the standard 400-line verticals CR06 BF,
+  CR07 1F, CR10 9C, CR11 8E, CR12 8F, CR15 96, CR16 B9, plus one PR0A
+  bank write fewer (the 256000-byte frame is banks 0-3, all inside the
+  planar window that is saved and restored). No PR18/PR19, shadow CRTC,
+  PR41/PR64 or other panel register is written: centring is the BIOS
+  PR19 = 54h as-is. Model: mode 92/261, revert 896/336, 0 mismatches.
+- Pre-check (wd24probe3): 3CC=67 GR0F=00 GR0E=40 SR06=0F CR11=AE CR29=85,
+  indexes 0F/0F/01. Load: `live load: 0 (46, 224, mismatches 0)`. **L**
+- Mode write ~18:42:06 UTC: `live mode 640x400-8: 0 (port data writes 92,
+  index writes 261, mismatches 0)`, exactly the model's counts. **L**
+- Auto-revert ~18:42:21 UTC (15 s, no confirm): `live trial expiry: 0
+  (896, 336, mismatches 0)`; rmmod `live text: 0 (896, 336, 0)`. **L**
+- After: registers and indexes identical to the pre-check; tty1, no
+  wd24/wd90/vga16 module loaded, no X. **L**
+- Panel: **pending** the owner's report (expected: 400 lines of bars
+  centred with black bands, then text).
+
 ## Prerequisites
 
 | # | step | evidence | risk |
@@ -115,7 +137,7 @@ watched on the panel by the owner):
 | 5 | Load again (step 3), then `echo "mode 640x480-8" > /proc/wd24adv/control` and **wait**, typing nothing. | 16 colour bars over the whole panel for 15 s (from 256 KiB, about line 410 down, in reverse order), `live mode 640x480-8: 0 (port data writes 93, index writes 263, mismatches 0)` (model; 87/251 with the bank-0-only pattern), then text returns by itself: `live trial expiry: 0`. Redraw the text with `clear` or Alt+F2/Alt+F1 if the screen shows stale content. | **L, PROVEN live**: full-frame pattern (ccfb5a9) seen on the panel, 93/263 and 896/336, 0 mismatches, registers identical (2026-11-02); earlier bank-0-only runs (301080b) 87/251 | medium |
 | 6 | `echo "mode 640x480-8" > /proc/wd24adv/control; sleep 3; echo confirm > /proc/wd24adv/control`, look, then `echo text > /proc/wd24adv/control` | bars stay after 15 s; `text` restores; `cat /proc/wd24adv/live` shows `-> 0` | H | medium |
 | 7 | `rmmod wd24adv` | text restored (no-op if already text) | H | low |
-| 8 | Later, separate sessions: `640x400-8`, then `320x200-8` (13h; no pattern, shows whatever is in memory). | centred picture for 15 s, then revert | H only; both never seen live (**U**) | medium |
+| 8 | Later, separate sessions: `640x400-8`, then `320x200-8` (13h; no pattern, shows whatever is in memory). | centred picture for 15 s, then revert | 640x400-8: register round trip **L** (counts = model, 0 mismatches, 2026-11-02), picture pending; 320x200-8: H only (**U**) | medium |
 
 After every step: `dmesg | grep wd24adv` and `cat /proc/wd24adv/live`
 into the serial log.
