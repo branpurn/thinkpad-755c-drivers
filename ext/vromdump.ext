@@ -1,0 +1,4 @@
+DESC="Stage 0 (wd24adv): read-only snapshot of the video BIOS (C0000), system BIOS (E0000-FFFFF) and IVT/BDA into /proc/vromdump/; writes no hardware register"
+MODS="vromdump"
+ARGS_vromdump=""
+DEPS="modutils.tcz"

@@ -13,3 +13,11 @@
 Module.symvers
 modules.order
 __pycache__/
+# Stage 0 (wd24adv): firmware dumps and traces of them are never committed
+/stage0/dumps/
+*.rom
+vrom.bin
+sysbios.bin
+lowmem.bin
+/modules/wd24adv/tests/test_core
+/.venv*/

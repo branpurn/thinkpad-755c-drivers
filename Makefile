@@ -65,3 +65,16 @@ distclean:
 	scripts/clean-oot.sh; rm -rf out build dl
 
 .PHONY: all kernel oot modutils tools tcz floppy disk sizes unit test test-core ksyms-keep sdl test-sdl scan clean distclean
+
+# --- wd24adv (experimental; separate from wd90c24fb, which is unchanged) ---
+#   make wd24adv       build all out-of-tree modules incl. wd24adv + vromdump
+#   make wd24adv-test  host unit test of the wd24adv core (guards, sequences)
+#   make stage0-test   self-test of the Stage 0 VGA BIOS trace harness
+#                      (needs python3 with unicorn==2.1.4 and SeaVGABIOS)
+wd24adv: oot
+
+wd24adv-test:
+	$(MAKE) -C modules/wd24adv/tests
+
+stage0-test:
+	python3 stage0/harness/test_vbiostrace.py

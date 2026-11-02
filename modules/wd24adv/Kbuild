@@ -1,0 +1,2 @@
+obj-m += wd24adv.o
+wd24adv-y := wd24adv_main.o wd24adv_core.o wd24adv_modes.o
