@@ -83,6 +83,16 @@ The stock tc32 kernel (`6.18.57`) has module support too, but refuses
 these modules: the driver config makes some fb/video helpers built-in, so
 the two kernels are not ABI-compatible.
 
+## SDL2 (wdfb backend)
+
+`sdl/` holds an SDL2 video driver for wd90c24fb: 8bpp, `FBIOPUTCMAP`, and
+one damage ioctl per updated rect. It uses evdev or a raw console keyboard,
+no X, and restores the VT on exit. `make sdl` fetches the pinned SDL2
+2.32.10 (sha256 checked), patches it, and builds a static i486 `libSDL2.a`
+plus `out/sdl/sdltest.i486`. `sdl/tests/qemu-wdfb.py` tests it under
+`qemu-system-i386 -cpu 486` with `wd90c24fb fake=3`. See
+[sdl/README.md](sdl/README.md).
+
 ## Adding a driver
 
 * in-tree: add `CONFIG_FOO=m` to `config/kernel-drivers.fragment` and an

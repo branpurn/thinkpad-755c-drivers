@@ -1,0 +1,18 @@
+diff --git a/src/cpuinfo/SDL_cpuinfo.c b/src/cpuinfo/SDL_cpuinfo.c
+index b0e3153..a4c14ab 100644
+--- a/src/cpuinfo/SDL_cpuinfo.c
++++ b/src/cpuinfo/SDL_cpuinfo.c
+@@ -314,7 +314,13 @@ static void CPU_calcCPUIDFeatures(void)
+                 CPU_CPUIDFeatures[3] = d;
+ 
+                 /* Check to make sure we can call xgetbv */
++#ifdef __i486__
++                /* -march=i486 build (wdfb, ThinkPad 755C): no AVX use, and
++                   keep XGETBV out of the binary so the 486 opcode scan is clean */
++                if (0) {
++#else
+                 if (c & 0x08000000) {
++#endif
+                     /* Call xgetbv to see if YMM (etc) register state is saved */
+ #if (defined(__GNUC__) || defined(__llvm__)) && (defined(__i386__) || defined(__x86_64__))
+                     __asm__(".byte 0x0f, 0x01, 0xd0"

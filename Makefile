@@ -5,6 +5,8 @@
 #   make unit       host unit tests of the WD90C24 register layer (mock chip)
 #   make test       unit + QEMU (-M isapc -cpu 486 + cs4231a): load every .tcz, 32 + 16 MB
 #   make test-core  run tinycore-32-ram's own test suite on the module-capable floppy
+#   make sdl        SDL2 + wdfb video backend, static i486 (sdl/), out/sdl
+#   make test-sdl   QEMU test of the wdfb backend (needs kernel, oot, sdl)
 #   make scan       public-repo hygiene scan (run before every push)
 .POSIX:
 SHELL = /bin/sh
@@ -47,6 +49,12 @@ test-core: floppy
 ksyms-keep: oot
 	scripts/ksyms-keep.sh
 
+sdl:
+	sdl/build.sh
+
+test-sdl: kernel oot modutils sdl
+	sdl/tests/qemu-wdfb.py
+
 scan:
 	scripts/scan-public.sh
 
@@ -56,4 +64,4 @@ clean:
 distclean:
 	scripts/clean-oot.sh; rm -rf out build dl
 
-.PHONY: all kernel oot modutils tools tcz floppy disk sizes unit test test-core ksyms-keep scan clean distclean
+.PHONY: all kernel oot modutils tools tcz floppy disk sizes unit test test-core ksyms-keep sdl test-sdl scan clean distclean
