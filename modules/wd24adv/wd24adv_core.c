@@ -17,8 +17,12 @@
  * the MCLK bits (PR68 b2:0).  PM ports 24h-27h, 0D00h/0D01h, CMOS, the
  * local-bus ports and 23C0h blocks are not representable at all.
  *
- * Only the dry-run backend exists: writes are recorded against a model of
- * the chip (wd24_boot_model), never sent to hardware.
+ * The plans run unchanged on two backends: the dry-run recorder (a model of
+ * the chip, wd24_boot_model) and the port backend (wd24adv_port.c), which
+ * the kernel module uses only with dryrun=0 live=1.  With a live backend
+ * every plan starts with a read-only entry check (wd24_entry_check: zero
+ * data writes on failure), and every write is read back (wd24_verify); a
+ * mismatch stops the plan and runs wd24_restore_all().
  */
 #include "wd24adv_core.h"
 
@@ -52,6 +56,31 @@ void wd24_ctx_init(struct wd24_ctx *c, const struct wd24_backend *be)
 {
 	memset(c, 0, sizeof(*c));
 	c->be = be;
+}
+
+/* start a new event log; counters and saved state are kept */
+void wd24_log_reset(struct wd24_ctx *c)
+{
+	c->nev = 0;
+	c->dropped = 0;
+}
+
+static void ev_check(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 got,
+		     u8 want, const char *why)
+{
+	struct wd24_event e = { .type = WD24_EV_CHECK, .rf = rf, .idx = idx,
+		.val = got, .old = want, .old_known = true, .note = why };
+
+	ev_add(c, &e);
+}
+
+static void ev_bulk(struct wd24_ctx *c, u8 plane, const char *what)
+{
+	struct wd24_event e = { .type = WD24_EV_BULK, .val = plane,
+		.note = what };
+
+	ev_add(c, &e);
+	c->nbulk++;
 }
 
 /* ---- guard -------------------------------------------------------------- */
@@ -138,9 +167,97 @@ int wd24_guard(const struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 old, u8 val
 
 /* ---- accessors ---------------------------------------------------------- */
 
+/* reads update the model, so with a live backend it holds what the chip
+ * last said (dry-run: the read returns the model, nothing changes) */
 u8 wd24_read(struct wd24_ctx *c, enum wd24_rf rf, u8 idx)
 {
-	return c->be->read(c, rf, idx);
+	u8 v = c->be->read(c, rf, idx);
+
+	if ((unsigned int)rf < WD24_NRF && idx < WD24_NIDX) {
+		c->reg[rf][idx] = v;
+		c->known[rf] |= (u64)1 << idx;
+	}
+	return v;
+}
+
+/* registers whose guard rule depends on the current value */
+static bool guard_needs_old(enum wd24_rf rf, u8 idx)
+{
+	return (rf == WD24_SR && (idx == WD24_SR_PR20 || idx == WD24_SR_PR68)) ||
+	       (rf == WD24_GR && (idx == WD24_GR_PR1 || idx == WD24_GR_PR4));
+}
+
+/*
+ * Bits that must read back as written.  Standard registers: the IBM VGA
+ * read/write bits (reserved bits masked).  Paradise registers: SR06 is a
+ * latch (wd24probe3, live: wrote 4F, read 0F; the lock state is only
+ * visible through the 3C4 index width), GR0F bits 2:0, PR0A/PR0B bits 6:0
+ * (data sheet); CR34 and SR35 echoed exactly in wd24probe3.  The full-byte
+ * echo of the other Paradise registers is UNPROVEN: a difference stops the
+ * plan and restores (fail-safe).  0 = not verified (AR 20h has no data).
+ */
+static u8 rb_mask(enum wd24_rf rf, u8 idx)
+{
+	static const u8 sr[5] = { 0x03, 0x3d, 0x0f, 0x3f, 0x0e };
+	static const u8 gr[9] = { 0x0f, 0x0f, 0x0f, 0x1f, 0x03, 0x7b, 0x0f, 0x0f, 0xff };
+	static const u8 ar[0x15] = { 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f,
+				     0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f,
+				     0xef, 0xff, 0x3f, 0x0f, 0x0f };
+
+	switch (rf) {
+	case WD24_MISC:
+		return 0xef;
+	case WD24_SR:
+		return idx < 5 ? sr[idx] : 0xff;
+	case WD24_GR:
+		if (idx < 9)
+			return gr[idx];
+		if (idx == WD24_GR_PR0A || idx == WD24_GR_PR0B)
+			return 0x7f;
+		return idx == WD24_GR_PR5 ? 0x07 : 0xff;
+	case WD24_AR:
+		return idx < 0x15 ? ar[idx] : 0;
+	case WD24_CR:
+		return 0xff;
+	default:
+		return 0;
+	}
+}
+
+static int mismatch(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 wrote,
+		    u8 got, const char *why)
+{
+	struct wd24_event e = { .type = WD24_EV_MISMATCH, .rf = rf, .idx = idx,
+		.old = wrote, .old_known = true, .val = got, .note = why };
+
+	ev_add(c, &e);
+	c->nmismatch++;
+	c->failed = true;
+	return c->restoring ? 0 : -EIO;
+}
+
+/* read back what was just written (live backends only) */
+int wd24_verify(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 val)
+{
+	u8 mask = rb_mask(rf, idx), got;
+
+	if (!mask)
+		return 0;
+	got = wd24_read(c, rf, idx);
+	if (rf == WD24_SR && idx == WD24_SR_PR20) {
+		int want = (val & 0x58) == 0x48, unl;
+
+		if (got != (val & 0x0f))
+			return mismatch(c, rf, idx, val, got, "SR06 latch: bits 3:0 must echo, 7:4 read 0");
+		unl = c->be->seq_unlocked ? c->be->seq_unlocked(c) : -1;
+		if (unl != want)
+			return mismatch(c, rf, idx, val, (u8)unl,
+					"SR06 latch: 3C4 index width test (val = 1 unlocked, 0 locked)");
+		return 0;
+	}
+	if ((got ^ val) & mask)
+		return mismatch(c, rf, idx, val, got, "readback differs");
+	return 0;
 }
 
 int wd24_write(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 val)
@@ -151,6 +268,8 @@ int wd24_write(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 val)
 
 	if ((unsigned int)rf >= WD24_NRF || idx >= WD24_NIDX)
 		return -EINVAL;
+	if (c->be->live && guard_needs_old(rf, idx))
+		(void)wd24_read(c, rf, idx);
 	e.old = c->reg[rf][idx];
 	e.old_known = (c->known[rf] >> idx) & 1;
 	err = wd24_guard(c, rf, idx, e.old, val);
@@ -175,6 +294,8 @@ int wd24_write(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 val)
 	}
 	if (rf == WD24_SR && idx == WD24_SR_PR72)
 		c->pr72_open = (val == 0x50);
+	if (c->be->live)
+		return wd24_verify(c, rf, idx, val);
 	return 0;
 }
 
@@ -226,6 +347,100 @@ int wd24_check_panel(struct wd24_ctx *c)
 	return 0;
 }
 
+/*
+ * Read-only entry check, run first by every plan (also in dry-run, where
+ * it reads the model).  Only index-port writes happen (needed to read an
+ * indexed register; the port backend restores the indices); no data
+ * register is written, so a refusal here leaves the chip untouched.
+ *
+ * Expected values and their evidence:
+ *  - 3CC b0 = 1 (colour CRTC at 3D4; live, every probe);
+ *  - CR34 (PR1B) reads A0 twice: the value the 755C holds both at boot and
+ *    under wd90c24fb (wd24probe2/3 live reads; boot model).  With PR1B =
+ *    A0 PR18/PR19 are readable without a write.  Whether PR1B is a latch
+ *    that could read A0 while not open is UNPROVEN; the C7/54 reads below
+ *    would then fail, which refuses (fail-safe);
+ *  - PR18 = C7, PR19 = 54 (live: wd90c24fb load message, wd24probe3);
+ *  - load: GR0F/CR29 = 00/00 (POST trace; what wd90c24fb's relock leaves)
+ *    or 05/85 (wd24probe3, read while wd90c24fb was live); later plans:
+ *    exactly what the previous wd24adv plan left (c->exp_*);
+ *  - SR06 reads 0F and the 3C4 index width test says "locked" (wd24probe3:
+ *    "3C4test pre=01").  The task's literal "GR0F=05, CR29=85" is the
+ *    wd90c24fb-live state; after wd90c24fb's unload relock the BIOS values
+ *    are expected, so both pairs are accepted at load only;
+ *  - load also requires AR10 b0 = 0 (text mode: vgastate save_vga_text
+ *    returns early in graphics, vgastate.c "if (attr10 & 1) return").
+ * WD24_PH_RESTORE (text restore on rmmod / trial expiry) refuses only when
+ * the register view itself is invalid (MISC b0, CR34); other differences
+ * are logged and the restore proceeds, because it writes only values read
+ * from this chip at load.
+ */
+int wd24_entry_check(struct wd24_ctx *c, enum wd24_phase ph)
+{
+	bool load = ph == WD24_PH_LOAD, strict = ph != WD24_PH_RESTORE;
+	unsigned int bad = 0;
+	u8 misc, a, b, pr18, pr19, gr0f, cr29, sr06;
+	int unl;
+
+#define ENTRY_FAIL(rf, idx, got, want, why, fatal) do { \
+		ev_check(c, rf, idx, got, want, why); \
+		if (fatal) { wd24_note(c, "REFUSED by the entry check: no data register written"); \
+			return -ENODEV; } \
+		bad++; } while (0)
+
+	misc = wd24_read(c, WD24_MISC, 0);
+	if (!(misc & 0x01))
+		ENTRY_FAIL(WD24_MISC, 0, misc, misc | 1, "3CC b0 = 0: mono CRTC, not the 755C", true);
+	if (ph == WD24_PH_MODE && misc != c->exp_misc)
+		ENTRY_FAIL(WD24_MISC, 0, misc, c->exp_misc, "MISC changed since the last plan", true);
+	a = wd24_read(c, WD24_CR, WD24_CR_PR1B);
+	b = wd24_read(c, WD24_CR, WD24_CR_PR1B);
+	if (a != WD24_PR1B_FP || b != WD24_PR1B_FP)
+		ENTRY_FAIL(WD24_CR, WD24_CR_PR1B, a != WD24_PR1B_FP ? a : b, WD24_PR1B_FP,
+			   "CR34 must read A0 (twice): PR18/PR19 not readable without a write", true);
+	pr18 = wd24_read(c, WD24_CR, WD24_CR_PR18);
+	pr19 = wd24_read(c, WD24_CR, WD24_CR_PR19);
+	if (pr18 != WD24_LIVE_PR18)
+		ENTRY_FAIL(WD24_CR, WD24_CR_PR18, pr18, WD24_LIVE_PR18, "PR18 is not the live-verified C7", strict);
+	if (pr19 != WD24_LIVE_PR19)
+		ENTRY_FAIL(WD24_CR, WD24_CR_PR19, pr19, WD24_LIVE_PR19,
+			   "PR19 is not the live-verified 54 (LCD only, centring)", strict);
+	gr0f = wd24_read(c, WD24_GR, WD24_GR_PR5);
+	cr29 = wd24_read(c, WD24_CR, WD24_CR_PR10);
+	if (load) {
+		if (!((gr0f == 0x00 && cr29 == 0x00) || (gr0f == 0x05 && cr29 == 0x85)))
+			ENTRY_FAIL(WD24_GR, WD24_GR_PR5, gr0f, cr29,
+				   "GR0F/CR29 (val/old) not 00/00 (BIOS) or 05/85 (wd90c24fb)", true);
+	} else {
+		if (gr0f != c->exp_gr0f)
+			ENTRY_FAIL(WD24_GR, WD24_GR_PR5, gr0f, c->exp_gr0f, "GR0F changed since the last plan", strict);
+		if (cr29 != c->exp_cr29)
+			ENTRY_FAIL(WD24_CR, WD24_CR_PR10, cr29, c->exp_cr29, "CR29 changed since the last plan", strict);
+	}
+	sr06 = wd24_read(c, WD24_SR, WD24_SR_PR20);
+	if (sr06 != (load ? 0x0f : (c->exp_sr06 & 0x0f)))
+		ENTRY_FAIL(WD24_SR, WD24_SR_PR20, sr06, load ? 0x0f : c->exp_sr06 & 0x0f,
+			   "SR06 does not read the locked value", strict);
+	unl = c->be->seq_unlocked ? c->be->seq_unlocked(c) : 0;
+	if (unl != 0)
+		ENTRY_FAIL(WD24_SR, WD24_SR_PR20, (u8)unl, 0,
+			   "3C4 index width test: SR06 latch not locked (val 1 = unlocked, FF = no answer)", strict);
+	if (load && (wd24_read(c, WD24_AR, 0x10) & 0x01))
+		ENTRY_FAIL(WD24_AR, 0x10, c->reg[WD24_AR][0x10], 0, "AR10 b0 = 1: graphics mode, not the text console", true);
+#undef ENTRY_FAIL
+	wd24_note(c, bad ? "entry check: differences logged, restore proceeds"
+			 : "entry check passed (reads only)");
+	return 0;
+}
+
+static void set_expect(struct wd24_ctx *c)
+{
+	c->exp_misc = c->reg[WD24_MISC][0];
+	c->exp_gr0f = c->reg[WD24_GR][WD24_GR_PR5];
+	c->exp_cr29 = c->reg[WD24_CR][WD24_CR_PR10];
+	c->exp_sr06 = c->reg[WD24_SR][WD24_SR_PR20];
+}
+
 /* hw.c 185-191 (wd_unlock) with 69-73 (wd_unlock_seq) */
 int wd24_unlock(struct wd24_ctx *c)
 {
@@ -244,6 +459,10 @@ int wd24_save_ext(struct wd24_ctx *c, struct wd24_ext *s)
 	s->pr5 = wd24_read(c, WD24_GR, WD24_GR_PR5);
 	s->pr10 = wd24_read(c, WD24_CR, WD24_CR_PR10);
 	s->pr20 = wd24_read(c, WD24_SR, WD24_SR_PR20);
+	if (s == &c->bios) {
+		c->saved = true;	/* the guard's relock values */
+		c->have |= WD24_HAVE_LOCKS;
+	}
 	c->tag = "unlock, hw.c 185-191";
 	TRY(wd24_unlock(c));
 	s->pr0a = wd24_read(c, WD24_GR, WD24_GR_PR0A);
@@ -265,7 +484,10 @@ int wd24_save_ext(struct wd24_ctx *c, struct wd24_ext *s)
 	TRY(wd24_write(c, WD24_SR, WD24_SR_PR72, 0x50));
 	s->pr68 = wd24_read(c, WD24_SR, WD24_SR_PR68);
 	s->pr69 = wd24_read(c, WD24_SR, WD24_SR_PR69);
-	return wd24_write(c, WD24_SR, WD24_SR_PR72, s->pr72);
+	TRY(wd24_write(c, WD24_SR, WD24_SR_PR72, s->pr72));
+	if (s == &c->bios)
+		c->have |= WD24_HAVE_EXT;
+	return 0;
 }
 
 /*
@@ -278,7 +500,8 @@ int wd24_save_ext(struct wd24_ctx *c, struct wd24_ext *s)
  */
 int wd24_restore_ext(struct wd24_ctx *c, const struct wd24_ext *s)
 {
-	u8 cur68 = c->bios.pr68;	/* only wd24_save_ext reads it */
+	u8 cur68 = ((c->known[WD24_SR] >> WD24_SR_PR68) & 1) ?
+		   c->reg[WD24_SR][WD24_SR_PR68] : c->bios.pr68;
 	u8 new68 = (cur68 & ~0x18) | (s->pr68 & 0x18);
 	bool pr69 = (s->misc & 0x0c) == 0x08;
 
@@ -329,7 +552,8 @@ int wd24_restore_ext(struct wd24_ctx *c, const struct wd24_ext *s)
 int wd24_relock(struct wd24_ctx *c, const struct wd24_ext *s)
 {
 	c->tag = "relock, hw.c 283-290";
-	TRY(wd24_write(c, WD24_CR, WD24_CR_PR11, s->pr11));
+	if (s != &c->bios || (c->have & WD24_HAVE_EXT))
+		TRY(wd24_write(c, WD24_CR, WD24_CR_PR11, s->pr11));
 	TRY(wd24_modify(c, WD24_CR, 0x11, 0x80, s->cr11));
 	TRY(wd24_write(c, WD24_SR, WD24_SR_PR20, s->pr20));
 	TRY(wd24_write(c, WD24_CR, WD24_CR_PR10, s->pr10));
@@ -389,16 +613,294 @@ void wd24_mode_ext(const struct wd24_mode *m, const struct wd24_ext *bios,
 	ext->pr68 = (bios->pr68 & ~0x18) | 0x08;
 }
 
+/* ---- standard VGA state, DAC and video memory (Linux vgastate) ------------
+ *
+ * wd90c24fb saves VGA_SAVE_MODE | VGA_SAVE_FONTS | VGA_SAVE_CMAP with
+ * save_vga() right after wd_save_ext() at load (wd90c24fb_main.c 1444-1448)
+ * and restores it with restore_vga() between wd_restore_ext() and
+ * wd_relock() (wd_restore_text, main.c 802-815).  The functions below make
+ * the same register writes in the same order as drivers/video/vgastate.c
+ * (Linux 6.18.57; function names cited in the tags), with one deliberate
+ * superset: all four planes are saved in full (64 KiB each) instead of
+ * vgastate's 32 KiB of plane 2, plane 3 and 2 x 8 KiB of planes 0/1.
+ * Every write still goes through the guard: these are standard registers.
+ */
+
+int wd24_save_cmap(struct wd24_ctx *c)
+{
+	if (c->be->dac_read) {
+		c->be->dac_read(c, 0xff, c->cmap);
+		ev_bulk(c, 0, "vgastate save_vga_cmap: 3C6=FF, 3C7=00, 768 x read 3C9");
+	} else {
+		ev_bulk(c, 0, "vgastate save_vga_cmap: (dry-run: DAC not read)");
+	}
+	c->have |= WD24_HAVE_CMAP;
+	return 0;
+}
+
+int wd24_restore_cmap(struct wd24_ctx *c)
+{
+	if (!(c->have & WD24_HAVE_CMAP))
+		return 0;
+	if (c->be->dac_write) {
+		u8 back[768];
+		unsigned int i, bad = 0;
+
+		c->be->dac_write(c, 0xff, c->cmap);
+		ev_bulk(c, 0, "vgastate restore_vga_cmap: 3C6=FF, 3C8=00, 768 x write 3C9");
+		if (c->be->live && c->be->dac_read) {
+			c->be->dac_read(c, 0xff, back);
+			for (i = 0; i < 768; i++)
+				bad += ((back[i] ^ c->cmap[i]) & 0x3f) != 0;
+			if (bad)
+				return mismatch(c, WD24_MISC, 0xff, 0, bad > 255 ? 255 : bad,
+						"DAC readback: val = differing entries");
+		}
+	} else {
+		ev_bulk(c, 0, "vgastate restore_vga_cmap: (dry-run: DAC not written)");
+	}
+	return 0;
+}
+
+/* vgastate save_vga_mode: reads only (CRTC, ATTR, GFX, SEQ, MISC) */
+int wd24_save_std(struct wd24_ctx *c)
+{
+	struct wd24_std *v = &c->vga;
+	int i;
+
+	v->misc = wd24_read(c, WD24_MISC, 0);
+	for (i = 0; i < 25; i++)
+		v->crtc[i] = wd24_read(c, WD24_CR, i);
+	for (i = 0; i < 21; i++)
+		v->attr[i] = wd24_read(c, WD24_AR, i);
+	for (i = 0; i < 9; i++)
+		v->gfx[i] = wd24_read(c, WD24_GR, i);
+	for (i = 0; i < 5; i++)
+		v->seq[i] = wd24_read(c, WD24_SR, i);
+	c->have |= WD24_HAVE_STD;
+	wd24_note(c, "vgastate save_vga_mode: MISC, CR00-18, AR00-14, GR00-08, SR00-04 read");
+	return 0;
+}
+
+/* vgastate restore_vga_mode (the AR index 00h write is part of the
+ * backend's AR access, which always clears the palette address source) */
+int wd24_restore_std(struct wd24_ctx *c)
+{
+	const struct wd24_std *v = &c->vga;
+	int i;
+
+	if (!(c->have & WD24_HAVE_STD))
+		return 0;
+	c->tag = "vgastate restore_vga_mode";
+	TRY(wd24_write(c, WD24_MISC, 0, v->misc));
+	TRY(wd24_write(c, WD24_SR, 0x01, v->seq[1] | 0x20));
+	TRY(wd24_write(c, WD24_SR, 0x00, 0x01));
+	for (i = 2; i < 5; i++)
+		TRY(wd24_write(c, WD24_SR, i, v->seq[i]));
+	TRY(wd24_write(c, WD24_CR, 0x11, v->crtc[0x11] & ~0x80));
+	for (i = 0; i < 25; i++)
+		TRY(wd24_write(c, WD24_CR, i, v->crtc[i]));
+	for (i = 0; i < 9; i++)
+		TRY(wd24_write(c, WD24_GR, i, v->gfx[i]));
+	for (i = 0; i < 21; i++)
+		TRY(wd24_write(c, WD24_AR, i, v->attr[i]));
+	TRY(wd24_write(c, WD24_SR, 0x00, 0x03));
+	TRY(wd24_write(c, WD24_SR, 0x01, v->seq[1] & ~0x20));
+	return wd24_write(c, WD24_AR, 0x20, 0x20);
+}
+
+static const char *const plane_note[2][4] = {
+	{ "planar read: plane 0 (text characters), 64 KiB",
+	  "planar read: plane 1 (text attributes), 64 KiB",
+	  "planar read: plane 2 (fonts), 64 KiB",
+	  "planar read: plane 3, 64 KiB" },
+	{ "planar write: plane 0 (text characters), 64 KiB",
+	  "planar write: plane 1 (text attributes), 64 KiB",
+	  "planar write: plane 2 (fonts), 64 KiB",
+	  "planar write: plane 3, 64 KiB" },
+};
+
+/* select plane p for CPU access: vgastate's per-font block */
+static int plane_select(struct wd24_ctx *c, int p)
+{
+	TRY(wd24_write(c, WD24_SR, 0x02, 1 << p));
+	TRY(wd24_write(c, WD24_SR, 0x04, 0x06));
+	TRY(wd24_write(c, WD24_GR, 0x04, p));
+	TRY(wd24_write(c, WD24_GR, 0x05, 0x00));
+	return wd24_write(c, WD24_GR, 0x06, 0x05);
+}
+
+/* vgastate save_vga_text, all four planes in full */
+int wd24_save_planes(struct wd24_ctx *c)
+{
+	u8 gr4, gr5, gr6, seq1, seq2, seq4;
+	int p;
+
+	c->tag = "vgastate save_vga_text";
+	gr4 = wd24_read(c, WD24_GR, 0x04);
+	gr5 = wd24_read(c, WD24_GR, 0x05);
+	gr6 = wd24_read(c, WD24_GR, 0x06);
+	seq2 = wd24_read(c, WD24_SR, 0x02);
+	seq4 = wd24_read(c, WD24_SR, 0x04);
+	seq1 = wd24_read(c, WD24_SR, 0x01);
+	TRY(wd24_write(c, WD24_SR, 0x00, 0x01));
+	TRY(wd24_write(c, WD24_SR, 0x01, seq1 | 0x20));
+	TRY(wd24_write(c, WD24_SR, 0x00, 0x03));
+	for (p = 0; p < 4; p++) {
+		TRY(plane_select(c, p));
+		if (c->planes && c->be->mem_read)
+			c->be->mem_read(c, 0, c->planes + p * WD24_PLANE, WD24_PLANE);
+		ev_bulk(c, p, c->planes ? plane_note[0][p] : "planar read: (dry-run: memory not read)");
+	}
+	TRY(wd24_write(c, WD24_SR, 0x02, seq2));
+	TRY(wd24_write(c, WD24_SR, 0x04, seq4));
+	TRY(wd24_write(c, WD24_GR, 0x04, gr4));
+	TRY(wd24_write(c, WD24_GR, 0x05, gr5));
+	TRY(wd24_write(c, WD24_GR, 0x06, gr6));
+	TRY(wd24_write(c, WD24_SR, 0x00, 0x01));
+	TRY(wd24_write(c, WD24_SR, 0x01, seq1 & ~0x20));
+	TRY(wd24_write(c, WD24_SR, 0x00, 0x03));
+	TRY(wd24_write(c, WD24_SR, 0x01, seq1));
+	if (c->planes)
+		c->have |= WD24_HAVE_PLANES;
+	return 0;
+}
+
+/* vgastate restore_vga_text (depth-4 block included: write mode 0 with
+ * rotate 0, bit mask FF, set/reset off), all four planes, each read back */
+int wd24_restore_planes(struct wd24_ctx *c)
+{
+	u8 gr1, gr3, gr4, gr5, gr6, gr8, seq1, seq2, seq4;
+	int p, err = 0;
+
+	if (!(c->have & WD24_HAVE_STD))
+		return 0;
+	c->tag = "vgastate restore_vga_text";
+	gr1 = wd24_read(c, WD24_GR, 0x01);
+	gr3 = wd24_read(c, WD24_GR, 0x03);
+	gr4 = wd24_read(c, WD24_GR, 0x04);
+	gr5 = wd24_read(c, WD24_GR, 0x05);
+	gr6 = wd24_read(c, WD24_GR, 0x06);
+	gr8 = wd24_read(c, WD24_GR, 0x08);
+	seq2 = wd24_read(c, WD24_SR, 0x02);
+	seq4 = wd24_read(c, WD24_SR, 0x04);
+	seq1 = wd24_read(c, WD24_SR, 0x01);
+	TRY(wd24_write(c, WD24_SR, 0x00, 0x01));
+	TRY(wd24_write(c, WD24_SR, 0x01, seq1 | 0x20));
+	TRY(wd24_write(c, WD24_SR, 0x00, 0x03));
+	TRY(wd24_write(c, WD24_GR, 0x03, 0x00));
+	TRY(wd24_write(c, WD24_GR, 0x08, 0xff));
+	TRY(wd24_write(c, WD24_GR, 0x01, 0x00));
+	for (p = 0; p < 4; p++) {
+		const u8 *src = c->planes ? c->planes + p * WD24_PLANE : NULL;
+
+		TRY(plane_select(c, p));
+		if (!(c->have & WD24_HAVE_PLANES) || !src || !c->be->mem_write) {
+			ev_bulk(c, p, "planar write: (dry-run: memory not written)");
+			continue;
+		}
+		c->be->mem_write(c, 0, src, WD24_PLANE);
+		ev_bulk(c, p, plane_note[1][p]);
+		if (c->be->live && c->be->mem_read) {
+			static u8 chunk[256];
+			u32 o, i, bad = 0;
+
+			for (o = 0; o < WD24_PLANE; o += sizeof(chunk)) {
+				c->be->mem_read(c, o, chunk, sizeof(chunk));
+				for (i = 0; i < sizeof(chunk); i++)
+					bad += chunk[i] != src[o + i];
+			}
+			if (bad && !err)
+				err = mismatch(c, WD24_GR, 0x04, p, bad > 255 ? 255 : bad,
+					       "plane readback: old = plane, val = differing bytes (max FF)");
+		}
+	}
+	TRY(wd24_write(c, WD24_SR, 0x00, 0x01));
+	TRY(wd24_write(c, WD24_SR, 0x01, seq1 & ~0x20));
+	TRY(wd24_write(c, WD24_SR, 0x00, 0x03));
+	TRY(wd24_write(c, WD24_GR, 0x01, gr1));
+	TRY(wd24_write(c, WD24_GR, 0x03, gr3));
+	TRY(wd24_write(c, WD24_GR, 0x04, gr4));
+	TRY(wd24_write(c, WD24_GR, 0x05, gr5));
+	TRY(wd24_write(c, WD24_GR, 0x06, gr6));
+	TRY(wd24_write(c, WD24_GR, 0x08, gr8));
+	TRY(wd24_write(c, WD24_SR, 0x01, seq1));
+	TRY(wd24_write(c, WD24_SR, 0x02, seq2));
+	TRY(wd24_write(c, WD24_SR, 0x04, seq4));
+	return err;
+}
+
+/*
+ * Everything back to the state saved at load, in wd_restore_text() order
+ * (main.c 802-815): restore_ext(BIOS), restore_vga() [mode, fonts, cmap],
+ * relock, unblank.  Used for text restore (rmmod, trial expiry, control
+ * "text") and after any failure once a write has happened.  Readback
+ * mismatches are logged but do not stop it (c->restoring); a guard refusal
+ * stops only the step it happens in.  wd_restore_panel() is omitted: PR19,
+ * PR57 and PR4 b5 are never written by wd24adv.
+ */
+int wd24_restore_all(struct wd24_ctx *c)
+{
+	bool was = c->restoring;
+	unsigned int mis = c->nmismatch;
+	int err = 0, e;
+
+#define KEEP(x) do { e = (x); if (e && !err) err = e; } while (0)
+	c->restoring = true;
+	if (c->have & WD24_HAVE_EXT)
+		KEEP(wd24_restore_ext(c, &c->bios));
+	KEEP(wd24_restore_std(c));
+	KEEP(wd24_restore_planes(c));
+	KEEP(wd24_restore_cmap(c));
+	if (c->have & WD24_HAVE_LOCKS)
+		KEEP(wd24_relock(c, &c->bios));
+	KEEP(wd24_screen_on(c, true));
+	c->restoring = was;
+	if (!err && c->nmismatch != mis)
+		err = -EIO;	/* every step ran; a readback differed */
+#undef KEEP
+	wd24_note(c, "wd_restore_panel() omitted: PR19, PR57, PR4 b5 were never changed");
+	if (!err)
+		c->in_text = true;
+	c->trial_pending = false;
+	set_expect(c);
+	return err;
+}
+
 /* ---- plans -------------------------------------------------------------- */
 
-/* wd90c24fb load: panel read (hw.c 75-84), save (main.c 1446), relock (1448) */
+/*
+ * wd90c24fb load (main.c 1444-1448): panel read (hw.c 75-84), wd_save_ext,
+ * save_vga (cmap, mode, fonts: vgastate order), wd_relock.  wd24adv adds the
+ * read-only entry check in front.  Nothing in the visible state changes:
+ * the only data writes are value-identical idioms and vgastate's blank /
+ * plane-select / restore block around the planar reads.
+ */
 int wd24_plan_load(struct wd24_ctx *c)
 {
-	wd24_note(c, "load: panel check, save BIOS state, relock (wd90c24fb_main.c 1446-1448)");
-	TRY(wd24_check_panel(c));
-	TRY(wd24_save_ext(c, &c->bios));
-	c->saved = true;
-	return wd24_relock(c, &c->bios);
+	int err;
+
+	wd24_note(c, "load: entry check, panel check, save BIOS ext + VGA state, relock (wd90c24fb_main.c 1444-1448)");
+	TRY(wd24_entry_check(c, WD24_PH_LOAD));
+	err = wd24_check_panel(c);
+	if (!err)
+		err = wd24_save_ext(c, &c->bios);
+	if (!err)
+		err = wd24_save_cmap(c);
+	if (!err)
+		err = wd24_save_std(c);
+	if (!err)
+		err = wd24_save_planes(c);
+	if (!err)
+		err = wd24_relock(c, &c->bios);
+	if (err) {
+		if (c->nwrites)
+			wd24_restore_all(c);
+		return err;
+	}
+	c->in_text = true;
+	set_expect(c);
+	return 0;
 }
 
 /*
@@ -410,22 +912,14 @@ int wd24_plan_load(struct wd24_ctx *c)
  * BIOS-ext modes (320x200 / mode 13h): wd_restore_text() order (main.c
  * 802-815) with the mode 13h standard registers in place of the saved text
  * registers: restore_ext(BIOS), std, relock(BIOS), unblank.
+ *
+ * Any failure after the first write (guard refusal or readback mismatch)
+ * runs wd24_restore_all().
  */
-int wd24_plan_mode(struct wd24_ctx *c, const struct wd24_mode *m)
+static int mode_steps(struct wd24_ctx *c, const struct wd24_mode *m)
 {
 	struct wd24_ext ext;
-	const char *why;
 
-	if (!c->saved)
-		return -EINVAL;
-	if (wd24_mode_check(m, &why)) {
-		wd24_note(c, why);
-		return -EINVAL;
-	}
-	if (m->status != WD24_PROVEN) {
-		wd24_note(c, "UNPROVEN: disabled, no register is written");
-		return -EOPNOTSUPP;
-	}
 	TRY(wd24_check_panel(c));
 	wd24_mode_ext(m, &c->bios, &ext);
 	TRY(wd24_screen_on(c, false));
@@ -442,17 +936,92 @@ int wd24_plan_mode(struct wd24_ctx *c, const struct wd24_mode *m)
 	return wd24_screen_on(c, true);
 }
 
-/* wd_restore_text() (main.c 802-815) without restore_vga() and without
- * wd_restore_panel(): wd24adv never changes PR19/PR57/PR4 b5. */
+int wd24_plan_mode(struct wd24_ctx *c, const struct wd24_mode *m)
+{
+	unsigned int w0 = c->nwrites;
+	const char *why;
+	int err;
+
+	if (!c->saved)
+		return -EINVAL;
+	if (wd24_mode_check(m, &why)) {
+		wd24_note(c, why);
+		return -EINVAL;
+	}
+	if (m->status != WD24_PROVEN) {
+		wd24_note(c, "UNPROVEN: disabled, no register is written");
+		return -EOPNOTSUPP;
+	}
+	if (c->be->live && !(c->have & WD24_HAVE_PLANES)) {
+		wd24_note(c, "REFUSED: live mode set without saved video memory");
+		return -EINVAL;
+	}
+	TRY(wd24_entry_check(c, WD24_PH_MODE));
+	err = mode_steps(c, m);
+	if (err) {
+		if (c->nwrites != w0) {
+			wd24_note(c, "mode set failed after a write: restoring the state saved at load");
+			wd24_restore_all(c);
+		}
+		return err;
+	}
+	c->in_text = false;
+	c->trial_pending = true;
+	c->confirmed = false;
+	set_expect(c);
+	return 0;
+}
+
+int wd24_confirm(struct wd24_ctx *c)
+{
+	if (!c->trial_pending)
+		return -EINVAL;
+	c->confirmed = true;
+	c->trial_pending = false;
+	wd24_note(c, "trial: mode confirmed, kept until text restore or unload");
+	return 0;
+}
+
+/* trial timer: revert unless confirmed (no-op if confirmed or in text) */
+int wd24_trial_expire(struct wd24_ctx *c)
+{
+	if (!c->trial_pending)
+		return 0;
+	c->trial_pending = false;
+	wd24_note(c, "trial expired without confirm: restoring text state");
+	return wd24_plan_text(c);
+}
+
+/* text restore: wd_restore_text() (main.c 802-815) in full */
 int wd24_plan_text(struct wd24_ctx *c)
 {
 	if (!c->saved)
 		return -EINVAL;
-	TRY(wd24_restore_ext(c, &c->bios));
-	wd24_note(c, "std VGA registers, fonts, palette: from the copy saved at load (vgastate), not modelled");
-	TRY(wd24_relock(c, &c->bios));
-	TRY(wd24_screen_on(c, true));
-	wd24_note(c, "wd_restore_panel() omitted: PR19, PR57, PR4 b5 were never changed");
+	TRY(wd24_entry_check(c, WD24_PH_RESTORE));
+	return wd24_restore_all(c);
+}
+
+/*
+ * Optional test picture after a packed mode set: 16 vertical bars, 40
+ * pixels wide, in the 16 text colours (the DAC is still the BIOS text DAC;
+ * pixel values are the BIOS mode 03h AR00-0F entries), first 64 KiB of the
+ * frame (bank 0, 102 lines at 640 bytes per line).  Write-only.
+ */
+int wd24_pattern(struct wd24_ctx *c, const struct wd24_mode *m)
+{
+	static u8 line[640];
+	u32 y, x, lines;
+
+	if (m->ext != WD24_EXT_PACKED8 || c->in_text)
+		return -EINVAL;
+	for (x = 0; x < m->xres && x < sizeof(line); x++)
+		line[x] = c->vga.attr[(x / 40) & 15] & 0x3f;
+	lines = WD24_PLANE / m->xres;
+	if (c->be->mem_write)
+		for (y = 0; y < lines; y++)
+			c->be->mem_write(c, y * m->xres, line, m->xres);
+	ev_bulk(c, 0, c->be->mem_write ? "pattern: 16 colour bars, bank 0 (first 64 KiB)"
+				      : "pattern: (dry-run: memory not written)");
 	return 0;
 }
 
@@ -694,11 +1263,55 @@ int wd24_selftest(struct wd24_ctx *t, wd24_report_fn report, void *arg)
 	t->reg[WD24_CR][WD24_CR_PR19] = 0x5c;
 	t->nwrites = 0;
 	CHECK(wd24_plan_mode(t, wd24_mode_find("640x480-8")) == -ENODEV &&
-	      t->nwrites == 2, "PR19 changed after load: mode refused after the read idiom");
+	      t->nwrites == 0, "PR19 changed after load: mode refused by the entry check, 0 writes");
+
+	/* entry check: reads only, refusal = zero data writes */
+	st_fresh(t, WD24_LIVE_PR19);
+	t->reg[WD24_CR][WD24_CR_PR1B] = 0x00;
+	CHECK(wd24_plan_load(t) == -ENODEV && t->nwrites == 0,
+	      "entry: CR34 != A0 refused, 0 writes");
+	st_fresh(t, WD24_LIVE_PR19);
+	t->reg[WD24_MISC][0] = 0x66;
+	CHECK(wd24_plan_load(t) == -ENODEV && t->nwrites == 0,
+	      "entry: MISC b0 = 0 refused, 0 writes");
+	st_fresh(t, WD24_LIVE_PR19);
+	t->reg[WD24_CR][WD24_CR_PR18] = 0xc6;
+	CHECK(wd24_plan_load(t) == -ENODEV && t->nwrites == 0,
+	      "entry: PR18 != C7 refused, 0 writes");
+	st_fresh(t, WD24_LIVE_PR19);
+	t->reg[WD24_GR][WD24_GR_PR5] = 0x05;
+	CHECK(wd24_plan_load(t) == -ENODEV && t->nwrites == 0,
+	      "entry: GR0F/CR29 = 05/00 refused, 0 writes");
+	st_fresh(t, WD24_LIVE_PR19);
+	t->reg[WD24_GR][WD24_GR_PR5] = 0x05;
+	t->reg[WD24_CR][WD24_CR_PR10] = 0x85;
+	CHECK(wd24_plan_load(t) == 0 && t->nrefused == 0,
+	      "entry: GR0F/CR29 = 05/85 (wd90c24fb live state) accepted");
+	st_fresh(t, WD24_LIVE_PR19);
+	t->reg[WD24_SR][WD24_SR_PR20] = 0x08;
+	CHECK(wd24_plan_load(t) == -ENODEV && t->nwrites == 0,
+	      "entry: SR06 not locked refused, 0 writes");
+	st_fresh(t, WD24_LIVE_PR19);
+	t->reg[WD24_AR][0x10] |= 0x01;
+	CHECK(wd24_plan_load(t) == -ENODEV && t->nwrites == 0,
+	      "entry: AR10 graphics refused, 0 writes");
+	st_loaded(t);
+	t->reg[WD24_CR][WD24_CR_PR10] = 0x85;
+	t->nwrites = 0;
+	CHECK(wd24_plan_mode(t, wd24_mode_find("640x480-8")) == -ENODEV &&
+	      t->nwrites == 0, "entry: CR29 changed since load: mode refused, 0 writes");
+	st_loaded(t);
+	t->reg[WD24_CR][WD24_CR_PR19] = 0x5c;
+	CHECK(wd24_plan_text(t) == 0 && t->nrefused == 0,
+	      "entry (restore): PR19 difference logged, restore proceeds");
+	st_loaded(t);
+	t->reg[WD24_CR][WD24_CR_PR1B] = 0x00;
+	CHECK(wd24_plan_text(t) == -ENODEV, "entry (restore): CR34 != A0 refused");
 
 	/* a clock change is never silent */
 	st_loaded(t);
 	t->bios.pr68 = 0x15;
+	t->reg[WD24_SR][WD24_SR_PR68] = 0x15;
 	t->nwrites = 0;
 	from = t->nev;
 	ok = wd24_plan_mode(t, wd24_mode_find("640x480-8")) == -EPERM &&

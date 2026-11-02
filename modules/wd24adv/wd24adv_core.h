@@ -94,11 +94,14 @@ enum wd24_rf {
 #define WD24_LIVE_PR18		0xc7	/* single TFT, LCD-only route */
 #define WD24_LIVE_PR19		0x54	/* LCD on, CRT off, centring on */
 
-/* ---- event log (what, in dry-run, would have been done) --------------- */
+/* ---- event log (what was, or in dry-run would have been, done) -------- */
 enum wd24_ev {
 	WD24_EV_WRITE,		/* rf, idx, old, val */
 	WD24_EV_REFUSED,	/* guard refused rf/idx/val; err */
 	WD24_EV_NOTE,		/* static text */
+	WD24_EV_CHECK,		/* entry check failed: rf/idx read val, expected old */
+	WD24_EV_MISMATCH,	/* readback after a write: wrote old, read val */
+	WD24_EV_BULK,		/* DAC / video memory block: note, val = plane */
 };
 
 struct wd24_event {
@@ -108,15 +111,46 @@ struct wd24_event {
 	const char *note;	/* NOTE text, or the source tag of a write */
 };
 
-#define WD24_MAXEV	320
+#define WD24_MAXEV	1024
 
 struct wd24_ctx;
 
-/* Backend: only the dry-run recorder exists in this build. */
+/*
+ * Backends: the dry-run recorder (wd24_dryrun_backend, model only) and the
+ * port backend (wd24_port_backend, wd24adv_port.c), which executes the same
+ * plan through a struct wd24_io: inb/outb on the real ports in the kernel
+ * (live=1), or a host port model in tests/.  The plan code is identical.
+ *
+ * live: reads come from the chip, so wd24_write() pre-reads the registers
+ * the guard needs and reads every written register back (wd24_verify()).
+ */
 struct wd24_backend {
 	const char *name;
+	bool live;
 	int (*write)(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 val);
 	u8 (*read)(struct wd24_ctx *c, enum wd24_rf rf, u8 idx);
+	/* 3C4 index width test (wd24probe3): 1 = SR06 latch unlocked
+	 * (index bits 5:3 stick), 0 = locked, <0 = no hardware */
+	int (*seq_unlocked)(struct wd24_ctx *c);
+	/* DAC: 3C8/3C7 index 0, 768 bytes via 3C9 (vgastate cmap order);
+	 * pel = 3C6 value written first (vgastate writes FFh) */
+	void (*dac_read)(struct wd24_ctx *c, u8 pel, u8 *rgb768);
+	void (*dac_write)(struct wd24_ctx *c, u8 pel, const u8 *rgb768);
+	/* video memory window A0000-AFFFF, as currently mapped by the chip */
+	void (*mem_read)(struct wd24_ctx *c, u32 off, u8 *buf, u32 n);
+	void (*mem_write)(struct wd24_ctx *c, u32 off, const u8 *buf, u32 n);
+	/* bracket a whole plan: save / restore the 3C4, 3CE, 3D4 indices */
+	void (*begin)(struct wd24_ctx *c);
+	void (*end)(struct wd24_ctx *c);
+};
+
+/* Port access used by wd24_port_backend; kernel: inb/outb + ioremap */
+struct wd24_io {
+	u8 (*inb)(void *priv, u16 port);
+	void (*outb)(void *priv, u8 val, u16 port);
+	u8 (*memr)(void *priv, u32 off);
+	void (*memw)(void *priv, u32 off, u8 val);
+	void *priv;
 };
 
 /* Saved extended state: the same fields wd90c24fb's wd_ext_state has. */
@@ -128,11 +162,47 @@ struct wd24_ext {
 	u8 pr68, pr69, pr72;
 };
 
+/* ---- standard VGA register set (same layout as wd90c24fb's wd_std) ----- */
+struct wd24_std {
+	u8 misc;
+	u8 seq[5];
+	u8 crtc[25];
+	u8 gfx[9];
+	u8 attr[21];
+};
+
+#define WD24_PLANE	0x10000u	/* bytes per plane (64 KiB window) */
+#define WD24_PLANES_SZ	(4 * WD24_PLANE)
+
+/* what wd24_plan_load() saved (c->have) */
+#define WD24_HAVE_LOCKS		0x01	/* MISC, CR11, PR5, PR10, PR20 */
+#define WD24_HAVE_EXT		0x02	/* the rest of struct wd24_ext */
+#define WD24_HAVE_CMAP		0x04	/* DAC, 768 bytes */
+#define WD24_HAVE_STD		0x08	/* struct wd24_std (vgastate save_vga_mode) */
+#define WD24_HAVE_PLANES	0x10	/* 4 x 64 KiB (fonts + text) */
+
+enum wd24_phase { WD24_PH_LOAD, WD24_PH_MODE, WD24_PH_RESTORE };
+
 struct wd24_ctx {
 	const struct wd24_backend *be;
+	const struct wd24_io *io;	/* port backend only */
 	bool allow_clock;	/* PR68/PR69 data writes (no mode uses them) */
 	/* state */
-	bool saved;		/* wd24_load() ran: bios is valid */
+	bool saved;		/* lock values in bios are valid (guard) */
+	unsigned int have;	/* WD24_HAVE_* */
+	bool restoring;		/* inside wd24_restore_all(): mismatches don't stop */
+	bool failed;		/* a readback mismatch happened */
+	bool in_text;		/* chip is (believed) in the BIOS text state */
+	bool trial_pending;	/* a mode set waits for confirm or expiry */
+	bool confirmed;		/* the pending mode was confirmed */
+	/* entry state the next plan expects (set at the end of each plan) */
+	u8 exp_misc, exp_gr0f, exp_cr29, exp_sr06;
+	struct wd24_std vga;	/* saved standard registers */
+	u8 cmap[768];		/* saved DAC */
+	u8 *planes;		/* 4 x 64 KiB, caller-owned; NULL: not saved */
+	u8 saved_idx[3];	/* port backend: 3C4/3CE/3D4 index at begin() */
+	unsigned long hw_data, hw_index;	/* port backend: port writes */
+	unsigned int nmismatch, nbulk;
 	struct wd24_ext bios;	/* BIOS state saved at load */
 	bool pr1b_armed;	/* CR34 lock value just read: idiom may start */
 	bool pr1b_open;		/* inside the CR34 read idiom */
@@ -144,15 +214,6 @@ struct wd24_ctx {
 	/* log */
 	struct wd24_event ev[WD24_MAXEV];
 	unsigned int nev, nwrites, nrefused, dropped;
-};
-
-/* ---- standard VGA register set (same layout as wd90c24fb's wd_std) ----- */
-struct wd24_std {
-	u8 misc;
-	u8 seq[5];
-	u8 crtc[25];
-	u8 gfx[9];
-	u8 attr[21];
 };
 
 /* ---- mode table -------------------------------------------------------- */
@@ -218,15 +279,32 @@ int wd24_write_std(struct wd24_ctx *c, const struct wd24_std *std);
 void wd24_mode_ext(const struct wd24_mode *m, const struct wd24_ext *bios,
 		   struct wd24_ext *ext);
 
+int wd24_entry_check(struct wd24_ctx *c, enum wd24_phase ph);
+int wd24_verify(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 val);
+int wd24_save_cmap(struct wd24_ctx *c);
+int wd24_restore_cmap(struct wd24_ctx *c);
+int wd24_save_std(struct wd24_ctx *c);
+int wd24_restore_std(struct wd24_ctx *c);
+int wd24_save_planes(struct wd24_ctx *c);
+int wd24_restore_planes(struct wd24_ctx *c);
+int wd24_restore_all(struct wd24_ctx *c);
+void wd24_log_reset(struct wd24_ctx *c);
+
 int wd24_plan_load(struct wd24_ctx *c);
 int wd24_plan_mode(struct wd24_ctx *c, const struct wd24_mode *m);
 int wd24_plan_text(struct wd24_ctx *c);
+int wd24_pattern(struct wd24_ctx *c, const struct wd24_mode *m);
+/* trial: every successful mode set leaves trial_pending; expiry without a
+ * confirm runs the text restore (the kernel module arms a timer) */
+int wd24_confirm(struct wd24_ctx *c);
+int wd24_trial_expire(struct wd24_ctx *c);
 
 /* shared self-test (kernel /proc/wd24adv/selftest and host test) */
 typedef void (*wd24_report_fn)(void *arg, bool ok, const char *what);
 int wd24_selftest(struct wd24_ctx *t, wd24_report_fn report, void *arg);
 
 extern const struct wd24_backend wd24_dryrun_backend;
+extern const struct wd24_backend wd24_port_backend;
 
 const char *wd24_rf_name(enum wd24_rf rf);
 

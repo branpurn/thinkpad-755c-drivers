@@ -115,12 +115,30 @@ static void reset(void)
 	wd24_model_boot(&c);
 }
 
+/* wd24adv writes tagged "vgastate ..." are its copy of Linux vgastate
+ * (save_vga/restore_vga, which wd90c24fb calls but this harness does not
+ * compile); they are compared against the vgastate source order by
+ * test_vga, not here */
+static bool is_vgastate(const struct wd24_event *e)
+{
+	return e->note && !strncmp(e->note, "vgastate", 8);
+}
+
 static void wd24_writes(unsigned int from)
 {
 	ngot = 0;
 	for (unsigned int i = from; i < c.nev; i++)
-		if (c.ev[i].type == WD24_EV_WRITE)
+		if (c.ev[i].type == WD24_EV_WRITE && !is_vgastate(&c.ev[i]))
 			got[ngot++] = (struct w){ c.ev[i].rf, c.ev[i].idx, c.ev[i].val };
+}
+
+/* stand-in for wd90c24fb's restore_vga(): apply wd24adv's vgastate
+ * writes from events [from, nev) to the port model, untraced */
+static void replay_vgastate(unsigned int from)
+{
+	for (unsigned int i = from; i < c.nev; i++)
+		if (c.ev[i].type == WD24_EV_WRITE && is_vgastate(&c.ev[i]))
+			reg[c.ev[i].rf][c.ev[i].idx] = c.ev[i].val;
 }
 
 /* drop wd_restore_ext's clock block (SR35=50 .. SR35=P) from trace[from..] */
@@ -258,15 +276,17 @@ int main(void)
 	T(same(from, "320x200-8"), "320x200 = wd90c24fb writers, 13h regs");
 	T(same_state(), "320x200 end state");
 
-	/* text restore after 320x200: wd_restore_text minus restore_vga/panel */
-	from = ntrace;
-	wd_restore_ext(&hw, &bios);
-	wd_relock(&hw, &bios);
-	wd_screen_on(&hw, true);
-	drop_clock(from);
+	/* text restore after 320x200: wd_restore_text minus panel; restore_vga
+	 * is stood in for by wd24adv's own vgastate writes */
 	{ unsigned int f = c.nev;
 	  T(wd24_plan_text(&c) == 0, "text plan");
-	  wd24_writes(f); }
+	  wd24_writes(f);
+	  from = ntrace;
+	  wd_restore_ext(&hw, &bios);
+	  replay_vgastate(f);
+	  wd_relock(&hw, &bios);
+	  wd_screen_on(&hw, true);
+	  drop_clock(from); }
 	T(same(from, "text"), "text restore = wd_restore_text ext part");
 	T(same_state(), "text end state");
 
