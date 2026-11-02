@@ -246,3 +246,15 @@ The trial brings text back after 15 s. Do not use `confirm` without serial.
 - **wd90c24fb `text=1` + rmmod** before the test: QEMU (fake=3) and live
   (L, see "Live observations").
 - **Serial getty**: a root shell on ttyS0 drove the first attempt (L).
+
+### S1 live attempt 2026-11-02: not run (vermagic)
+
+The 945c255 module (sha `3d700867…`) was refused at load: `version magic
+'6.18.57-tc755 mod_unload 486 ' should be '6.18.57-tc755x mod_unload 486 '`,
+insmod RC=8. S1 made no port accesses. The run stopped there; wd90c24fb and X
+were restored, and the wd24probe3 baseline matched all nine registers.
+Raw log: [s1-live-2026-11-02.txt](s1-live-2026-11-02.txt).
+Live modules must be built against the **6.18.57-tc755x** tree, not
+`build/kernel-obj` (6.18.57-tc755). A tc755x rebuild of the same source has
+sha256 `d5973eae…` (needs its own approval). The 755C line editor truncates
+input at about 500 characters, so keep each command line under ~400.

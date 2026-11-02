@@ -1,0 +1,41 @@
+wd24adv S1 live attempt, 2026-11-02 (times UTC). Build under test: 945c255,
+wd24adv.ko sha256 3d700867aa3070d0ae69ea45a104e7100bf44668aa8c5c5c7637c17f26eaf0c5,
+vermagic "6.18.57-tc755 mod_unload 486". Result: NOT RUN (refused at load).
+
+21:03:51 step 0 read-only: up 2 min; wd90c24fb loaded; /proc/fb "0 WD90C24";
+         Xfbdev 448 (parent startx 97, jwm, rxvt); tty3 active; /tmp ko files
+         absent (lost at reboot). Normal state.
+21:05:19 XMODEM /tmp/wd24adv.ko   (sha 3d700867 verified)
+21:06:02 XMODEM /tmp/wd24probe3.ko (sha eb0a36e2 verified)
+21:06:48 kill 448 -> no Xfbdev, tty1 active ("Can't deallocate console 3 errno 16", seen before)
+21:07:47 echo 1 > /sys/module/wd90c24fb/parameters/text; rmmod wd90c24fb
+         -> T=0 RM=0, "Console: switching to colour VGA+ 80x25", /proc/fb empty
+21:08:57 run-1 command line (~620 chars) truncated by the 755C line editor
+         (~500 char limit); ash left at PS2; ^C sent at 21:11:32. Verified
+         nothing ran: no wd24adv module, no /tmp/s1run1.txt, 0 wd24adv dmesg lines.
+21:12:30 run 1 (short line), gate (sha8, #wd90c24fb/vga16fb/wd24adv, /proc/fb lines, Xfbdev):
+  G=3d700867001
+  wd24adv: version magic '6.18.57-tc755 mod_unload 486 ' should be '6.18.57-tc755x mod_unload 486 '
+  insmod: can't insert '/tmp/wd24adv.ko': invalid module format
+  RC=8
+         -> module never loaded; S1 made zero port accesses. STOP (no retry).
+21:13:52 restore: insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko -> RC=0
+  wd90c24fb: found WD90C24 (CR36/37 "24"), 1024 KiB video memory
+  wd90c24fb: BITBLT self-test passed: acceleration on
+  wd90c24fb: fb0: WD90C24, 640x480x8 via PR0(A) banking, 300 KiB shadow, BITBLT
+21:14:54 startx as xautostart -> Xfbdev 553 (parent startx 543), jwm, rxvt
+21:15:33 baseline read (wd24probe3, RC=19 by design):
+  wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
+  wd24probe3: CR34 L=a0 again=a0 wrote=a0 rb=a0 restored-rb=a0
+  wd24probe3: GR0F=05 GR0E=01 SR06=0f CR11=8c CR29=85
+  wd24probe3: PR18(CR31)=c7 PR19(CR32)=54 PR1A(CR33)=00 PR36(CR3B)=ef PR37(CR3C)=9a PR39(CR3E)=20
+  wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
+  wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+  -> all 9 baseline registers match; no wd24* module loaded afterwards.
+
+Cause: 945c255 was built against build/kernel-obj (release 6.18.57-tc755);
+the 755C runs 6.18.57-tc755x. Earlier live builds (5f275b4, wd24probe3) used
+the tc755x tree. A box-only rebuild of the unchanged 945c255 source with
+KDIR=<tc755x kernel-obj> gives vermagic "6.18.57-tc755x mod_unload 486",
+sha256 d5973eaead1a03b92c6e88bad3eec9298df4d88b47f6245d5df740bce319dbc5
+(not run on the device). Keep live command lines under ~400 chars.
