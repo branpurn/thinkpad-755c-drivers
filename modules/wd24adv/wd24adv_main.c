@@ -66,7 +66,7 @@ MODULE_PARM_DESC(mode, "live: set this PROVEN mode right after load (trial appli
 
 static bool pattern = true;
 module_param(pattern, bool, 0444);
-MODULE_PARM_DESC(pattern, "live: draw 16 colour bars after a packed mode set (default 1)");
+MODULE_PARM_DESC(pattern, "live: draw 16 colour bars after a packed or 320x200 mode set (default 1)");
 
 static bool allow_routing;
 module_param(allow_routing, bool, 0444);
@@ -394,7 +394,7 @@ static int hw_run(enum hw_op op, const struct wd24_mode *m)
 		break;
 	case OP_MODE:
 		err = wd24_plan_mode(hw, m);
-		if (!err && pattern && m->ext == WD24_EXT_PACKED8)
+		if (!err && pattern && wd24_has_pattern(m))
 			err = wd24_pattern(hw, m);
 		break;
 	case OP_TEXT:

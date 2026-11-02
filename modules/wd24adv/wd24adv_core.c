@@ -1017,12 +1017,58 @@ int wd24_plan_text(struct wd24_ctx *c)
  * Video memory at and above 256 KiB is not saved/restored (not visible
  * in text mode).
  */
+/*
+ * Direct (<= 64 KiB, chain-4) modes, i.e. 320x200-8 / mode 13h: the same 16
+ * bars (xres / 16 = 20 pixels each, same BIOS text colours) over the whole
+ * frame (xres * yres = 64000 bytes), written straight through the A0000
+ * window.  NO register write at all: no PR0A (mode_steps() restored the
+ * BIOS ext block, whose PR0A must be bank 0, checked from the saved value),
+ * no map mask (SR02 = 0Fh from the mode 13h set).  Write-only.
+ */
+static int pattern_direct(struct wd24_ctx *c, const struct wd24_mode *m)
+{
+	static u8 line[640];
+	u32 x, y, w = m->xres / 16;
+
+	if (!(m->flags & WD24M_DIRECT) || m->ext != WD24_EXT_BIOS || !m->std ||
+	    !(m->std->seq[4] & 0x08) || m->std->seq[2] != 0x0f ||
+	    m->xres > sizeof(line) || m->xres % 16 ||
+	    m->frame_bytes > WD24_PLANE) {
+		wd24_note(c, "pattern: direct mode not chain-4 / > 64 KiB: not drawn");
+		return -EINVAL;
+	}
+	if (c->bios.pr0a != 0x00) {
+		wd24_note(c, "pattern: BIOS PR0A is not bank 0: not drawn (no register written)");
+		return -EINVAL;
+	}
+	for (x = 0; x < m->xres; x++)
+		line[x] = c->vga.attr[(x / w) & 15] & 0x3f;
+	if (!c->be->mem_write) {
+		ev_bulk(c, 0, "pattern: (dry-run: memory not written)");
+		return 0;
+	}
+	for (y = 0; y < m->yres; y++)
+		c->be->mem_write(c, y * m->xres, line, m->xres);
+	ev_bulk(c, 0, "pattern: 16 colour bars, 20 px, whole 64000-byte frame, A0000 window, no register write");
+	return 0;
+}
+
+bool wd24_has_pattern(const struct wd24_mode *m)
+{
+	return m->ext == WD24_EXT_PACKED8 ||
+	       (m->ext == WD24_EXT_BIOS && (m->flags & WD24M_DIRECT));
+}
+
 int wd24_pattern(struct wd24_ctx *c, const struct wd24_mode *m)
 {
 	static u8 line[2][640];
 	u32 x, size, bank, L, end;
 
-	if (m->ext != WD24_EXT_PACKED8 || c->in_text || m->xres > sizeof(line[0]))
+	if (c->in_text)
+		return -EINVAL;
+	if (m->ext == WD24_EXT_BIOS && (m->flags & WD24M_DIRECT))
+		return pattern_direct(c, m);
+	if (m->ext != WD24_EXT_PACKED8 || m->xres > sizeof(line[0]))
 		return -EINVAL;
 	for (x = 0; x < m->xres; x++) {
 		line[0][x] = c->vga.attr[(x / 40) & 15] & 0x3f;

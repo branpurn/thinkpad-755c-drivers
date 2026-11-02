@@ -225,6 +225,65 @@ int main(void)
 	T(err == 0 && vm_cmp(&m, &snap, "full-frame pattern revert") == 0,
 	  "full-frame pattern: trial revert leaves the model identical");
 
+	/* 8. 320x200-8 (mode 13h) pattern: all 64000 bytes through the A0000
+	 * window, 16 bars of 20 px, chain-4 (linear L = plane L&3, offset L>>2),
+	 * no port write at all (no PR0A), no violation; mode-set counts as
+	 * predicted for the live run; trial revert identical */
+	setup(VM_WD24, 70);
+	RUN(wd24_plan_load(&c));
+	{
+		unsigned long d0 = c.hw_data, i0 = c.hw_index, d1, i1;
+		u32 L, bad = 0, w0;
+		unsigned long wsum;
+
+		c.be->begin(&c);
+		err = wd24_plan_mode(&c, m13);
+		d1 = c.hw_data; i1 = c.hw_index;
+		w0 = m.mem_writes;
+		wsum = m.data_writes + m.index_writes;
+		if (!err && wd24_has_pattern(m13))
+			err = wd24_pattern(&c, m13);
+		T(c.hw_data == d1 && c.hw_index == i1 && m.data_writes + m.index_writes == wsum,
+		  "320x200-8 pattern: no port write (no PR0A, no map mask)");
+		c.be->end(&c);
+		T(err == 0 && c.nmismatch == 0 && m.violations == 0, "320x200-8 + pattern: ok, no forbidden register");
+		T(m.mem_writes - w0 == 64000, "320x200-8 pattern: exactly 64000 window writes");
+		T(c.hw_data - d0 == 90 && c.hw_index - i0 == 258,
+		  "320x200-8 mode + pattern: 90 data / 258 index port writes (live prediction)");
+		for (L = 0; L < 320 * 200; L++) {
+			u8 want = c.vga.attr[((L % 320) / 20) & 15] & 0x3f;
+
+			bad += m.vram[L & 3][L >> 2] != want;
+		}
+		T(bad == 0, "320x200-8 pattern: all 64000 pixels are the right bar colour");
+		T(m.gr[0x09] == 0x00 && m.sr[2] == 0x0f && (m.sr[4] & 0x08), "320x200-8: bank 0, map mask 0F, chain-4");
+	}
+	err = RUN(wd24_trial_expire(&c));
+	T(err == 0 && c.nmismatch == 0 && vm_cmp(&m, &snap, "13h pattern revert") == 0,
+	  "320x200-8 pattern: trial revert leaves the model identical");
+	{
+		const struct wd24_mode *mx = wd24_mode_find("320x240-8x");
+
+		T(wd24_has_pattern(m480) && wd24_has_pattern(m400) && wd24_has_pattern(m13) &&
+		  !wd24_has_pattern(mx), "pattern only for PROVEN packed/direct modes");
+	}
+	/* BIOS PR0A != 0: the 13h pattern refuses without writing anything */
+	setup(VM_WD24, 71);
+	RUN(wd24_plan_load(&c));
+	RUN(wd24_plan_mode(&c, m13));
+	{
+		unsigned long d0 = c.hw_data, i0 = c.hw_index;
+		u32 w0 = m.mem_writes;
+		u8 keep = c.bios.pr0a;
+
+		c.bios.pr0a = 0x10;
+		err = RUN(wd24_pattern(&c, m13));
+		c.bios.pr0a = keep;
+		T(err == -EINVAL && m.mem_writes == w0 && c.hw_data == d0 &&
+		  c.hw_index - i0 <= 3, "13h pattern with BIOS PR0A != 0: refused, nothing drawn");
+	}
+	RUN(wd24_trial_expire(&c));
+
 	printf("wd24adv vga model test: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;
 }

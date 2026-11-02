@@ -294,6 +294,7 @@ int wd24_plan_load(struct wd24_ctx *c);
 int wd24_plan_mode(struct wd24_ctx *c, const struct wd24_mode *m);
 int wd24_plan_text(struct wd24_ctx *c);
 int wd24_pattern(struct wd24_ctx *c, const struct wd24_mode *m);
+bool wd24_has_pattern(const struct wd24_mode *m);
 /* trial: every successful mode set leaves trial_pending; expiry without a
  * confirm runs the text restore (the kernel module arms a timer) */
 int wd24_confirm(struct wd24_ctx *c);
