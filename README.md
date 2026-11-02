@@ -97,8 +97,9 @@ plus `out/sdl/sdltest.i486`. `sdl/tests/qemu-wdfb.py` tests it under
 
 `doom/` builds `doom-wdfb`: doomgeneric at a pinned commit (sha256 checked),
 patched to draw its 8-bit frame straight into the wd90c24fb shadow at pitch
-640, with one damage ioctl per frame. 320x200 centred, or 640x400 with
-`DOOM_WDFB_SCALE=2`; no sound yet. `make doom` builds it (static, i486);
+640, with one damage ioctl per frame. Full screen 640x480 by default,
+`DOOM_WDFB_SCALE=2` for 640x400 or `=1` for 320x200 centred (fastest); no
+sound yet. `make doom` builds it (static, i486);
 `make test-doom IWAD=/path/to/DOOM.WAD` tests it under QEMU. No WAD is
 included and none may be committed. See [doom/README.md](doom/README.md).
 

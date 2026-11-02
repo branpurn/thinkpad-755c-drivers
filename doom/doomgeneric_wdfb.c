@@ -11,8 +11,10 @@
  * draws its 320x200 8-bit frame straight into it (build with
  * -DDG_DIRECT -DSCREENPITCH=640, see patches/): DG_DrawFrame only reports
  * the frame with one WDFB_OP_DAMAGE, which also stops the driver's 10 Hz
- * poll. With DOOM_WDFB_SCALE=2, Doom draws into a buffer that is doubled
- * into the shadow (640x400). The palette goes through FBIOPUTCMAP.
+ * poll. In the other modes Doom draws into a buffer that is scaled into the
+ * shadow: "full" (default) fills 640x480, 2x across and 2.4x down (rows
+ * shown 2,2,3,2,3 times; this is also Doom's intended 4:3 aspect), "2"
+ * gives 640x400 with black bars. The palette goes through FBIOPUTCMAP.
  *
  * Keyboard: evdev (/dev/input/event*, grabbed), else the console in
  * K_MEDIUMRAW. The console goes to KD_GRAPHICS and is given back on exit
@@ -22,7 +24,8 @@
  *   DOOM_WDFB_DEVICE  frame buffer (default /dev/fb0). A regular file of
  *                     640*480 bytes is a fake frame buffer for tests; the
  *                     palette then goes to <file>.pal (256 x RGB).
- *   DOOM_WDFB_SCALE   1 (default: 320x200 centred) or 2 (640x400)
+ *   DOOM_WDFB_SCALE   full (default: 640x480, 2x by 2.4x), 1 (320x200
+ *                     centred, drawn in place: fastest) or 2 (640x400)
  *   DOOM_WDFB_FORCE   1 = use the frame buffer even if another process
  *                     (X) has it open
  *   DOOM_WDFB_INPUT   auto (default), evdev, console or none
@@ -98,6 +101,8 @@ static struct {
     size_t maplen;
     int xres, yres, pitch;
     int scale, ox, oy;          /* Doom's frame on the screen */
+    int ow, oh;                 /* its size there */
+    unsigned char rows[SCREENHEIGHT]; /* full: times each row is shown */
     unsigned char *back;        /* Doom draws here unless direct */
     __u16 saved_r[256], saved_g[256], saved_b[256];
     int have_saved_cmap;
@@ -533,18 +538,34 @@ void DG_Init(void)
 
 uint8_t *DG_VideoBuffer(void)
 {
+    const char *mode = env("DOOM_WDFB_SCALE", "full");
+    int y;
+
     open_fb();
-    wd.scale = atoi(env("DOOM_WDFB_SCALE", "1")) == 2 && wd.xres >= 2 * SCREENWIDTH
-               && wd.yres >= 2 * SCREENHEIGHT ? 2 : 1;
-    wd.ox = (wd.xres - SCREENWIDTH * wd.scale) / 2;
-    wd.oy = (wd.yres - SCREENHEIGHT * wd.scale) / 2;
+    /* 0 = full: 2x across, FB_H/SCREENHEIGHT (2.4) down; else 1 or 2 */
+    wd.scale = !strcmp(mode, "1") ? 1 : !strcmp(mode, "2") ? 2 : 0;
+    if (wd.scale != 1 && strcmp(mode, "2") && strcmp(mode, "full"))
+        fprintf(stderr, "doom-wdfb: DOOM_WDFB_SCALE=%s: not 1, 2 or full; using full\n", mode);
+    if (!wd.scale && (wd.xres < 2 * SCREENWIDTH || wd.yres < 2 * SCREENHEIGHT))
+        wd.scale = 1;
+    if (wd.scale == 2 && (wd.xres < 2 * SCREENWIDTH || wd.yres < 2 * SCREENHEIGHT))
+        wd.scale = 1;
+    wd.ow = SCREENWIDTH * (wd.scale ? wd.scale : 2);
+    wd.oh = wd.scale ? SCREENHEIGHT * wd.scale : wd.yres;
+    if (!wd.scale) {
+        if (wd.oh > 3 * SCREENHEIGHT)
+            wd.oh = 3 * SCREENHEIGHT;
+        for (y = 0; y < SCREENHEIGHT; y++)  /* 480: 2,2,3,2,3, ... */
+            wd.rows[y] = (y + 1) * wd.oh / SCREENHEIGHT - y * wd.oh / SCREENHEIGHT;
+    }
+    wd.ox = (wd.xres - wd.ow) / 2 & ~3;
+    wd.oy = (wd.yres - wd.oh) / 2;
     init_input();
-    clear_screen();             /* the border stays black from now on */
-    if (wd.debug)
-        fprintf(stderr, "doom-wdfb: %s %dx%d pitch %d, %dx%d at %d,%d%s%s\n", wd.device,
-                wd.xres, wd.yres, wd.pitch, SCREENWIDTH * wd.scale, SCREENHEIGHT * wd.scale,
-                wd.ox, wd.oy, wd.scale == 1 && wd.pitch == SCREENPITCH ? " (direct)" : "",
-                wd.use_ops ? ", damage ioctl" : "");
+    clear_screen();             /* any border stays black from now on */
+    fprintf(stderr, "doom-wdfb: %s %dx%d pitch %d, %s: %dx%d at %d,%d%s%s\n", wd.device,
+            wd.xres, wd.yres, wd.pitch, wd.scale ? (wd.scale == 1 ? "1x" : "2x") : "full",
+            wd.ow, wd.oh, wd.ox, wd.oy, wd.scale == 1 && wd.pitch == SCREENPITCH ? " (direct)" : "",
+            wd.use_ops ? ", damage ioctl" : "");
     if (wd.scale == 1 && wd.pitch == SCREENPITCH)
         return wd.fb + wd.oy * wd.pitch + wd.ox;
     if (!(wd.back = calloc(SCREENHEIGHT, SCREENPITCH)))
@@ -572,16 +593,26 @@ static void present(void)
         for (y = 0; y < SCREENHEIGHT; y++, src += SCREENPITCH, dst += wd.pitch)
             memcpy(dst, src, SCREENWIDTH);
     } else {
-        for (y = 0; y < SCREENHEIGHT; y++, src += SCREENPITCH, dst += 2 * wd.pitch) {
-            unsigned *d = (unsigned *)dst; /* wd.ox is a multiple of 4 */
-            for (x = 0; x < SCREENWIDTH; x += 2) {
-                unsigned a = src[x], b = src[x + 1];
-                *d++ = a | a << 8 | b << 16 | b << 24;
+        /* double each row once (4 source pixels -> two 32-bit stores; the
+           shadow and wd.ox are 4-byte aligned), then memcpy the repeats */
+        for (y = 0; y < SCREENHEIGHT; y++, src += SCREENPITCH) {
+            const unsigned *s = (const unsigned *)src;
+            unsigned *d = (unsigned *)dst;
+            unsigned char *row = dst;
+            int n = wd.scale ? wd.scale : wd.rows[y];
+
+            for (x = 0; x < SCREENWIDTH / 4; x++) {
+                unsigned v = s[x], a = v & 0xff, b = v & 0xff00, c = v >> 16 & 0xff, e = v & 0xff000000;
+
+                d[0] = a | a << 8 | b << 8 | b << 16;
+                d[1] = c | c << 8 | e >> 8 | e;
+                d += 2;
             }
-            memcpy(dst + wd.pitch, dst, 2 * SCREENWIDTH);
+            for (dst += wd.pitch; --n > 0; dst += wd.pitch)
+                memcpy(dst, row, 2 * SCREENWIDTH);
         }
     }
-    damage(wd.ox, wd.oy, SCREENWIDTH * wd.scale, SCREENHEIGHT * wd.scale);
+    damage(wd.ox, wd.oy, wd.ow, wd.oh);
 }
 
 void DG_DrawFrame(void)

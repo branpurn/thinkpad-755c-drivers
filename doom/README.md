@@ -3,9 +3,10 @@
 [doomgeneric](https://github.com/ozkl/doomgeneric) (Chocolate Doom 1.x
 based) with a platform file for the native `wd90c24fb` driver
 (`fb-wd90c24.tcz`): one static i486 binary, no SDL, no X, no libraries.
-Doom draws its 8-bit paletted frame **straight into the driver's frame
-shadow** (the RAM that `mmap(/dev/fb0)` returns) and reports it with one
-`WDFB_OP_DAMAGE` per frame; the palette goes through `FBIOPUTCMAP`.
+Doom's 8-bit paletted frame goes into the driver's frame shadow (the RAM
+that `mmap(/dev/fb0)` returns), reported with one `WDFB_OP_DAMAGE` per
+frame; the palette goes through `FBIOPUTCMAP`. By default it fills the
+whole 640x480 panel; at 1x Doom draws straight into the shadow.
 
 **No WAD is included, and none may ever be committed** (`*.wad` is in
 `.gitignore`). Bring your own: `DOOM.WAD` / `DOOM1.WAD` (shareware) /
@@ -37,7 +38,7 @@ frame buffer another process (Xfbdev) has open.
 
 | variable | meaning |
 |---|---|
-| `DOOM_WDFB_SCALE=2` | 640x400 (pixel-doubled) instead of 320x200 centred. Costs about 3x the flush time |
+| `DOOM_WDFB_SCALE` | `full` (default): the whole 640x480 screen, 2x across and 2.4x down (each row shown 2, 2, 3, 2, 3, ... times), no bars. This is Doom's intended 4:3 shape. `2`: 640x400, pixel-doubled, black bars top and bottom. `1`: 320x200 centred, drawn in place: the fastest |
 | `DOOM_WDFB_DEVICE` | frame buffer, default `/dev/fb0` |
 | `DOOM_WDFB_INPUT` | `auto` (default: evdev, else console), `evdev`, `console`, `none` |
 | `DOOM_WDFB_KBD` | one evdev device instead of scanning `/dev/input/event*` |
@@ -73,10 +74,20 @@ an `i_sound` module writing 8-bit mono to it is the obvious next step.
 
 `doomgeneric_wdfb.c`: at 1x `DG_VideoBuffer` returns the shadow at
 (160,140), so a frame costs Doom's own drawing plus one ioctl that copies
-320x200 to video memory (about 9 ms measured on the 755C). At 2x Doom draws
-into a buffer that is pixel-doubled into the shadow (about 33 ms flush on the
-755C). The border is cleared once to palette index 0; like the VGA overscan
-border under DOS it takes the red/gold tint of the pain and pick-up palettes.
+320x200 to video memory (about 9 ms measured on the 755C). At 2x and full
+Doom draws into a 320x200 buffer; each source row is pixel-doubled once
+(4 pixels in, two 32-bit stores out) and then `memcpy`'d for its repeats
+(2x: once; full: 1 or 2 more times from a table built at start-up), and the
+whole area goes to video memory with one damage op. Measured on the 755C:
+about 33 ms per frame at 2x (640x400). Full writes 480 rows instead of 400
+(the extra 80 are plain `memcpy`s) and the driver copies 300 KiB instead of
+250 KiB, so expect about 40 ms: about 7 ms a frame more than 2x and about
+31 ms more than 1x. With 1x at 17.3 fps in `-timedemo demo1` (about 58 ms a
+frame) that predicts roughly 11 fps at full screen.
+
+In 1x and 2x the border is cleared once to palette index 0; like the VGA
+overscan border under DOS it takes the red/gold tint of the pain and
+pick-up palettes. Full has no border.
 Frame buffer, console and keyboard handling are adapted from `sdl/wdfb`.
 
 ## Test (QEMU)
@@ -88,20 +99,31 @@ make test-doom IWAD=/path/to/DOOM.WAD [IWAD2=/path/to/freedoom1.wad]
 `doom/tests/qemu-doom.py` boots `-M isapc -cpu 486 -m 36` with the tc755
 kernel, the real `wd90c24fb` in `fake=3` (RAM model of video memory) and the
 IWADs on a FAT disk image (`out/test-logs/qemu-doom-wads.img`, never
-committed). It checks: start-up to the title and demo at 1x (direct) and 2x
+committed). It checks: start-up to the title and demo at 1x (direct), 2x
+and full (the default; the test also checks the 2,2,3,2,3 row repeats, the
+pixel doubling and that rows 0 and 479 are drawn)
 with screenshots (`out/test-logs/doom-shots/*.png`, from the frame buffer and
 palette via `fbdump`), the driver's `verify` (video memory = what Doom drew),
 the console keyboard and evdev driving the menu to quit, the console coming
 back after quit, `I_Error` and SIGSEGV, refusal while `/dev/fb0` is busy, then
-`-timedemo demo1..3` at 1x and 2x for each IWAD.
+`-timedemo demo1..3` at 1x, 2x and full for each IWAD.
 
 QEMU's TCG 486 is far faster than a 75 MHz 486DX4 and its video memory
 costs nothing, so its timedemo figures say only that the demos run to the
 end. Real numbers need the 755C:
 
 ```sh
-doom-wdfb -iwad DOOM.WAD -timedemo demo1    # prints "timed N gametics in M realtics"
+DOOM_WDFB_SCALE=1 doom-wdfb -iwad DOOM.WAD -timedemo demo1    # "timed N gametics in M realtics"
+doom-wdfb -iwad DOOM.WAD -timedemo demo1                      # full screen
 ```
+
+Startup lines starting `doom-wdfb: /dev/fb0 640x480 ...` show the mode in
+use (`1x`, `2x` or `full`). doomgeneric's own "framebuffer x_res 640 y_res
+400 ... Auto-scaling factor: 2" lines described a buffer this port does not
+use; the patch drops them.
+
+Measured on the 755C (486DX4-75): Ultimate Doom `-timedemo demo1` at 1x,
+1710 gametics in 3458 realtics = 17.3 fps.
 
 fps = 35 x N / M.
 

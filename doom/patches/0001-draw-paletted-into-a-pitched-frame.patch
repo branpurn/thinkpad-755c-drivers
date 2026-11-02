@@ -9,8 +9,11 @@ Let a paletted platform have Doom draw straight into its frame buffer.
 - DG_DIRECT (doomgeneric.h): I_VideoBuffer comes from DG_VideoBuffer(),
   I_FinishUpdate only calls DG_DrawFrame, no DG_ScreenBuffer is allocated.
   With CMAP256 the platform reads colors[] when palette_changed is set.
+  I_InitGraphics no longer prints doomgeneric's own 640x400 frame buffer
+  and scaling factor, which a DG_DIRECT platform does not use.
 
 Default builds (neither defined) behave as before.
+
 
 diff --git a/doomgeneric/am_map.c b/doomgeneric/am_map.c
 index d3d504e..9d0833d 100644
@@ -144,10 +147,23 @@ index 05852fd..745dfc6 100644
  
      return !go;
 diff --git a/doomgeneric/i_video.c b/doomgeneric/i_video.c
-index 84bebde..7db77b3 100644
+index 84bebde..fc4c8e2 100644
 --- a/doomgeneric/i_video.c
 +++ b/doomgeneric/i_video.c
-@@ -287,7 +287,11 @@ void I_InitGraphics (void)
+@@ -264,6 +264,8 @@ void I_InitGraphics (void)
+ 
+ #endif  // CMAP256
+ 
++#ifndef DG_DIRECT
++    /* (the platform owns the screen and reports its own mode) */
+     printf("I_InitGraphics: framebuffer: x_res: %d, y_res: %d, x_virtual: %d, y_virtual: %d, bpp: %d\n",
+             s_Fb.xres, s_Fb.yres, s_Fb.xres_virtual, s_Fb.yres_virtual, s_Fb.bits_per_pixel);
+ 
+@@ -284,10 +286,15 @@ void I_InitGraphics (void)
+             fb_scaling = s_Fb.yres / SCREENHEIGHT;
+         printf("I_InitGraphics: Auto-scaling factor: %d\n", fb_scaling);
+     }
++#endif
  
  
      /* Allocate screen to draw to */
@@ -159,7 +175,7 @@ index 84bebde..7db77b3 100644
  
  	screenvisible = true;
  
-@@ -297,7 +301,9 @@ void I_InitGraphics (void)
+@@ -297,7 +304,9 @@ void I_InitGraphics (void)
  
  void I_ShutdownGraphics (void)
  {
@@ -169,7 +185,7 @@ index 84bebde..7db77b3 100644
  }
  
  void I_StartFrame (void)
-@@ -320,6 +326,10 @@ void I_UpdateNoBlit (void)
+@@ -320,6 +329,10 @@ void I_UpdateNoBlit (void)
  
  void I_FinishUpdate (void)
  {
@@ -180,7 +196,7 @@ index 84bebde..7db77b3 100644
      int y;
      int x_offset, y_offset, x_offset_end;
      unsigned char *line_in, *line_out;
-@@ -368,13 +378,17 @@ void I_FinishUpdate (void)
+@@ -368,13 +381,17 @@ void I_FinishUpdate (void)
  
  	DG_DrawFrame();
  }

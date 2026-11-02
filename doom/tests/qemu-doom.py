@@ -6,7 +6,8 @@ matches what Doom drew).
 qemu-system-i386 -M isapc -cpu 486 -m 36 boots the tc755 kernel with tc32's
 core.xz plus a small overlay (modules, doom-wdfb, fbdump, vtstate). The
 IWADs go on a FAT disk image (-hda) mounted read-only, as on the 755C. Checks:
-start-up to the title and demo (screenshots as PNG), 1x direct and 2x, the
+start-up to the title and demo (screenshots as PNG) at 1x direct, 2x and
+full (the default, 640x480: row repeats and pixel doubling checked), the
 console keyboard (K_MEDIUMRAW) and evdev driving the menu to quit, the
 console coming back after quit, I_Error and a fatal signal, refusal while
 another process holds /dev/fb0, then -timedemo demo1..3 per IWAD.
@@ -85,6 +86,34 @@ def stats(dump, x0, y0, x1, y1):
             outside_black = False
     rgb = set(pal[p * 3:p * 3 + 3] for p in inside)
     return len(rgb), outside_black
+
+
+def full_layout(dump):
+    """DOOM_WDFB_SCALE=full: every screen row belongs to a source row shown
+    2,2,3,2,3 times (identical rows), each source pixel is two equal pixels,
+    and the screen is filled to the edges (no bars). -> (ok, detail)"""
+    w, h, pal, pix = dump
+    if (w, h) != (640, 480):
+        return False, f"{w}x{h}"
+    row = lambda y: pix[y * w:(y + 1) * w]
+    y = 0
+    for sy in range(200):
+        n = (sy + 1) * 480 // 200 - sy * 480 // 200
+        if sy < 5 and n != (2, 2, 3, 2, 3)[sy]:
+            return False, f"repeat table {sy}: {n}"
+        for k in range(1, n):
+            if row(y + k) != row(y):
+                return False, f"screen row {y + k} differs from {y} (source row {sy})"
+        r = row(y)
+        if r[0::2] != r[1::2]:
+            return False, f"screen row {y}: pixels not doubled"
+        y += n
+    if y != 480:
+        return False, f"{y} rows"
+    edges = [yy for yy in (0, 1, 478, 479) if not row(yy).strip(b"\0")]
+    if edges:
+        return False, f"rows {edges} all index 0"
+    return True, "640x480, rows x2/x3, pixels x2, edges drawn"
 
 
 def main():
@@ -176,13 +205,16 @@ def main():
     g = qw.Guest(cmd, os.path.join(a.logdir, "qemu-doom-serial.log"))
 
     def shot(name, box):
-        out, rc = g.run("fbdump", 300)
+        # pause Doom so the dump is one frame, not a mix of two
+        out, rc = g.run("p=$(cat /tmp/pid 2>/dev/null); kill -STOP $p 2>/dev/null; sleep 1; fbdump; "
+                        "kill -CONT $p 2>/dev/null", 300)
         d = parse_dump(out.replace("\r", "") + "\n")
         if not d:
             check(f"{name}: frame buffer dump", False, "unparsable")
             return None, 0, False
         path = save_png(d, os.path.join(a.shots, f"{name}.png"))
         ncol, black = stats(d, *box)
+        shot.dump = d
         return path, ncol, black
 
     def wait_log(log, pattern, timeout):
@@ -228,7 +260,7 @@ def main():
         check("tty1 before: KD_TEXT", "kd=text" in vt0, vt0)
 
         # 1: 1x direct, console keyboard (evdev not loaded yet)
-        g.run(f"DOOM_WDFB_DEBUG=1 DOOM_WDFB_TTY=/dev/tty1 doom -iwad {iwad} >/tmp/d1.log 2>&1 & echo $! >/tmp/pid", 30)
+        g.run(f"DOOM_WDFB_DEBUG=1 DOOM_WDFB_SCALE=1 DOOM_WDFB_TTY=/dev/tty1 doom -iwad {iwad} >/tmp/d1.log 2>&1 & echo $! >/tmp/pid", 30)
         o = wait_log("/tmp/d1.log", r"fps|rror", 600)
         check("1x: starts, direct render into the shadow", "(direct)" in o and "damage ioctl" in o,
               next((l for l in o.splitlines() if "doom-wdfb: /dev" in l), ""))
@@ -276,6 +308,29 @@ def main():
         vt, _ = g.run("vtstate /dev/tty1")
         check("console restored after quit (evdev)", vt_ok(vt, vt0), vt)
 
+        # 2b: full screen, the default (no DOOM_WDFB_SCALE), evdev
+        g.run(f"DOOM_WDFB_DEBUG=1 DOOM_WDFB_TTY=/dev/tty1 doom -iwad {iwad} >/tmp/df.log 2>&1 & "
+              "echo $! >/tmp/pid", 30)
+        o = wait_log("/tmp/df.log", r"fps|rror", 600)
+        check("default = full: 640x480 at 0,0, back buffer", "full: 640x480 at 0,0" in o and "(direct)" not in o,
+              next((l for l in o.splitlines() if "doom-wdfb: /dev" in l), ""))
+        check("no doomgeneric 640x400/auto-scaling message", "Auto-scaling" not in o and "x_res" not in o)
+        time.sleep(12)
+        p, ncol, _ = shot("doom-full-demo", (0, 0, 640, 480))
+        ok, det = full_layout(shot.dump) if p else (False, "no dump")
+        check("full: demo picture fills the screen", p and ncol >= 32 and ok, f"{p}, {ncol} colours, {det}")
+        ver = verify()
+        check("full: verify", re.search(r"(^|\s)0 differing", ver), ver)
+        st, _ = g.run("cat /sys/module/wd90c24fb/parameters/stats")
+        check("full: driver in client mode", "client=1" in st)
+        sendkey("f10")
+        time.sleep(2)
+        sendkey("y")
+        o, rc = g.run("wait $(cat /tmp/pid); echo rc=$?", 120)
+        check("full: F10, Y quit Doom (rc 0)", "rc=0" in o, o.splitlines()[-1] if o else "")
+        vt, _ = g.run("vtstate /dev/tty1")
+        check("console restored after quit (full)", vt_ok(vt, vt0), vt)
+
         # 3: fatal signal, I_Error, refusal
         g.run(f"DOOM_WDFB_DEBUG=1 DOOM_WDFB_TTY=/dev/tty1 doom -iwad {iwad} >/tmp/d3.log 2>&1 & "
               "echo $! >/tmp/pid", 30)
@@ -297,14 +352,14 @@ def main():
         if not a.no_timedemo:
             for w in wads:
                 for demo in ("demo1", "demo2", "demo3"):
-                    for scale in ("1", "2"):
+                    for scale in ("1", "2", "full"):
                         o, rc = g.run(f"DOOM_WDFB_SCALE={scale} DOOM_WDFB_TTY=/dev/tty1 doom -iwad /mnt/{w} "
                                       f"-timedemo {demo} >/tmp/td.log 2>&1; grep -i 'timed\\|rror' /tmp/td.log", 1800)
                         m = re.search(r"timed (\d+) gametics in (\d+) realtics", o)
                         if m:
                             fps = int(m.group(1)) * 35 / int(m.group(2))
                             timedemo.append((w, demo, scale, int(m.group(1)), int(m.group(2)), fps))
-                            print(f"      timedemo {w} {demo} {scale}x: {m.group(1)} gametics in "
+                            print(f"      timedemo {w} {demo} {scale}{'x' if scale != 'full' else ''}: {m.group(1)} gametics in "
                                   f"{m.group(2)} realtics = {fps:.1f} fps", flush=True)
                         else:
                             check(f"timedemo {w} {demo} {scale}x", False, o.strip()[-120:])
