@@ -1,0 +1,127 @@
+diff --git a/configure b/configure
+index c6c94e1..8e1e575 100755
+--- a/configure
++++ b/configure
+@@ -932,6 +932,7 @@ enable_directfb_shared
+ enable_video_kmsdrm
+ enable_kmsdrm_shared
+ enable_video_dummy
++enable_video_wdfb
+ enable_video_offscreen
+ enable_video_opengl
+ enable_video_opengles
+@@ -1750,6 +1751,8 @@ Optional Features:
+   --enable-video-kmsdrm   use KMSDRM video driver [default=yes]
+   --enable-kmsdrm-shared  dynamically load kmsdrm support [default=yes]
+   --enable-video-dummy    use dummy video driver [default=yes]
++  --enable-video-wdfb      use wd90c24fb (ThinkPad 755C) fbdev video driver
++                          [default=no]
+   --enable-video-offscreen
+                           use offscreen video driver [default=yes]
+   --enable-video-opengl   include OpenGL support [default=yes]
+@@ -25938,6 +25941,26 @@ printf "%s\n" "#define SDL_VIDEO_DRIVER_DUMMY 1" >>confdefs.h
+     fi
+ }
+ 
++CheckWDFBVideo()
++{
++    # Check whether --enable-video-wdfb was given.
++if test ${enable_video_wdfb+y}
++then :
++  enableval=$enable_video_wdfb;
++else $as_nop
++  enable_video_wdfb=no
++fi
++
++    if test x$enable_video_wdfb = xyes; then
++
++printf "%s\n" "#define SDL_VIDEO_DRIVER_WDFB 1" >>confdefs.h
++
++        SOURCES="$SOURCES $srcdir/src/video/wdfb/*.c"
++        have_video=yes
++        SUMMARY_video="${SUMMARY_video} wdfb"
++    fi
++}
++
+ CheckOffscreenVideo()
+ {
+     # Check whether --enable-video-offscreen was given.
+@@ -28677,6 +28700,7 @@ printf "%s\n" "#define SDL_VIDEO_DRIVER_ANDROID 1" >>confdefs.h
+         CheckWerror
+         CheckDeclarationAfterStatement
+         CheckDummyVideo
++        CheckWDFBVideo
+         CheckOffscreenVideo
+         CheckDiskAudio
+         CheckDummyAudio
+diff --git a/configure.ac b/configure.ac
+index ba2f8ac..1be1a31 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -2471,6 +2471,20 @@ CheckDummyVideo()
+     fi
+ }
+ 
++dnl Set up the wd90c24fb (ThinkPad 755C) framebuffer video driver
++CheckWDFBVideo()
++{
++    AC_ARG_ENABLE(video-wdfb,
++[AS_HELP_STRING([--enable-video-wdfb], [use wd90c24fb (ThinkPad 755C) fbdev video driver [default=no]])],
++                  , enable_video_wdfb=no)
++    if test x$enable_video_wdfb = xyes; then
++        AC_DEFINE(SDL_VIDEO_DRIVER_WDFB, 1, [ ])
++        SOURCES="$SOURCES $srcdir/src/video/wdfb/*.c"
++        have_video=yes
++        SUMMARY_video="${SUMMARY_video} wdfb"
++    fi
++}
++
+ CheckOffscreenVideo()
+ {
+     AC_ARG_ENABLE(video-offscreen,
+@@ -3798,6 +3812,7 @@ case "$host" in
+         CheckWerror
+         CheckDeclarationAfterStatement
+         CheckDummyVideo
++        CheckWDFBVideo
+         CheckOffscreenVideo
+         CheckDiskAudio
+         CheckDummyAudio
+diff --git a/include/SDL_config.h.in b/include/SDL_config.h.in
+index 35281d1..dd02b1b 100644
+--- a/include/SDL_config.h.in
++++ b/include/SDL_config.h.in
+@@ -393,6 +393,7 @@
+ #undef SDL_VIDEO_DRIVER_ANDROID
+ #undef SDL_VIDEO_DRIVER_EMSCRIPTEN
+ #undef SDL_VIDEO_DRIVER_OFFSCREEN
++#undef SDL_VIDEO_DRIVER_WDFB
+ #undef SDL_VIDEO_DRIVER_X11_DYNAMIC
+ #undef SDL_VIDEO_DRIVER_X11_DYNAMIC_XEXT
+ #undef SDL_VIDEO_DRIVER_X11_DYNAMIC_XCURSOR
+diff --git a/src/video/SDL_sysvideo.h b/src/video/SDL_sysvideo.h
+index faf598b..fc4bbfa 100644
+--- a/src/video/SDL_sysvideo.h
++++ b/src/video/SDL_sysvideo.h
+@@ -473,6 +473,7 @@ extern VideoBootStrap N3DS_bootstrap;
+ extern VideoBootStrap RPI_bootstrap;
+ extern VideoBootStrap KMSDRM_bootstrap;
+ extern VideoBootStrap KMSDRM_LEGACY_bootstrap;
++extern VideoBootStrap WDFB_bootstrap;
+ extern VideoBootStrap DUMMY_bootstrap;
+ extern VideoBootStrap DUMMY_evdev_bootstrap;
+ extern VideoBootStrap Wayland_bootstrap;
+diff --git a/src/video/SDL_video.c b/src/video/SDL_video.c
+index 2f6c631..2cad297 100644
+--- a/src/video/SDL_video.c
++++ b/src/video/SDL_video.c
+@@ -142,6 +142,9 @@ static VideoBootStrap *bootstrap[] = {
+ #ifdef SDL_VIDEO_DRIVER_NGAGE
+     &NGAGE_bootstrap,
+ #endif
++#ifdef SDL_VIDEO_DRIVER_WDFB
++    &WDFB_bootstrap,
++#endif
+ #ifdef SDL_VIDEO_DRIVER_OFFSCREEN
+     &OFFSCREEN_bootstrap,
+ #endif
