@@ -31,9 +31,11 @@ Doom), direct mapping and, later, page flipping on the **internal panel only**.
 | `wd24adv_port.c` | Live backend: executes plans with inb/outb + the A0000 window through `struct wd24_io`; reads every write back; SR06 latch index-width test; DAC and planar memory access. |
 | `wd24adv_main.c` | Module: parameters and gates, single-driver check, `/proc/wd24adv/`, live setup (ports, ioremap, console lock), trial timer. |
 | `wd24adv_ioctl.h` | Placeholder user API: `'W'` 0x30 (modeinfo, not implemented); 0x31 stays reserved and is never assigned. |
+| `wd24adv_engine.h/.c` | **S0, host only.** BITBLT (23C0h block 1) and cursor (block 2) closed register lists with DS / observed / UNPROVEN status, port guard, command validator (surfaces, VRAM range, overlap direction, host word counts) and op sequencer (bounded waits, readback, 23C0h save/restore, latch-dead on timeout or mismatch, never abort). Not in Kbuild; no caller in the module; `WD24X_LIVE_ALLOWED` is 0 and every live access is refused. See `docs/WD24ADV-DESKTOP-DESIGN.md` §7. |
+| `tests/test_engine.c` | S0 test of the engine code against the 23C0h model: guard fuzz over every value, the core guard's panel/routing/PM/clock refusals, validation, overlap vs memmove, exact host words, no CPU VRAM access while busy, timeout/mismatch latch, 23C0h restore on every path, a static check that no live source references the engine. |
 | `tests/test_core.c` | Host test: the shared self-test plus host-only checks (`make wd24adv-test`). |
 | `tests/xcheck.c` | Host cross-check: drives the real `wd90c24fb/wd90c24_hw.c` against a port model and compares its write trace with wd24adv's for each mode. |
-| `tests/vgamodel.h/.c` | Port-level VGA model (WD90C24 and QEMU std VGA profiles): registers with WD lock rules, AR flip-flop, DAC, 4 planes with write/read mode 0 and chain-4, latches; flags forbidden registers; fault injection (stuck register, read-only plane). |
+| `tests/vgamodel.h/.c` | Port-level VGA model (WD90C24 and QEMU std VGA profiles): registers with WD lock rules, AR flip-flop, DAC, 4 planes with write/read mode 0 and chain-4, latches; flags forbidden registers; fault injection (stuck register, read-only plane). Optional 23C0h block model (`struct vm_eng`): BITBLT fill/copy/mono/colour-from-host executed byte by byte in hardware order into 1 MB, busy bit, cursor registers; flags writes while busy, aborts, 23C4h reads or idle writes, CPU VRAM access while busy; fault injection (stuck busy, readback, index echo, word-count skew). |
 | `tests/test_vga.c` | Live backend against the model: round trip, trial revert/confirm, zero-write refusals, readback mismatch handling. |
 | `tests/qemu-wd24adv.py` | QEMU system test against `-vga std` with VGA port tracing. |
 
@@ -212,7 +214,7 @@ Differences from `wd90c24fb`'s own sequence, all deliberate and checked by
   - `tests/test_core` (92 checks: the shared self-test + host checks);
   - `tests/xcheck` (18 checks; fails if `wd90c24fb` and `wd24adv` ever
     diverge; a one-bit PR16 mutation was seen to fail it);
-  - `tests/test_vga` (55 checks on the port model): load leaves the model
+  - `tests/test_vga` (64 checks on the port model): load leaves the model
     byte-identical and saves the exact planes and DAC; each PROVEN mode +
     pattern, then trial expiry, gives an identical model; 640x480 matches
     the live probe values; confirm path; refusals with **0 data writes**
@@ -221,6 +223,16 @@ Differences from `wd90c24fb`'s own sequence, all deliberate and checked by
     after restore; stuck SR06 latch at load -> `-EIO`, identical; stuck
     GR06 during restore -> `-EIO`, other steps still run; read-only plane
     -> `-EIO`, the rest restored.
+  - `tests/test_engine` (151 checks, S0, host only): the 23C0h/23C2h
+    guard accepts exactly the closed lists (every value of every index of
+    blocks 0-3, against an independent restatement in the test), every
+    other port refused, live io refused with zero accesses; the core
+    guard still refuses PR18/PR19/PR1A/PR36, the CR34 key, PR57, PR68/PR69
+    without `allow_clock`, PR1 b5:4 and PR4 b5; bad rectangles refused
+    with no access; 397 random overlapping copies equal memmove; exact
+    MONO/HOSTCOL word counts; no CPU VRAM access while busy; stuck busy,
+    readback, index-echo and word-count faults latch acceleration dead;
+    23C0h identical after every op and failure path.
 - `make wd24adv-qemu` (`tests/qemu-wd24adv.py`, 26 checks) on
   `-M isapc -cpu 486 -vga std` with `-trace vga_std_{read,write}_io`:
   dry-run load/rmmod with zero VGA port accesses; all parameter refusals

@@ -133,6 +133,12 @@ static u8 rd_cr(const struct vgamodel *m)
 	return m->cr[i];
 }
 
+static void eng_violate(struct vm_eng *e, const char *what)
+{
+	e->violations++;
+	snprintf(e->violation, sizeof(e->violation), "%s", what);
+}
+
 static u8 rot(u8 v, u8 n)
 {
 	n &= 7;
@@ -145,6 +151,8 @@ static void memw(void *priv, u32 off, u8 v)
 	int p;
 
 	m->mem_writes++;
+	if (m->eng && m->eng->busy)
+		eng_violate(m->eng, "CPU VRAM write while BITBLT busy"), m->eng->cpu_busy++;
 	if (m->sr[4] & 0x08) {		/* chain 4 */
 		u32 lin = ((m->gr[0x09] & 0x7f) << 12) + (off & 0xffff);
 
@@ -180,6 +188,8 @@ static u8 memr(void *priv, u32 off)
 	struct vgamodel *m = priv;
 	int p;
 
+	if (m->eng && m->eng->busy)
+		eng_violate(m->eng, "CPU VRAM read while BITBLT busy"), m->eng->cpu_busy++;
 	if (m->sr[4] & 0x08) {
 		u32 lin = ((m->gr[0x09] & 0x7f) << 12) + (off & 0xffff);
 
@@ -302,4 +312,255 @@ int vm_cmp(const struct vgamodel *a, const struct vgamodel *b, const char *what)
 			}
 	}
 	return 0;
+}
+
+/* ---- 23C0h blocks ------------------------------------------------------- */
+
+void vm_eng_init(struct vm_eng *e, unsigned int seed)
+{
+	unsigned int i;
+
+	memset(e, 0, sizeof(*e));
+	e->bad_blk = -1;
+	e->bad_idx = -1;
+	e->op_polls = 3;
+	e->ix = 0x0000;		/* UNPROVEN: the BIOS value (S1 reads it) */
+	rnd_state = seed;
+	for (i = 0; i < WD24X_VRAM; i++)
+		e->vram[i] = rnd();
+}
+
+/* DS 19.7: result bit = code bit (3 - (2s + d)), code = ROP bits 11:8 */
+static u8 rop(u16 r, u8 s, u8 d)
+{
+	u8 code = (r >> 8) & 0xf, out = 0;
+	int b;
+
+	for (b = 0; b < 8; b++) {
+		int si = (s >> b) & 1, di = (d >> b) & 1;
+
+		out |= ((code >> (3 - (2 * si + di))) & 1) << b;
+	}
+	return out;
+}
+
+static u32 eng_addr(const struct vm_eng *e, int lo)
+{
+	return ((u32)(e->reg[1][lo + 1] & 0x1ff) << 12) | e->reg[1][lo];
+}
+
+static void pix(struct vm_eng *e, u32 a, u8 s)
+{
+	u8 mask = e->reg[1][WD24X_B_MASK] & 0xff;
+
+	if (a >= WD24X_VRAM) {
+		eng_violate(e, "BITBLT beyond 1 MB");
+		return;
+	}
+	e->vram[a] = (rop(e->reg[1][WD24X_B_ROP], s, e->vram[a]) & mask) |
+		     (e->vram[a] & ~mask);
+}
+
+static u32 dst_at(const struct vm_eng *e, u32 r, u32 c)
+{
+	u32 d = eng_addr(e, WD24X_B_DST_LO), p = e->reg[1][WD24X_B_PITCH];
+
+	return (e->reg[1][0] & WD24X_C1_BACK) ? d - r * p - c : d + r * p + c;
+}
+
+/* one host pixel at the current position */
+static void host_pix(struct vm_eng *e, u8 s, bool skip)
+{
+	u32 w = e->reg[1][WD24X_B_DIM_X];
+
+	if (e->col < w && e->row < e->reg[1][WD24X_B_DIM_Y] && !skip)
+		pix(e, dst_at(e, e->row, e->col), s);
+	e->col++;
+}
+
+static void host_word(struct vm_eng *e, u16 v)
+{
+	u16 c1 = e->reg[1][0];
+	u32 w = e->reg[1][WD24X_B_DIM_X], per = (w + 3) / 4, k;
+
+	if (!e->busy || e->host_got >= e->host_need) {
+		eng_violate(e, "23C4h write with no host data owed");
+		return;
+	}
+	e->host_words++;
+	if ((c1 & 0x0c) == WD24X_C1_SRCF_MONO_HOST) {
+		/* DS 21.14 low 4 bits; OBS-FB: msb = leftmost */
+		for (k = 0; k < 4; k++) {
+			bool one = (v >> (3 - k)) & 1;
+
+			host_pix(e, one ? e->reg[1][WD24X_B_FG] : e->reg[1][WD24X_B_BG],
+				 !one && (e->reg[1][1] & WD24X_C2_MTRANS));
+		}
+	} else if (!e->have_lo) {	/* DS 21.12: low word first */
+		e->lo = v;
+		e->have_lo = true;
+	} else {			/* byte order UNPROVEN: little endian */
+		u32 dw = ((u32)v << 16) | e->lo;
+
+		e->have_lo = false;
+		for (k = 0; k < 4; k++)
+			host_pix(e, dw >> (8 * k), false);
+	}
+	if (e->col >= per * 4) {
+		e->col = 0;
+		e->row++;
+	}
+	e->host_got++;
+	if (e->host_got == e->host_need) {
+		e->polls_left = e->host_tail;
+		if (!e->polls_left && !e->stuck_busy)
+			e->busy = false;
+	}
+}
+
+static void start(struct vm_eng *e)
+{
+	u16 c1 = e->reg[1][0], c2 = e->reg[1][1];
+	u32 w = e->reg[1][WD24X_B_DIM_X], h = e->reg[1][WD24X_B_DIM_Y];
+	u32 s = eng_addr(e, WD24X_B_SRC_LO), r, c;
+	bool back = c1 & WD24X_C1_BACK;
+
+	if ((c1 & 0x0300) != WD24X_C1_PACKED || (c1 & 0x00f0) || (c1 & 0x01) ||
+	    (c1 & 0x0c) == WD24X_C1_SRCF_MONO_CMP)
+		eng_violate(e, "CNTRL1 mode not modelled");
+	if (c2 & 0x0ff7)
+		eng_violate(e, "CNTRL2 bit not modelled");
+	if ((e->reg[1][3] | e->reg[1][5]) & 0x0e00)
+		eng_violate(e, "SRC/DST hi reserved bits");
+	if (e->reg[1][WD24X_B_ROP] & 0x00ff)
+		eng_violate(e, "ROP reserved bits");
+	if (!w || !h || w > 2048 || h > 2048)
+		eng_violate(e, "dimension");
+	e->ops++;
+	e->busy = true;
+	e->row = e->col = 0;
+	e->have_lo = false;
+	e->host_got = 0;
+	e->polls_left = e->op_polls;
+	if (c1 & WD24X_C1_SRC_IO) {
+		u32 per = (w + 3) / 4;
+
+		e->host_need = h * per * ((c1 & 0x0c) ? 1 : 2) + e->host_skew;
+		return;
+	}
+	e->host_need = 0;
+	/* hardware order: a wrong direction corrupts overlapping copies */
+	for (r = 0; r < h; r++)
+		for (c = 0; c < w; c++) {
+			u32 sa = back ? s - r * e->reg[1][8] - c : s + r * e->reg[1][8] + c;
+			u8 v = (c1 & 0x0c) == WD24X_C1_SRCF_FIXED ? e->reg[1][WD24X_B_FG]
+				: sa < WD24X_VRAM ? e->vram[sa] : 0;
+
+			if ((c1 & 0x0c) != WD24X_C1_SRCF_FIXED && sa >= WD24X_VRAM)
+				eng_violate(e, "source beyond 1 MB");
+			pix(e, dst_at(e, r, c), v);
+		}
+}
+
+static void eng_out(struct vgamodel *m, u16 v, u16 port)
+{
+	struct vm_eng *e = m->eng;
+	u8 blk = e->ix & 0xff, idx = v >> 12;
+
+	switch (port) {
+	case WD24X_P_INDEX:
+		e->ix_writes++;
+		if (v & 0xe000)
+			eng_violate(e, "23C0h reserved/read-only bits");
+		e->ix = v & 0x1fff;
+		return;
+	case WD24X_P_DATA:
+		e->data_writes++;
+		if (blk == 0 || blk > 2) {
+			eng_violate(e, "23C2h write to block 0 / missing block");
+			return;
+		}
+		if (blk == 2 && idx > WD24X_C_AUX) {
+			eng_violate(e, "cursor index past aux");
+			return;
+		}
+		if (blk == 1 && e->busy) {
+			eng_violate(e, idx ? "BITBLT register write while busy"
+					   : "CNTRL1 write while busy (abort)");
+			return;
+		}
+		e->reg[blk][idx] = v & 0x0fff;
+		if (blk == 1 && idx == 0 && (v & WD24X_C1_ACT))
+			start(e);
+		if (blk == 1 && (e->reg[1][1] & WD24X_C2_QUICKSTART))
+			eng_violate(e, "quick start armed");
+		return;
+	case WD24X_P_HOST:
+		host_word(e, v);
+		return;
+	}
+	eng_violate(e, "unknown 16-bit port");
+}
+
+static u16 eng_in(struct vgamodel *m, u16 port)
+{
+	struct vm_eng *e = m->eng;
+	u8 blk = e->ix & 0xff, idx = (e->ix >> 8) & 0xf;
+	u16 v;
+
+	e->reads++;
+	if (port == WD24X_P_INDEX)
+		return (e->ix ^ (e->bad_ix ? 0x0100 : 0)) | (blk > 2 ? WD24X_IX_INVALID : 0);
+	if (port != WD24X_P_DATA) {
+		eng_violate(e, port == WD24X_P_HOST ? "23C4h read" : "unknown 16-bit read");
+		return 0xffff;
+	}
+	v = (blk >= 1 && blk <= 2) ? e->reg[blk][idx] : 0;
+	if (blk == 1 && idx == 0) {
+		v &= ~WD24X_C1_ACT;
+		if (e->busy) {
+			v |= WD24X_C1_ACT;
+			if (!e->stuck_busy && e->host_got >= e->host_need &&
+			    e->polls_left && !--e->polls_left)
+				e->busy = false;
+		}
+	}
+	if (blk == e->bad_blk && idx == e->bad_idx)
+		v ^= 1;
+	v |= (u16)((idx ^ (e->bad_echo ? 1 : 0)) << 12);
+	if (!(e->ix & WD24X_IX_NOINC))
+		e->ix = (e->ix & 0xf0ff) | (u16)(((idx + 1) & 0xf) << 8);
+	return v;
+}
+
+static void xoutw(void *priv, u16 v, u16 port)
+{
+	struct vgamodel *m = priv;
+
+	if (!m->eng) {
+		m->violations++;
+		snprintf(m->violation, sizeof(m->violation), "port %04X=%04X", port, v);
+		return;
+	}
+	eng_out(m, v, port);
+}
+
+static u16 xinw(void *priv, u16 port)
+{
+	struct vgamodel *m = priv;
+
+	if (!m->eng) {
+		m->violations++;
+		snprintf(m->violation, sizeof(m->violation), "read port %04X", port);
+		return 0xffff;
+	}
+	return eng_in(m, port);
+}
+
+void vm_xio(struct wd24x_io *io, struct vgamodel *m)
+{
+	io->inw = xinw;
+	io->outw = xoutw;
+	io->priv = m;
+	io->live = false;
 }

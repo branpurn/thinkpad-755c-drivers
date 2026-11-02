@@ -267,8 +267,10 @@ Design for wd24adv:
    - window backgrounds, borders and clears → FILL;
    - core text (ImageText and PolyText with the fixed font rxvt and jwm
      use) → a FILL for the opaque box, then glyph runs packed in RAM and
-     sent as one MONO op through 23C4h. At 1 bit/pixel the host stream is
-     8x smaller than CPU writes at 8 bpp, and it needs no banking;
+     sent as one MONO op through 23C4h. In packed mode each 16-bit write
+     carries only 4 pixels (DS 21.14; wd90c24fb's working variant), so the
+     host stream is half the bus writes of CPU 8 bpp word writes, not 8x
+     fewer; it needs no banking and no fault;
    - XPutImage at 8 bpp → HOSTCOL.
 
    wd90c24fb found colour expansion "1.0x": with a shadow, the CPU still
@@ -407,8 +409,8 @@ General rules for all stages:
 
 | Stage | What runs on the 755C | Proves | Containment / revert |
 |---|---|---|---|
-| **S0** model (box only) | Nothing | The engine model, the guard masks for XB/XC, validator fuzzing, the address math and direction choice | n/a |
-| **S1** read-only | wd24adv (live, text mode, no fb driver). Saves 23C0h, reads block 1 idx 0–Fh and block 2 idx 0–7, restores 23C0h. Run twice, compare | Registers are readable, which ones are stable, the busy bit is idle, 23C0h restores exactly. **The only writes are the 23C0h selects** | Nothing visible changes. Any oddity: stop |
+| **S0** model (box only) | Nothing | The engine model, the guard masks for XB/XC, validator fuzzing, the address math and direction choice. Done: `wd24adv_engine.[ch]` (not in Kbuild, `WD24X_LIVE_ALLOWED 0`) and `tests/test_engine.c` against the 23C0h model in `tests/vgamodel.c` | n/a |
+| **S1** read-only | wd24adv (live, text mode, no fb driver). Saves 23C0h, reads block 1 idx 0–Fh and block 2 idx 0–8, restores 23C0h. Run twice, compare | Registers are readable, which ones are stable, the busy bit is idle, 23C0h restores exactly. **The only writes are the 23C0h selects** | Nothing visible changes. Any oddity: stop |
 | **S2** write + readback, no start | 640x480-8 under trial. Write each XB register except CNTRL1-start, plus XC position/address with enable **off**. Read back, then restore saved values | Per-register readback masks for §1.3, and that writes without ACT have no visible effect | Trial auto-revert at 15 s. Mismatch → `accel_dead`, revert |
 | **S3** first blit, off screen | 640x480-8 under trial. FILL 8x8 in scratch at 4C000h, then 32x32, then COPY scratch → scratch. Wait after each op, VRAM readback vs model | The engine starts and stops within bound, and writes exactly the model's bytes and nothing outside | Screen untouched (the frame stays the test pattern). Timeout → latch + revert |
 | **S4** on-screen fill/copy | Same, but FILL bars onto the frame, then forward and backward overlapping COPYs. Checksum vs model, and Brandon looks | Visible correctness, overlap direction, all ROPs used by X (copy, xor, and, or, invert, clear, set) | Trial revert |
@@ -431,14 +433,20 @@ mini-gate between S8 and S9.
   written? Answered in S1/S2. This decides how readback works for each
   register.
 - **Q2. Mono source.** Can the engine take a mono source from **VRAM**
-  (screen-to-screen colour expansion)? If not, a glyph cache in VRAM
-  doesn't help, and text stays host-MONO.
+  (screen-to-screen colour expansion)? The data sheet describes it
+  through the colour comparators (DS 19.10, CNTRL1 source format 01), so
+  a glyph cache in VRAM is possible on paper; UNPROVEN on the 755C. If it
+  fails, text stays host-MONO.
 - **Q3. Offscreen use by the Windows driver.** Does the Windows driver
   really use a 1024-byte pitch and offscreen caching? This is only
   interesting as design confirmation, not something we need.
 - **Q4. Host-port width.** Is the port 16 or 32 bits, and how is the last
   partial word of a row padded? The Windows driver uses 16-bit packed;
-  wd90c24fb's notes say 32. Settled in S5 before any wider use.
+  wd90c24fb's notes say 32. In packed mode the data sheet gives 4 mono
+  pixels per 16-bit write and 32-bit groups (two 16-bit writes, low word
+  first) for colour, with no word or doubleword crossing a row (DS 21.12,
+  21.14). Mono is observed (wd90c24fb variant 0); colour is settled in S5
+  before any wider use.
 - **Q5. CPU access during a blit.** Is CPU access to the window safe while
   the engine is busy? The design avoids it regardless, so the question only
   matters for future overlap.
