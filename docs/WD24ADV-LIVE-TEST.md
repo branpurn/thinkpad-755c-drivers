@@ -146,7 +146,7 @@ watching):
 
 | # | step | evidence | risk |
 |---|---|---|---|
-| P1 | Build from the `wd24adv` branch; `make wd24adv-test` (92 + 18 + 55) and `make wd24adv-qemu` (26/26) pass. | H, Q | none |
+| P1 | Build from the `wd24adv` branch; `make wd24adv-test` (92 + 18 + 64 + 153 + 67) and `make wd24adv-qemu` (26/26) pass. | H, Q | none |
 | P2 | Serial cable to a second machine with a capture program at the console's speed; log everything to a file. | – | none |
 | P3 | Serial login on ttyS0 (getty) so the test can be driven while the panel shows graphics. A root shell on ttyS0 drove all live steps so far (L). | L | low |
 | P4 | Owner's explicit go-ahead for the live load. | – | – |
@@ -166,6 +166,36 @@ watching):
 
 After every step: `dmesg | grep wd24adv` and `cat /proc/wd24adv/live`
 into the serial log.
+
+## S1: read-only 23C0h probe (prepared, not run)
+
+Module `wd24adv.ko` from the `wd24adv` branch, `s1=1`. Text state, no fb
+driver (wd90c24fb `text=1` + rmmod first, or never loaded), no X.
+
+Port writes, exactly, in order (host model; QEMU stops at CR34):
+1. entry check (`wd24_entry_check`, shared with the live load), 14 VGA
+   **index** writes, 0 data writes: 3D4<-34, 3D4<-34, 3D4<-31, 3D4<-32,
+   3CE<-0F, 3D4<-29, 3C4<-06, 3C4<-11, 3C4<-06 (SR06 latch test), 3C0<-10,
+   3C0<-20 (AR index, PAS kept), then the saved 3C4/3CE/3D4 indices
+   (model: 01, 06, 0E). If it refuses, S1 does not run (0 23Cxh accesses).
+2. 51 16-bit writes to 23C0h, nothing else: 1001 1101 ... 1F01, 1002
+   1102 ... 1802 (pass 1), the same 25 (pass 2), then saved & 1FFFh.
+   On a stop: the selects so far + the restore.
+
+Reads only 23C0h/23C2h (16-bit) and 3C0h/3C1h. Never 23C2h/23C4h writes,
+CNTRL1 start, or panel/PM/routing registers.
+
+| # | command (as root, ttyS0) | expected |
+|---|---|---|
+| 1 | copy `wd24adv.ko` over; `sha256sum wd24adv.ko` | the recorded sha |
+| 2 | `grep -cE 'wd90c24fb\|vga16fb' /proc/modules; cat /proc/fb; pidof Xorg` | 0, empty, nothing |
+| 3 | `insmod wd24adv.ko dryrun=0 s1=1` | returns 0 (the result is held, not the insmod code) |
+| 4 | `cat /proc/wd24adv/s1; dmesg \| grep wd24adv` | `S1 result: OK` (or REFUSED/STOPPED/UNSTABLE/RESTORE_BAD with the reason) |
+| 5 | `rmmod wd24adv` | no port access |
+| 6 | `insmod wd24adv.ko dryrun=0 s1=1; cat /proc/wd24adv/s1; rmmod wd24adv` | only if 4 was OK: same S at entry, same values |
+
+Any result other than OK: stop, save the log, cold boot if the text
+console looks wrong.
 
 ## Abort and revert
 

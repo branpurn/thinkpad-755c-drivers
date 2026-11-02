@@ -30,6 +30,13 @@
  *   /proc/wd24adv/selftest - shared guard/plan self-test (same as the host)
  *   /proc/wd24adv/live     - live only: log of the last hardware operation
  *   /proc/wd24adv/control  - live only (root, write): mode NAME | text | confirm
+ *   /proc/wd24adv/s1       - s1=1 only: the S1 probe plan (dryrun=1) or result
+ *
+ * S1 (s1=1 dryrun=0, never with live=1 or mode=): after the same read-only
+ * entry check, a read-only probe of the 23C0h register blocks
+ * (wd24adv_s1.c: its only writes are 23C0h selects and one restore).  It
+ * runs once during load; the module then stays loaded holding only the
+ * result, with no port region claimed, and rmmod touches nothing.
  */
 #define pr_fmt(fmt) "wd24adv: " fmt
 
@@ -51,6 +58,7 @@
 #include <linux/jiffies.h>
 
 #include "wd24adv_core.h"
+#include "wd24adv_s1.h"
 
 static bool dryrun = true;
 module_param(dryrun, bool, 0444);
@@ -88,6 +96,14 @@ static char *also_conflict = "";
 module_param(also_conflict, charp, 0444);
 MODULE_PARM_DESC(also_conflict, "test aid: also refuse to load if this module is loaded (wd90c24fb is always checked)");
 
+static bool s1;
+module_param(s1, bool, 0444);
+MODULE_PARM_DESC(s1, "S1 read-only 23C0h probe: dryrun=1 lists the plan, dryrun=0 runs it once at load (not with live=1)");
+
+static bool s1_echo = true;
+module_param(s1_echo, bool, 0444);
+MODULE_PARM_DESC(s1_echo, "S1: stop if 23C2h bits 15:12 do not echo the index (default 1; 0 = record only)");
+
 #define TXT_MAX	(96 * 1024)
 
 #define TRIAL_MIN	5
@@ -110,6 +126,9 @@ static bool hw_dead;	/* a live load failed after writing: restored, inert */
 static struct wd24_io hw_io;
 static char *live_txt;
 static size_t live_len;
+static struct wd24s1 *s1st;
+static char *s1_txt;
+static size_t s1_len;
 static void trial_fn(struct work_struct *w);
 static DECLARE_DELAYED_WORK(trial_work, trial_fn);
 
@@ -186,6 +205,14 @@ static ssize_t live_read(struct file *f, char __user *b, size_t n, loff_t *p)
 
 static ssize_t control_write(struct file *f, const char __user *b, size_t n,
 			     loff_t *p);
+
+static ssize_t s1_read(struct file *f, char __user *b, size_t n, loff_t *p)
+{
+	return rd(b, n, p, s1_txt, s1_len);
+}
+
+static const struct proc_ops s1_ops = {
+	.proc_read = s1_read, .proc_lseek = default_llseek };
 
 static const struct proc_ops live_ops = {
 	.proc_read = live_read, .proc_lseek = default_llseek };
@@ -517,9 +544,148 @@ static void free_all(void)
 	vfree(modes_txt);
 	vfree(self_txt);
 	vfree(ctx);
+	vfree(s1st);
+	vfree(s1_txt);
+	s1st = NULL;
+	s1_txt = NULL;
 	plan_txt = modes_txt = self_txt = NULL;
 	ctx = NULL;
 	free_hw();
+}
+
+/* ---- S1: read-only 23C0h probe ----------------------------------------- */
+
+/* the entry check reads no memory; these make any access harmless */
+static u8 s1_memr(void *priv, u32 off)
+{
+	return 0xff;
+}
+
+static void s1_memw(void *priv, u32 off, u8 val)
+{
+}
+
+static void s1_plan_text(void)
+{
+	size_t len = 0;
+	unsigned int p, k;
+
+	APPEND(s1_txt, len, "wd24adv S1 plan (dryrun=1: no port was read or written)\n");
+	APPEND(s1_txt, len, "1. entry check (as live=1): VGA index-register reads, index writes only, no data write\n");
+	APPEND(s1_txt, len, "2. read 23C0h twice (S), 3C0h, 3C1h; refuse with no write unless stable, != FFFF, b15:14 = 0, != 3C1h:3C0h\n");
+	APPEND(s1_txt, len, "3. passes (each select: W16 23C0h; R16 23C0h == select; R16 23C2h, echo %s, block 1 idx 0 ACT = 0):\n",
+	       s1_echo ? "checked" : "recorded only");
+	for (p = 0; p < WD24S1_NPASS; p++) {
+		APPEND(s1_txt, len, "   pass %u:", p + 1);
+		for (k = 0; k < WD24S1_NSEL; k++)
+			APPEND(s1_txt, len, " %04x", wd24s1_sel(k));
+		APPEND(s1_txt, len, "\n");
+	}
+	APPEND(s1_txt, len, "4. compare passes; W16 23C0h = S & 1FFF; R16 23C0h == S\n");
+	APPEND(s1_txt, len, "writes: 23C0h %u (on a stop: selects so far + 1), 23C2h 0, 23C4h 0 (never accessed)\n",
+	       WD24S1_MAX_WRITES);
+	s1_len = len;
+}
+
+static void s1_report(int entry_err, unsigned long ewr_i, unsigned long ewr_d)
+{
+	const struct wd24s1 *s = s1st;
+	size_t len = 0;
+	unsigned int p, k, rst = s->restored ? 1 : 0, sel = s->writes - rst;
+
+	APPEND(s1_txt, len, "wd24adv S1 result: %s%s%s\n", wd24s1_res_name(s->res),
+	       s->why ? ": " : "", s->why ? s->why : "");
+#ifdef WD24S1_QEMU_FAKE
+	APPEND(s1_txt, len, "*** QEMU FAKE BUILD: 23C0h/23C2h values are modelled; entry check result ignored ***\n");
+#endif
+	APPEND(s1_txt, len, "entry check: %s (%d); VGA index writes %lu, data writes %lu\n",
+	       entry_err ? "REFUSED" : "passed", entry_err, ewr_i, ewr_d);
+	len = format_events(s1_txt, len, hw, 0);
+	if (s->res == WD24S1_NOT_RUN) {
+		s1_len = len;
+		return;
+	}
+	if (s->nlog >= 2)
+		APPEND(s1_txt, len, "23C0h at entry read %04x, %04x; 3C1h:3C0h = %04x; strict echo %d\n",
+		       s->log[0].val, s->log[1].val, s->alias, s->strict_echo);
+	for (p = 0; p < WD24S1_NPASS; p++) {
+		APPEND(s1_txt, len, "pass %u (%u selects read):\n", p + 1, s->done[p]);
+		for (k = 0; k < s->done[p]; k++)
+			APPEND(s1_txt, len, "  blk %u idx %X: 23C0h %04x 23C2h %04x\n",
+			       wd24s1_sel(k) & 0xff, (wd24s1_sel(k) >> 8) & 0xf,
+			       s->ix[p][k], s->val[p][k]);
+	}
+	if (s->stop_pass >= 0 || s->stop_sel >= 0)
+		APPEND(s1_txt, len, "stopped at pass %d select %d\n", s->stop_pass + 1, s->stop_sel);
+	if (s->restored)
+		APPEND(s1_txt, len, "restore: wrote %04x, read %04x (%s)\n", s->saved & 0x1fff,
+		       s->restore_rb, s->restore_rb == s->saved ? "equal" : "DIFFERENT");
+	APPEND(s1_txt, len, "23C0h writes %u (selects %u + restore %u), 23C2h/23C4h writes 0, guard refusals %u, reads %u\n",
+	       s->writes, sel, rst, s->refused, s->reads);
+	APPEND(s1_txt, len, "access log (in order):\n");
+	for (k = 0; k < s->nlog; k++)
+		APPEND(s1_txt, len, "  %c%u %04x %04x\n", s->log[k].w ? 'W' : 'R',
+		       s->log[k].width, s->log[k].port, s->log[k].val);
+	s1_len = len;
+}
+
+static int s1_live(void)
+{
+	unsigned long ewr_i, ewr_d;
+	int entry_err;
+
+	hw = vmalloc(sizeof(*hw));
+	s1st = vmalloc(sizeof(*s1st));
+	s1_txt = vmalloc(TXT_MAX);
+	if (!hw || !s1st || !s1_txt)
+		return -ENOMEM;
+	if (!request_region(VGA_PORTS, VGA_NPORTS, "wd24adv")) {
+		pr_err("s1: VGA ports 3C0-3DF busy; nothing touched\n");
+		return -EBUSY;
+	}
+	if (!request_region(WD24S1_P_INDEX, 4, "wd24adv s1")) {
+		release_region(VGA_PORTS, VGA_NPORTS);
+		pr_err("s1: ports 23C0-23C3 busy; nothing touched\n");
+		return -EBUSY;
+	}
+	wd24_ctx_init(hw, &wd24_port_backend);
+	hw_io = (struct wd24_io){ k_inb, k_outb, s1_memr, s1_memw, NULL };
+	hw->io = &hw_io;
+	wd24s1_init(s1st, &wd24s1_kernel_io);
+	s1st->strict_echo = s1_echo;
+
+	mutex_lock(&hw_lock);
+	console_lock();
+	hw->be->begin(hw);
+	entry_err = wd24_entry_check(hw, WD24_PH_LOAD);
+	hw->be->end(hw);
+	ewr_i = hw->hw_index;
+	ewr_d = hw->hw_data;
+#ifdef WD24S1_QEMU_FAKE
+	if (entry_err)
+		wd24_note(hw, "QEMU FAKE BUILD: entry check failure ignored");
+	if (!ewr_d)
+		wd24s1_run(s1st);
+#else
+	if (!entry_err && !ewr_d)
+		wd24s1_run(s1st);
+#endif
+	console_unlock();
+	mutex_unlock(&hw_lock);
+	release_region(WD24S1_P_INDEX, 4);
+	release_region(VGA_PORTS, VGA_NPORTS);
+
+	s1_report(entry_err, ewr_i, ewr_d);
+	pr_info("S1: %s%s%s; entry check %d (index writes %lu, data %lu); 23C0h writes %u, reads %u\n",
+		wd24s1_res_name(s1st->res), s1st->why ? ": " : "",
+		s1st->why ? s1st->why : "", entry_err, ewr_i, ewr_d,
+		s1st->writes, s1st->reads);
+	if (s1st->restored)
+		pr_info("S1: S = %04x, restore read back %04x; details: /proc/wd24adv/s1\n",
+			s1st->saved, s1st->restore_rb);
+	vfree(hw);
+	hw = NULL;	/* rmmod: nothing to restore, no port touched */
+	return 0;
 }
 
 /* live: claim the ports, map A0000, save the text state */
@@ -573,13 +739,25 @@ static int __init wd24adv_init(void)
 		pr_err("live=1 needs dryrun=0 as well; nothing done\n");
 		return -EINVAL;
 	}
-	if (!dryrun && !live) {
-		pr_err("dryrun=0 without live=1 refused\n");
+	if (s1 && (live || *mode)) {
+		pr_err("s1=1 is a separate read-only probe: live=1 / mode= refused with it\n");
+		return -EINVAL;
+	}
+	if (!s1_echo && !s1) {
+		pr_err("s1_echo= needs s1=1\n");
+		return -EINVAL;
+	}
+	if (!dryrun && !live && !s1) {
+		pr_err("dryrun=0 without live=1 or s1=1 refused\n");
 		return -EOPNOTSUPP;
 	}
 	if (!live && *mode) {
 		pr_err("mode= needs dryrun=0 live=1\n");
 		return -EINVAL;
+	}
+	if (s1 && !dryrun && other_module_loaded("vga16fb")) {
+		pr_err("s1: vga16fb is loaded; refusing\n");
+		return -EBUSY;
 	}
 	if (live) {
 		if (trial < TRIAL_MIN || trial > TRIAL_MAX) {
@@ -615,6 +793,27 @@ static int __init wd24adv_init(void)
 	fails = run_selftest(ctx);
 	build_plan();
 
+	if (s1 && dryrun) {
+		s1_txt = vmalloc(TXT_MAX);
+		if (!s1_txt) {
+			free_all();
+			return -ENOMEM;
+		}
+		s1_plan_text();
+	}
+	if (s1 && !dryrun) {
+		if (fails) {
+			pr_err("s1: self-test failed; no hardware access\n");
+			free_all();
+			return -EINVAL;
+		}
+		err = s1_live();
+		if (err) {
+			pr_err("s1: not run (%d); nothing touched\n", err);
+			free_all();
+			return err;
+		}
+	}
 	if (live) {
 		if (fails) {
 			pr_err("live: self-test failed; no hardware access\n");
@@ -645,6 +844,7 @@ static int __init wd24adv_init(void)
 	    !proc_create_data("plan", 0444, pdir, &plan_ops, NULL) ||
 	    !proc_create_data("modes", 0444, pdir, &modes_ops, NULL) ||
 	    !proc_create_data("selftest", 0444, pdir, &self_ops, NULL) ||
+	    (s1 && !proc_create_data("s1", 0444, pdir, &s1_ops, NULL)) ||
 	    (live && (!proc_create_data("live", 0444, pdir, &live_ops, NULL) ||
 		      !proc_create_data("control", 0200, pdir, &control_ops, NULL)))) {
 		if (live && !hw_dead) {
@@ -657,6 +857,11 @@ static int __init wd24adv_init(void)
 	}
 	if (hw_dead)
 		return 0;
+	if (s1) {
+		pr_info("loaded, S1 %s; see /proc/wd24adv/s1\n",
+			dryrun ? "plan only (dry-run, no port access)" : "done (no port region held)");
+		return 0;
+	}
 	if (!live) {
 		pr_info("loaded, dry-run (%u modes, selftest %s); see /proc/wd24adv/\n",
 			wd24_nmodes, fails ? "FAILED" : "ok");

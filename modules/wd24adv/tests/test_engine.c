@@ -199,8 +199,14 @@ static void t_gate(void)
 	unsigned int i, refused = 0;
 	u32 p;
 
+	static const char *const s1bad[] = { "wd24x", "wd24adv_engine", "0x23c4", NULL };
+	static const char *const s1files[] = { "../wd24adv_s1.c", "../wd24adv_s1.h", NULL };
+
 	for (i = 0; files[i]; i++)
 		T(scan(files[i], bad) == 0, "live module source never references the engine");
+	/* S1 (in Kbuild) is separate from the S0 engine and has no 23C4h */
+	for (i = 0; s1files[i]; i++)
+		T(scan(s1files[i], s1bad) == 0, "S1 source never references the engine or 23C4h");
 
 	setup(1);
 	live = io;

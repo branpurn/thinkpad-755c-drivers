@@ -33,6 +33,9 @@ Doom), direct mapping and, later, page flipping on the **internal panel only**.
 | `wd24adv_ioctl.h` | Placeholder user API: `'W'` 0x30 (modeinfo, not implemented); 0x31 stays reserved and is never assigned. |
 | `wd24adv_engine.h/.c` | **S0, host only.** BITBLT (23C0h block 1) and cursor (block 2) closed register lists with DS / observed / UNPROVEN status, port guard, command validator (surfaces, VRAM range, overlap direction, host word counts) and op sequencer (bounded waits, readback, 23C0h save/restore, latch-dead on timeout or mismatch, never abort). Not in Kbuild; no caller in the module; `WD24X_LIVE_ALLOWED` is 0 and every live access is refused. See `docs/WD24ADV-DESKTOP-DESIGN.md` §7. |
 | `tests/test_engine.c` | S0 test of the engine code against the 23C0h model: guard fuzz over every value, the core guard's panel/routing/PM/clock refusals, validation, overlap vs memmove, exact host words, no CPU VRAM access while busy, timeout/mismatch latch, 23C0h restore on every path, a static check that no live source references the engine. |
+| `wd24adv_s1.h/.c` | **S1 probe (read-only, built in, off unless `s1=1`).** Separate from the S0 engine (shares no code with it) and from wd90c24fb. Its own guard allows exactly 26 port writes values, all to 23C0h: the 25 selects (block 1 idx 0-Fh, block 2 idx 0-8, NOINC) and the restore of the saved 23C0h & 1FFFh; reads only 23C0h/23C2h (16-bit) and 3C0h/3C1h (alias check). Never 23C2h/23C4h writes, never the CNTRL1 start bit. |
+| `tests/test_s1.c` | S1 against the 23C0h model: exact 51-write order and restore, refusals with zero writes, stop paths (index/echo mismatch, busy at rest, no block 2), pass-to-pass instability, guard fuzz over all 65536 values, the S1-only read-only allowance (1C01/1D01/1F01/1802 selects) that the S0 guard still refuses, and the exact VGA writes of the entry check on the 755C model (14 index writes, 0 data). |
+| `tests/qemu-wd24adv-s1.py` | QEMU: S1 dry-run/refusals with zero accesses; the real .ko refused at the entry check with zero 23Cxh accesses; a `-DWD24S1_QEMU_FAKE` build (23C0h modelled in software, never shipped) traced to give exactly the 51 expected writes and nothing on 23C4h. |
 | `tests/test_core.c` | Host test: the shared self-test plus host-only checks (`make wd24adv-test`). |
 | `tests/xcheck.c` | Host cross-check: drives the real `wd90c24fb/wd90c24_hw.c` against a port model and compares its write trace with wd24adv's for each mode. |
 | `tests/vgamodel.h/.c` | Port-level VGA model (WD90C24 and QEMU std VGA profiles): registers with WD lock rules, AR flip-flop, DAC, 4 planes with write/read mode 0 and chain-4, latches; flags forbidden registers; fault injection (stuck register, read-only plane). Optional 23C0h block model (`struct vm_eng`): BITBLT fill/copy/mono/colour-from-host executed byte by byte in hardware order into 1 MB, busy bit, cursor registers; flags writes while busy, aborts, 23C4h reads or idle writes, CPU VRAM access while busy; fault injection (stuck busy, readback, index echo, word-count skew). |
@@ -55,6 +58,8 @@ Built by `make oot` / `make wd24adv`. There is still **no `ext/*.ext`**, so no
 | `allow_routing` | 0 | Removed. Any value other than 0 is refused. |
 | `allow_crt` | 0 | Removed. Any value other than 0 is refused. |
 | `allow_clock` | 0 | Permits the PR68 b4:3 / PR69 clock block. No table mode needs it: with the boot clock it is a no-op and is skipped; a differing clock is refused while 0. |
+| `s1` | 0 | The S1 read-only 23C0h probe. Dry-run: `/proc/wd24adv/s1` shows the plan only. With `dryrun=0` (and **without** `live=1` / `mode=`): runs once at load in text mode with no fb driver, after the wd24adv entry check; result in `/proc/wd24adv/s1` and dmesg. insmod returns 0 either way (the result is held); no port region is kept, so rmmod touches nothing. |
+| `s1_echo` | 1 | S1: require the 23C2h b15:12 index echo (DS 17.1, UNPROVEN). 0 only records it. Needs `s1=1`. |
 | `also_conflict` | "" | Test aid: also refuse to load while the named module is loaded. |
 
 ## /proc/wd24adv/
@@ -65,6 +70,10 @@ Built by `make oot` / `make wd24adv`. There is still **no `ext/*.ext`**, so no
   shows `old -> new` (`--` when the old value is unknown) and a tag naming
   the `wd90c24fb` code it mirrors. UNPROVEN modes show `writes=0` and
   `-95` (`-EOPNOTSUPP`).
+- **`s1`** (with `s1=1`): plan (dry-run) or the result: OK / REFUSED /
+  STOPPED / UNSTABLE / RESTORE_BAD, the entry check line, 23C0h at entry,
+  both passes per register (23C0h readback, 23C2h value, echo), any stop
+  point, the restore and its readback, counts and the full access log.
 - **`modes`**: the table, status, flags and evidence, plus the validator result.
 - **`selftest`**: the shared self-test.
 - **`live`** (live only): the last hardware operation: result, port data and
@@ -223,7 +232,7 @@ Differences from `wd90c24fb`'s own sequence, all deliberate and checked by
     after restore; stuck SR06 latch at load -> `-EIO`, identical; stuck
     GR06 during restore -> `-EIO`, other steps still run; read-only plane
     -> `-EIO`, the rest restored.
-  - `tests/test_engine` (151 checks, S0, host only): the 23C0h/23C2h
+  - `tests/test_engine` (153 checks, S0, host only): the 23C0h/23C2h
     guard accepts exactly the closed lists (every value of every index of
     blocks 0-3, against an independent restatement in the test), every
     other port refused, live io refused with zero accesses; the core
@@ -232,7 +241,9 @@ Differences from `wd90c24fb`'s own sequence, all deliberate and checked by
     with no access; 397 random overlapping copies equal memmove; exact
     MONO/HOSTCOL word counts; no CPU VRAM access while busy; stuck busy,
     readback, index-echo and word-count faults latch acceleration dead;
-    23C0h identical after every op and failure path.
+    23C0h identical after every op and failure path; static gate also
+    covers wd24adv_s1.c/.h.
+  - `tests/test_s1` (67 checks): see Files.
 - `make wd24adv-qemu` (`tests/qemu-wd24adv.py`, 26 checks) on
   `-M isapc -cpu 486 -vga std` with `-trace vga_std_{read,write}_io`:
   dry-run load/rmmod with zero VGA port accesses; all parameter refusals
@@ -242,6 +253,10 @@ Differences from `wd90c24fb`'s own sequence, all deliberate and checked by
   refused while wd90c24fb is loaded; wd90c24fb `text=1` + rmmod (fake=3).
   QEMU has no WD90C24, so the live path past the entry check runs only
   against the host model.
+- `tests/qemu-wd24adv-s1.py` (26 checks): 23C0h-23C7h are unassigned on
+  isapc, so their accesses are traced via `memory_region_ops_{read,write}`
+  (root `io` region). Real .ko `dryrun=0 s1=1`: entry check refuses (CR34),
+  zero 23Cxh accesses; fake build: exactly the 51 writes in order.
 
 ## Live test
 
