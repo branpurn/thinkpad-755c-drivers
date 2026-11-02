@@ -37,6 +37,16 @@ The blit loop structure in `pvgaBitBlt.c` derives from the X Consortium's
 `cfbbitblt.c` (Keith Packard), under the X Consortium licence, which is
 also permissive and GPL-compatible.
 
+## doomgeneric (fetched, not vendored)
+
+`make doom` downloads doomgeneric (https://github.com/ozkl/doomgeneric,
+commit `e257a09527062bfb986b6e5e0780839b6cbd5b71`), which is based on
+Chocolate Doom and the id Software Doom source, under the GNU GPL version 2.
+`doom/patches/` and `doom/doomgeneric_wdfb.c` are changes to and a platform
+file for it, under the same licence. The resulting `doom-wdfb` binary is
+GPL-2.0; its source is the pinned archive plus `doom/`. No game data (WAD)
+is included.
+
 ## Data sheets (facts only, nothing copied)
 
 * Western Digital WD90C24A/A2 data sheet, 79-890002-001 Rev D (1994),

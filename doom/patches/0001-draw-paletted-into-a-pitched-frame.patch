@@ -1,0 +1,637 @@
+Let a paletted platform have Doom draw straight into its frame buffer.
+
+- SCREENPITCH (i_video.h, default SCREENWIDTH): bytes between rows of
+  I_VideoBuffer. Everything that writes I_VideoBuffer uses it: the column
+  drawers and row table (r_draw.c), V_* when drawing to the screen
+  (v_video.c; other buffers stay SCREENWIDTH wide), automap, finale text
+  and bunny scroll, R_VideoErase, I_ReadScreen, screenshots. The wipes work
+  in a packed buffer and copy it out each step when the pitch differs.
+- DG_DIRECT (doomgeneric.h): I_VideoBuffer comes from DG_VideoBuffer(),
+  I_FinishUpdate only calls DG_DrawFrame, no DG_ScreenBuffer is allocated.
+  With CMAP256 the platform reads colors[] when palette_changed is set.
+
+Default builds (neither defined) behave as before.
+
+diff --git a/doomgeneric/am_map.c b/doomgeneric/am_map.c
+index d3d504e..9d0833d 100644
+--- a/doomgeneric/am_map.c
++++ b/doomgeneric/am_map.c
+@@ -833,7 +833,10 @@ void AM_Ticker (void)
+ //
+ void AM_clearFB(int color)
+ {
+-    memset(fb, color, f_w*f_h);
++    int y;
++
++    for (y = 0; y < f_h; y++)
++        memset(fb + y * SCREENPITCH, color, f_w);
+ }
+ 
+ 
+@@ -1007,7 +1010,7 @@ AM_drawFline
+ 	return;
+     }
+ 
+-#define PUTDOT(xx,yy,cc) fb[(yy)*f_w+(xx)]=(cc)
++#define PUTDOT(xx,yy,cc) fb[(yy)*SCREENPITCH+(xx)]=(cc)
+ 
+     dx = fl->b.x - fl->a.x;
+     ax = 2 * (dx<0 ? -dx : dx);
+@@ -1331,7 +1334,7 @@ void AM_drawMarks(void)
+ 
+ void AM_drawCrosshair(int color)
+ {
+-    fb[(f_w*(f_h+1))/2] = color; // single point for now
++    fb[(f_h/2)*SCREENPITCH + f_w/2] = color; // single point for now
+ 
+ }
+ 
+diff --git a/doomgeneric/doomgeneric.c b/doomgeneric/doomgeneric.c
+index 881d700..6e94838 100644
+--- a/doomgeneric/doomgeneric.c
++++ b/doomgeneric/doomgeneric.c
+@@ -18,7 +18,9 @@ void doomgeneric_Create(int argc, char **argv)
+ 
+ 	M_FindResponseFile();
+ 
++#ifndef DG_DIRECT
+ 	DG_ScreenBuffer = malloc(DOOMGENERIC_RESX * DOOMGENERIC_RESY * 4);
++#endif
+ 
+ 	DG_Init();
+ 
+diff --git a/doomgeneric/doomgeneric.h b/doomgeneric/doomgeneric.h
+index fd8708f..fa4cb2d 100644
+--- a/doomgeneric/doomgeneric.h
++++ b/doomgeneric/doomgeneric.h
+@@ -42,6 +42,14 @@ uint32_t DG_GetTicksMs();
+ int DG_GetKey(int* pressed, unsigned char* key);
+ void DG_SetWindowTitle(const char * title);
+ 
++#ifdef DG_DIRECT
++// Paletted platforms that let Doom draw straight into their frame:
++// return SCREENWIDTH x SCREENHEIGHT bytes with rows SCREENPITCH apart
++// (called once from I_InitGraphics). DG_DrawFrame then presents it and
++// picks up colors[] when palette_changed is set; DG_ScreenBuffer is unused.
++uint8_t *DG_VideoBuffer(void);
++#endif
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/doomgeneric/f_finale.c b/doomgeneric/f_finale.c
+index ca6775e..3afef3b 100644
+--- a/doomgeneric/f_finale.c
++++ b/doomgeneric/f_finale.c
+@@ -252,6 +252,7 @@ void F_TextWrite (void)
+ 	    memcpy (dest, src+((y&63)<<6), SCREENWIDTH&63);
+ 	    dest += (SCREENWIDTH&63);
+ 	}
++	dest += SCREENPITCH - SCREENWIDTH;
+     }
+ 
+     V_MarkRect (0, 0, SCREENWIDTH, SCREENHEIGHT);
+@@ -587,13 +588,13 @@ F_DrawPatchCol
+     while (column->topdelta != 0xff )
+     {
+ 	source = (byte *)column + 3;
+-	dest = desttop + column->topdelta*SCREENWIDTH;
++	dest = desttop + column->topdelta*SCREENPITCH;
+ 	count = column->length;
+ 		
+ 	while (count--)
+ 	{
+ 	    *dest = *source++;
+-	    dest += SCREENWIDTH;
++	    dest += SCREENPITCH;
+ 	}
+ 	column = (column_t *)(  (byte *)column + column->length + 4 );
+     }
+diff --git a/doomgeneric/f_wipe.c b/doomgeneric/f_wipe.c
+index 05852fd..745dfc6 100644
+--- a/doomgeneric/f_wipe.c
++++ b/doomgeneric/f_wipe.c
+@@ -273,7 +273,12 @@ wipe_ScreenWipe
+     {
+ 	go = 1;
+ 	// wipe_scr = (byte *) Z_Malloc(width*height, PU_STATIC, 0); // DEBUG
++#if SCREENPITCH != SCREENWIDTH
++	// the wipes want packed rows: work aside, copy out each step
++	wipe_scr = (byte *) Z_Malloc(width*height, PU_STATIC, 0);
++#else
+ 	wipe_scr = I_VideoBuffer;
++#endif
+ 	(*wipes[wipeno*3])(width, height, ticks);
+     }
+ 
+@@ -281,12 +286,18 @@ wipe_ScreenWipe
+     V_MarkRect(0, 0, width, height);
+     rc = (*wipes[wipeno*3+1])(width, height, ticks);
+     //  V_DrawBlock(x, y, 0, width, height, wipe_scr); // DEBUG
++#if SCREENPITCH != SCREENWIDTH
++    V_DrawBlock(x, y, width, height, wipe_scr);
++#endif
+ 
+     // final stuff
+     if (rc)
+     {
+ 	go = 0;
+ 	(*wipes[wipeno*3+2])(width, height, ticks);
++#if SCREENPITCH != SCREENWIDTH
++	Z_Free(wipe_scr);
++#endif
+     }
+ 
+     return !go;
+diff --git a/doomgeneric/i_video.c b/doomgeneric/i_video.c
+index 84bebde..7db77b3 100644
+--- a/doomgeneric/i_video.c
++++ b/doomgeneric/i_video.c
+@@ -287,7 +287,11 @@ void I_InitGraphics (void)
+ 
+ 
+     /* Allocate screen to draw to */
++#ifdef DG_DIRECT
++	I_VideoBuffer = DG_VideoBuffer();
++#else
+ 	I_VideoBuffer = (byte*)Z_Malloc (SCREENWIDTH * SCREENHEIGHT, PU_STATIC, NULL);  // For DOOM to draw on
++#endif
+ 
+ 	screenvisible = true;
+ 
+@@ -297,7 +301,9 @@ void I_InitGraphics (void)
+ 
+ void I_ShutdownGraphics (void)
+ {
++#ifndef DG_DIRECT
+ 	Z_Free (I_VideoBuffer);
++#endif
+ }
+ 
+ void I_StartFrame (void)
+@@ -320,6 +326,10 @@ void I_UpdateNoBlit (void)
+ 
+ void I_FinishUpdate (void)
+ {
++#ifdef DG_DIRECT
++    DG_DrawFrame();
++}
++#else
+     int y;
+     int x_offset, y_offset, x_offset_end;
+     unsigned char *line_in, *line_out;
+@@ -368,13 +378,17 @@ void I_FinishUpdate (void)
+ 
+ 	DG_DrawFrame();
+ }
++#endif
+ 
+ //
+ // I_ReadScreen
+ //
+ void I_ReadScreen (byte* scr)
+ {
+-    memcpy (scr, I_VideoBuffer, SCREENWIDTH * SCREENHEIGHT);
++    int y;
++
++    for (y = 0; y < SCREENHEIGHT; y++)
++        memcpy (scr + y * SCREENWIDTH, I_VideoBuffer + y * SCREENPITCH, SCREENWIDTH);
+ }
+ 
+ //
+diff --git a/doomgeneric/i_video.h b/doomgeneric/i_video.h
+index c8565f4..b9079a6 100644
+--- a/doomgeneric/i_video.h
++++ b/doomgeneric/i_video.h
+@@ -27,6 +27,12 @@
+ #define SCREENWIDTH  320
+ #define SCREENHEIGHT 200
+ 
++// Bytes from one row of I_VideoBuffer to the next. A platform that lets
++// Doom draw straight into a wider frame buffer defines it (e.g. 640).
++#ifndef SCREENPITCH
++#define SCREENPITCH SCREENWIDTH
++#endif
++
+ // Screen width used for "squash" scale functions
+ 
+ #define SCREENWIDTH_4_3 256
+diff --git a/doomgeneric/r_draw.c b/doomgeneric/r_draw.c
+index 9271bcd..2971677 100644
+--- a/doomgeneric/r_draw.c
++++ b/doomgeneric/r_draw.c
+@@ -138,7 +138,7 @@ void R_DrawColumn (void)
+ 	//  using a lighting/special effects LUT.
+ 	*dest = dc_colormap[dc_source[(frac>>FRACBITS)&127]];
+ 	
+-	dest += SCREENWIDTH; 
++	dest += SCREENPITCH; 
+ 	frac += fracstep;
+ 	
+     } while (count--); 
+@@ -197,7 +197,7 @@ void R_DrawColumn (void)
+     while (count > 0)
+     { 
+ 	*dest = colormap[source[frac>>25]]; 
+-	dest += SCREENWIDTH; 
++	dest += SCREENPITCH; 
+ 	frac += fracstep; 
+ 	count--;
+     } 
+@@ -243,8 +243,8 @@ void R_DrawColumnLow (void)
+     {
+ 	// Hack. Does not work corretly.
+ 	*dest2 = *dest = dc_colormap[dc_source[(frac>>FRACBITS)&127]];
+-	dest += SCREENWIDTH;
+-	dest2 += SCREENWIDTH;
++	dest += SCREENPITCH;
++	dest2 += SCREENPITCH;
+ 	frac += fracstep; 
+ 
+     } while (count--);
+@@ -255,7 +255,7 @@ void R_DrawColumnLow (void)
+ // Spectre/Invisibility.
+ //
+ #define FUZZTABLE		50 
+-#define FUZZOFF	(SCREENWIDTH)
++#define FUZZOFF	(SCREENPITCH)
+ 
+ 
+ int	fuzzoffset[FUZZTABLE] =
+@@ -331,7 +331,7 @@ void R_DrawFuzzColumn (void)
+ 	if (++fuzzpos == FUZZTABLE) 
+ 	    fuzzpos = 0;
+ 	
+-	dest += SCREENWIDTH;
++	dest += SCREENPITCH;
+ 
+ 	frac += fracstep; 
+     } while (count--); 
+@@ -398,8 +398,8 @@ void R_DrawFuzzColumnLow (void)
+ 	if (++fuzzpos == FUZZTABLE) 
+ 	    fuzzpos = 0;
+ 	
+-	dest += SCREENWIDTH;
+-	dest2 += SCREENWIDTH;
++	dest += SCREENPITCH;
++	dest2 += SCREENPITCH;
+ 
+ 	frac += fracstep; 
+     } while (count--); 
+@@ -459,7 +459,7 @@ void R_DrawTranslatedColumn (void)
+ 	// Thus the "green" ramp of the player 0 sprite
+ 	//  is mapped to gray, red, black/indigo. 
+ 	*dest = dc_colormap[dc_translation[dc_source[frac>>FRACBITS]]];
+-	dest += SCREENWIDTH;
++	dest += SCREENPITCH;
+ 	
+ 	frac += fracstep; 
+     } while (count--); 
+@@ -510,8 +510,8 @@ void R_DrawTranslatedColumnLow (void)
+ 	//  is mapped to gray, red, black/indigo. 
+ 	*dest = dc_colormap[dc_translation[dc_source[frac>>FRACBITS]]];
+ 	*dest2 = dc_colormap[dc_translation[dc_source[frac>>FRACBITS]]];
+-	dest += SCREENWIDTH;
+-	dest2 += SCREENWIDTH;
++	dest += SCREENPITCH;
++	dest2 += SCREENPITCH;
+ 	
+ 	frac += fracstep; 
+     } while (count--); 
+@@ -797,7 +797,7 @@ R_InitBuffer
+ 
+     // Preclaculate all row offsets.
+     for (i=0 ; i<height ; i++) 
+-	ylookup[i] = I_VideoBuffer + (i+viewwindowy)*SCREENWIDTH; 
++	ylookup[i] = I_VideoBuffer + (i+viewwindowy)*SCREENPITCH; 
+ } 
+  
+  
+@@ -926,9 +926,16 @@ R_VideoErase
+   //  a 32bit CPU, as GNU GCC/Linux libc did
+   //  at one point.
+ 
+-    if (background_buffer != NULL)
++    // ofs and count are in SCREENWIDTH units and may span rows
++    while (background_buffer != NULL && count > 0)
+     {
+-        memcpy(I_VideoBuffer + ofs, background_buffer + ofs, count); 
++        unsigned x = ofs % SCREENWIDTH;
++        int n = SCREENWIDTH - x < (unsigned) count ? (int) (SCREENWIDTH - x) : count;
++
++        memcpy(I_VideoBuffer + (ofs / SCREENWIDTH) * SCREENPITCH + x,
++               background_buffer + ofs, n);
++        ofs += n;
++        count -= n;
+     }
+ } 
+ 
+diff --git a/doomgeneric/v_video.c b/doomgeneric/v_video.c
+index 6db28aa..733b3a5 100644
+--- a/doomgeneric/v_video.c
++++ b/doomgeneric/v_video.c
+@@ -57,6 +57,10 @@ byte *xlatab = NULL;
+ 
+ static byte *dest_screen = NULL;
+ 
++// Its row pitch: SCREENPITCH for I_VideoBuffer, SCREENWIDTH for others.
++
++static int dest_pitch = SCREENPITCH;
++
+ int dirtybox[4]; 
+ 
+ // haleyjd 08/28/10: clipping callback function for patches.
+@@ -106,13 +110,13 @@ void V_CopyRect(int srcx, int srcy, byte *source,
+     V_MarkRect(destx, desty, width, height); 
+  
+     src = source + SCREENWIDTH * srcy + srcx; 
+-    dest = dest_screen + SCREENWIDTH * desty + destx; 
++    dest = dest_screen + dest_pitch * desty + destx; 
+ 
+     for ( ; height>0 ; height--) 
+     { 
+         memcpy(dest, src, width); 
+         src += SCREENWIDTH; 
+-        dest += SCREENWIDTH; 
++        dest += dest_pitch; 
+     } 
+ } 
+  
+@@ -169,7 +173,7 @@ void V_DrawPatch(int x, int y, patch_t *patch)
+     V_MarkRect(x, y, SHORT(patch->width), SHORT(patch->height));
+ 
+     col = 0;
+-    desttop = dest_screen + y * SCREENWIDTH + x;
++    desttop = dest_screen + y * dest_pitch + x;
+ 
+     w = SHORT(patch->width);
+ 
+@@ -181,13 +185,13 @@ void V_DrawPatch(int x, int y, patch_t *patch)
+         while (column->topdelta != 0xff)
+         {
+             source = (byte *)column + 3;
+-            dest = desttop + column->topdelta*SCREENWIDTH;
++            dest = desttop + column->topdelta * dest_pitch;
+             count = column->length;
+ 
+             while (count--)
+             {
+                 *dest = *source++;
+-                dest += SCREENWIDTH;
++                dest += dest_pitch;
+             }
+             column = (column_t *)((byte *)column + column->length + 4);
+         }
+@@ -233,7 +237,7 @@ void V_DrawPatchFlipped(int x, int y, patch_t *patch)
+     V_MarkRect (x, y, SHORT(patch->width), SHORT(patch->height));
+ 
+     col = 0;
+-    desttop = dest_screen + y * SCREENWIDTH + x;
++    desttop = dest_screen + y * dest_pitch + x;
+ 
+     w = SHORT(patch->width);
+ 
+@@ -245,13 +249,13 @@ void V_DrawPatchFlipped(int x, int y, patch_t *patch)
+         while (column->topdelta != 0xff )
+         {
+             source = (byte *)column + 3;
+-            dest = desttop + column->topdelta*SCREENWIDTH;
++            dest = desttop + column->topdelta * dest_pitch;
+             count = column->length;
+ 
+             while (count--)
+             {
+                 *dest = *source++;
+-                dest += SCREENWIDTH;
++                dest += dest_pitch;
+             }
+             column = (column_t *)((byte *)column + column->length + 4);
+         }
+@@ -295,7 +299,7 @@ void V_DrawTLPatch(int x, int y, patch_t * patch)
+     }
+ 
+     col = 0;
+-    desttop = dest_screen + y * SCREENWIDTH + x;
++    desttop = dest_screen + y * dest_pitch + x;
+ 
+     w = SHORT(patch->width);
+     for (; col < w; x++, col++, desttop++)
+@@ -307,13 +311,13 @@ void V_DrawTLPatch(int x, int y, patch_t * patch)
+         while (column->topdelta != 0xff)
+         {
+             source = (byte *) column + 3;
+-            dest = desttop + column->topdelta * SCREENWIDTH;
++            dest = desttop + column->topdelta * dest_pitch;
+             count = column->length;
+ 
+             while (count--)
+             {
+                 *dest = tinttable[((*dest) << 8) + *source++];
+-                dest += SCREENWIDTH;
++                dest += dest_pitch;
+             }
+             column = (column_t *) ((byte *) column + column->length + 4);
+         }
+@@ -343,7 +347,7 @@ void V_DrawXlaPatch(int x, int y, patch_t * patch)
+     }
+ 
+     col = 0;
+-    desttop = dest_screen + y * SCREENWIDTH + x;
++    desttop = dest_screen + y * dest_pitch + x;
+ 
+     w = SHORT(patch->width);
+     for(; col < w; x++, col++, desttop++)
+@@ -355,14 +359,14 @@ void V_DrawXlaPatch(int x, int y, patch_t * patch)
+         while(column->topdelta != 0xff)
+         {
+             source = (byte *) column + 3;
+-            dest = desttop + column->topdelta * SCREENWIDTH;
++            dest = desttop + column->topdelta * dest_pitch;
+             count = column->length;
+ 
+             while(count--)
+             {
+                 *dest = xlatab[*dest + ((*source) << 8)];
+                 source++;
+-                dest += SCREENWIDTH;
++                dest += dest_pitch;
+             }
+             column = (column_t *) ((byte *) column + column->length + 4);
+         }
+@@ -394,7 +398,7 @@ void V_DrawAltTLPatch(int x, int y, patch_t * patch)
+     }
+ 
+     col = 0;
+-    desttop = dest_screen + y * SCREENWIDTH + x;
++    desttop = dest_screen + y * dest_pitch + x;
+ 
+     w = SHORT(patch->width);
+     for (; col < w; x++, col++, desttop++)
+@@ -406,13 +410,13 @@ void V_DrawAltTLPatch(int x, int y, patch_t * patch)
+         while (column->topdelta != 0xff)
+         {
+             source = (byte *) column + 3;
+-            dest = desttop + column->topdelta * SCREENWIDTH;
++            dest = desttop + column->topdelta * dest_pitch;
+             count = column->length;
+ 
+             while (count--)
+             {
+                 *dest = tinttable[((*dest) << 8) + *source++];
+-                dest += SCREENWIDTH;
++                dest += dest_pitch;
+             }
+             column = (column_t *) ((byte *) column + column->length + 4);
+         }
+@@ -445,8 +449,8 @@ void V_DrawShadowedPatch(int x, int y, patch_t *patch)
+     }
+ 
+     col = 0;
+-    desttop = dest_screen + y * SCREENWIDTH + x;
+-    desttop2 = dest_screen + (y + 2) * SCREENWIDTH + x + 2;
++    desttop = dest_screen + y * dest_pitch + x;
++    desttop2 = dest_screen + (y + 2) * dest_pitch + x + 2;
+ 
+     w = SHORT(patch->width);
+     for (; col < w; x++, col++, desttop++, desttop2++)
+@@ -458,16 +462,16 @@ void V_DrawShadowedPatch(int x, int y, patch_t *patch)
+         while (column->topdelta != 0xff)
+         {
+             source = (byte *) column + 3;
+-            dest = desttop + column->topdelta * SCREENWIDTH;
+-            dest2 = desttop2 + column->topdelta * SCREENWIDTH;
++            dest = desttop + column->topdelta * dest_pitch;
++            dest2 = desttop2 + column->topdelta * dest_pitch;
+             count = column->length;
+ 
+             while (count--)
+             {
+                 *dest2 = tinttable[((*dest2) << 8)];
+-                dest2 += SCREENWIDTH;
++                dest2 += dest_pitch;
+                 *dest = *source++;
+-                dest += SCREENWIDTH;
++                dest += dest_pitch;
+ 
+             }
+             column = (column_t *) ((byte *) column + column->length + 4);
+@@ -516,13 +520,13 @@ void V_DrawBlock(int x, int y, int width, int height, byte *src)
+  
+     V_MarkRect (x, y, width, height); 
+  
+-    dest = dest_screen + y * SCREENWIDTH + x; 
++    dest = dest_screen + y * dest_pitch + x; 
+ 
+     while (height--) 
+     { 
+ 	memcpy (dest, src, width); 
+ 	src += width; 
+-	dest += SCREENWIDTH; 
++	dest += dest_pitch; 
+     } 
+ } 
+ 
+@@ -531,7 +535,7 @@ void V_DrawFilledBox(int x, int y, int w, int h, int c)
+     uint8_t *buf, *buf1;
+     int x1, y1;
+ 
+-    buf = I_VideoBuffer + SCREENWIDTH * y + x;
++    buf = I_VideoBuffer + SCREENPITCH * y + x;
+ 
+     for (y1 = 0; y1 < h; ++y1)
+     {
+@@ -542,7 +546,7 @@ void V_DrawFilledBox(int x, int y, int w, int h, int c)
+             *buf1++ = c;
+         }
+ 
+-        buf += SCREENWIDTH;
++        buf += SCREENPITCH;
+     }
+ }
+ 
+@@ -551,7 +555,7 @@ void V_DrawHorizLine(int x, int y, int w, int c)
+     uint8_t *buf;
+     int x1;
+ 
+-    buf = I_VideoBuffer + SCREENWIDTH * y + x;
++    buf = I_VideoBuffer + SCREENPITCH * y + x;
+ 
+     for (x1 = 0; x1 < w; ++x1)
+     {
+@@ -564,12 +568,12 @@ void V_DrawVertLine(int x, int y, int h, int c)
+     uint8_t *buf;
+     int y1;
+ 
+-    buf = I_VideoBuffer + SCREENWIDTH * y + x;
++    buf = I_VideoBuffer + SCREENPITCH * y + x;
+ 
+     for (y1 = 0; y1 < h; ++y1)
+     {
+         *buf = c;
+-        buf += SCREENWIDTH;
++        buf += SCREENPITCH;
+     }
+ }
+ 
+@@ -588,7 +592,7 @@ void V_DrawBox(int x, int y, int w, int h, int c)
+  
+ void V_DrawRawScreen(byte *raw)
+ {
+-    memcpy(dest_screen, raw, SCREENWIDTH * SCREENHEIGHT);
++    V_DrawBlock(0, 0, SCREENWIDTH, SCREENHEIGHT, raw);
+ }
+ 
+ //
+@@ -606,6 +610,7 @@ void V_Init (void)
+ void V_UseBuffer(byte *buffer)
+ {
+     dest_screen = buffer;
++    dest_pitch = SCREENWIDTH;
+ }
+ 
+ // Restore screen buffer to the i_video screen buffer.
+@@ -613,6 +618,7 @@ void V_UseBuffer(byte *buffer)
+ void V_RestoreBuffer(void)
+ {
+     dest_screen = I_VideoBuffer;
++    dest_pitch = SCREENPITCH;
+ }
+ 
+ //
+@@ -791,6 +797,7 @@ void WritePNGfile(char *filename, byte *data,
+ void V_ScreenShot(char *format)
+ {
+     int i;
++    byte *shot;
+     char lbmname[16]; // haleyjd 20110213: BUG FIX - 12 is too small!
+     char *ext;
+     
+@@ -823,10 +830,14 @@ void V_ScreenShot(char *format)
+         I_Error ("V_ScreenShot: Couldn't create a PCX");
+     }
+ 
++    // I_VideoBuffer rows may be SCREENPITCH apart: take a packed copy
++    shot = Z_Malloc(SCREENWIDTH * SCREENHEIGHT, PU_STATIC, NULL);
++    I_ReadScreen(shot);
++
+ #ifdef HAVE_LIBPNG
+     if (png_screenshots)
+     {
+-    WritePNGfile(lbmname, I_VideoBuffer,
++    WritePNGfile(lbmname, shot,
+                  SCREENWIDTH, SCREENHEIGHT,
+                  W_CacheLumpName (DEH_String("PLAYPAL"), PU_CACHE));
+     }
+@@ -834,10 +845,11 @@ void V_ScreenShot(char *format)
+ #endif
+     {
+     // save the pcx file
+-    WritePCXfile(lbmname, I_VideoBuffer,
++    WritePCXfile(lbmname, shot,
+                  SCREENWIDTH, SCREENHEIGHT,
+                  W_CacheLumpName (DEH_String("PLAYPAL"), PU_CACHE));
+     }
++    Z_Free(shot);
+ }
+ 
+ #define MOUSE_SPEED_BOX_WIDTH  120

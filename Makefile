@@ -7,6 +7,8 @@
 #   make test-core  run tinycore-32-ram's own test suite on the module-capable floppy
 #   make sdl        SDL2 + wdfb video backend, static i486 (sdl/), out/sdl
 #   make test-sdl   QEMU test of the wdfb backend (needs kernel, oot, sdl)
+#   make doom       doomgeneric for wd90c24fb, no SDL, static i486 (doom/), out/doom
+#   make test-doom  QEMU test + timedemos of doom-wdfb: IWAD=/path/DOOM.WAD (never committed)
 #   make scan       public-repo hygiene scan (run before every push)
 .POSIX:
 SHELL = /bin/sh
@@ -55,6 +57,13 @@ sdl:
 test-sdl: kernel oot modutils sdl
 	sdl/tests/qemu-wdfb.py
 
+doom:
+	doom/build.sh
+
+test-doom: kernel oot modutils doom
+	@test -n "$(IWAD)" || { echo 'usage: make test-doom IWAD=/path/to/DOOM.WAD [IWAD2=freedoom1.wad]' >&2; exit 2; }
+	i2="$(IWAD2)"; doom/tests/qemu-doom.py --iwad "$(IWAD)" $${i2:+--iwad "$$i2"}
+
 scan:
 	scripts/scan-public.sh
 
@@ -64,4 +73,4 @@ clean:
 distclean:
 	scripts/clean-oot.sh; rm -rf out build dl
 
-.PHONY: all kernel oot modutils tools tcz floppy disk sizes unit test test-core ksyms-keep sdl test-sdl scan clean distclean
+.PHONY: all kernel oot modutils tools tcz floppy disk sizes unit test test-core ksyms-keep sdl test-sdl doom test-doom scan clean distclean

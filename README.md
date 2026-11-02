@@ -93,6 +93,15 @@ plus `out/sdl/sdltest.i486`. `sdl/tests/qemu-wdfb.py` tests it under
 `qemu-system-i386 -cpu 486` with `wd90c24fb fake=3`. See
 [sdl/README.md](sdl/README.md).
 
+## Doom (doomgeneric, no SDL)
+
+`doom/` builds `doom-wdfb`: doomgeneric at a pinned commit (sha256 checked),
+patched to draw its 8-bit frame straight into the wd90c24fb shadow at pitch
+640, with one damage ioctl per frame. 320x200 centred, or 640x400 with
+`DOOM_WDFB_SCALE=2`; no sound yet. `make doom` builds it (static, i486);
+`make test-doom IWAD=/path/to/DOOM.WAD` tests it under QEMU. No WAD is
+included and none may be committed. See [doom/README.md](doom/README.md).
+
 ## Adding a driver
 
 * in-tree: add `CONFIG_FOO=m` to `config/kernel-drivers.fragment` and an

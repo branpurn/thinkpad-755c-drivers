@@ -13,3 +13,8 @@
 Module.symvers
 modules.order
 __pycache__/
+# game data is never committed (doom/: bring your own IWAD)
+*.wad
+*.WAD
+*.Wad
+*.lmp
