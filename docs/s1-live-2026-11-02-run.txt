@@ -1,0 +1,247 @@
+wd24adv S1 live run, 2026-11-02 (times UTC). Source 945c255 rebuilt against the
+running 6.18.57-tc755x kernel tree: wd24adv.ko sha256
+d5973eaead1a03b92c6e88bad3eec9298df4d88b47f6245d5df740bce319dbc5,
+vermagic "6.18.57-tc755x mod_unload 486". Result: OK, run 1 == run 2.
+
+21:35:37 step 0 read-only: up 34 min; wd90c24fb loaded; /proc/fb "0 WD90C24";
+         Xfbdev 553 (startx 543, jwm, rxvt); tty3. Normal state.
+21:36:32 XMODEM -> /tmp/wd24adv.ko, local == remote sha d5973eae...
+21:37:49 kill 553 -> no Xfbdev, tty1
+21:38:30 text=1 -> T=0; rmmod wd90c24fb -> RM=0, "Console: switching to colour VGA+ 80x25";
+         wd90c24fb/vga16fb/wd24adv loaded: 0; /proc/fb lines: 0; no Xfbdev
+21:39:35 run 1: G=d5973eae001; insmod dryrun=0 s1=1 -> RC=0
+  wd24adv: S1: OK; entry check 0 (index writes 14, data 0); 23C0h writes 51, reads 105
+  wd24adv: S1: S = 1002, restore read back 1002; details: /proc/wd24adv/s1
+  wd24adv: loaded, S1 done (no port region held); see /proc/wd24adv/s1
+21:42:04 rmmod wd24adv -> RM=0
+21:42:37 run 2: G=d5973eae001; insmod -> RC=0, the same three dmesg lines
+21:43:55 /proc/wd24adv/s1 run 1 and run 2: 215 lines each, md5
+         ebd7b29662dcf2e17705460fde88e749 both (byte-identical); rmmod RM=0
+21:45:03 restore: insmod wd90c24fb.ko (no args) RC=0: 1024 KiB, PR18=0xc7 PR19=0x54
+         LCD on CRT off, BITBLT self-test passed, fb0 640x480x8
+21:45:59 startx as xautostart -> Xfbdev 671 (startx 661), jwm, rxvt
+21:47:03 baseline (wd24probe3, RC=19 by design):
+  wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
+  wd24probe3: GR0F=05 GR0E=01 SR06=0f CR11=8c CR29=85
+  wd24probe3: CR34 L=a0 again=a0 wrote=a0 rb=a0 restored-rb=a0
+  wd24probe3: PR18(CR31)=c7 PR19(CR32)=54 PR1A(CR33)=00 PR36(CR3B)=ef PR37(CR3C)=9a PR39(CR3E)=20
+  wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
+  wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+  -> all 9 baseline registers match; no wd24* module loaded afterwards.
+
+/proc/wd24adv/s1 (run 1; run 2 identical):
+wd24adv S1 result: OK
+entry check: passed (0); VGA index writes 14, data writes 0
+  # entry check passed (reads only)
+23C0h at entry read 1002, 1002; 3C1h:3C0h = 3f20; strict echo 1
+pass 1 (25 selects read):
+  blk 1 idx 0: 23C0h 1001 23C2h 0108
+  blk 1 idx 1: 23C0h 1101 23C2h 1000
+  blk 1 idx 2: 23C0h 1201 23C2h 210b
+  blk 1 idx 3: 23C0h 1301 23C2h 3004
+  blk 1 idx 4: 23C0h 1401 23C2h 410b
+  blk 1 idx 5: 23C0h 1501 23C2h 5004
+  blk 1 idx 6: 23C0h 1601 23C2h 61e4
+  blk 1 idx 7: 23C0h 1701 23C2h 713c
+  blk 1 idx 8: 23C0h 1801 23C2h 8280
+  blk 1 idx 9: 23C0h 1901 23C2h 9300
+  blk 1 idx A: 23C0h 1a01 23C2h a000
+  blk 1 idx B: 23C0h 1b01 23C2h b0a5
+  blk 1 idx C: 23C0h 1c01 23C2h c000
+  blk 1 idx D: 23C0h 1d01 23C2h d000
+  blk 1 idx E: 23C0h 1e01 23C2h e0ff
+  blk 1 idx F: 23C0h 1f01 23C2h f0ff
+  blk 2 idx 0: 23C0h 1002 23C2h 0000
+  blk 2 idx 1: 23C0h 1102 23C2h 1000
+  blk 2 idx 2: 23C0h 1202 23C2h 2014
+  blk 2 idx 3: 23C0h 1302 23C2h 3001
+  blk 2 idx 4: 23C0h 1402 23C2h 4000
+  blk 2 idx 5: 23C0h 1502 23C2h 5041
+  blk 2 idx 6: 23C0h 1602 23C2h 617a
+  blk 2 idx 7: 23C0h 1702 23C2h 7047
+  blk 2 idx 8: 23C0h 1802 23C2h 8000
+pass 2 (25 selects read):
+  blk 1 idx 0: 23C0h 1001 23C2h 0108
+  blk 1 idx 1: 23C0h 1101 23C2h 1000
+  blk 1 idx 2: 23C0h 1201 23C2h 210b
+  blk 1 idx 3: 23C0h 1301 23C2h 3004
+  blk 1 idx 4: 23C0h 1401 23C2h 410b
+  blk 1 idx 5: 23C0h 1501 23C2h 5004
+  blk 1 idx 6: 23C0h 1601 23C2h 61e4
+  blk 1 idx 7: 23C0h 1701 23C2h 713c
+  blk 1 idx 8: 23C0h 1801 23C2h 8280
+  blk 1 idx 9: 23C0h 1901 23C2h 9300
+  blk 1 idx A: 23C0h 1a01 23C2h a000
+  blk 1 idx B: 23C0h 1b01 23C2h b0a5
+  blk 1 idx C: 23C0h 1c01 23C2h c000
+  blk 1 idx D: 23C0h 1d01 23C2h d000
+  blk 1 idx E: 23C0h 1e01 23C2h e0ff
+  blk 1 idx F: 23C0h 1f01 23C2h f0ff
+  blk 2 idx 0: 23C0h 1002 23C2h 0000
+  blk 2 idx 1: 23C0h 1102 23C2h 1000
+  blk 2 idx 2: 23C0h 1202 23C2h 2014
+  blk 2 idx 3: 23C0h 1302 23C2h 3001
+  blk 2 idx 4: 23C0h 1402 23C2h 4000
+  blk 2 idx 5: 23C0h 1502 23C2h 5041
+  blk 2 idx 6: 23C0h 1602 23C2h 617a
+  blk 2 idx 7: 23C0h 1702 23C2h 7047
+  blk 2 idx 8: 23C0h 1802 23C2h 8000
+restore: wrote 1002, read 1002 (equal)
+23C0h writes 51 (selects 50 + restore 1), 23C2h/23C4h writes 0, guard refusals 0, reads 105
+access log (in order):
+  R16 23c0 1002
+  R16 23c0 1002
+  R8 03c0 0020
+  R8 03c1 003f
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1101
+  R16 23c0 1101
+  R16 23c2 1000
+  W16 23c0 1201
+  R16 23c0 1201
+  R16 23c2 210b
+  W16 23c0 1301
+  R16 23c0 1301
+  R16 23c2 3004
+  W16 23c0 1401
+  R16 23c0 1401
+  R16 23c2 410b
+  W16 23c0 1501
+  R16 23c0 1501
+  R16 23c2 5004
+  W16 23c0 1601
+  R16 23c0 1601
+  R16 23c2 61e4
+  W16 23c0 1701
+  R16 23c0 1701
+  R16 23c2 713c
+  W16 23c0 1801
+  R16 23c0 1801
+  R16 23c2 8280
+  W16 23c0 1901
+  R16 23c0 1901
+  R16 23c2 9300
+  W16 23c0 1a01
+  R16 23c0 1a01
+  R16 23c2 a000
+  W16 23c0 1b01
+  R16 23c0 1b01
+  R16 23c2 b0a5
+  W16 23c0 1c01
+  R16 23c0 1c01
+  R16 23c2 c000
+  W16 23c0 1d01
+  R16 23c0 1d01
+  R16 23c2 d000
+  W16 23c0 1e01
+  R16 23c0 1e01
+  R16 23c2 e0ff
+  W16 23c0 1f01
+  R16 23c0 1f01
+  R16 23c2 f0ff
+  W16 23c0 1002
+  R16 23c0 1002
+  R16 23c2 0000
+  W16 23c0 1102
+  R16 23c0 1102
+  R16 23c2 1000
+  W16 23c0 1202
+  R16 23c0 1202
+  R16 23c2 2014
+  W16 23c0 1302
+  R16 23c0 1302
+  R16 23c2 3001
+  W16 23c0 1402
+  R16 23c0 1402
+  R16 23c2 4000
+  W16 23c0 1502
+  R16 23c0 1502
+  R16 23c2 5041
+  W16 23c0 1602
+  R16 23c0 1602
+  R16 23c2 617a
+  W16 23c0 1702
+  R16 23c0 1702
+  R16 23c2 7047
+  W16 23c0 1802
+  R16 23c0 1802
+  R16 23c2 8000
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1101
+  R16 23c0 1101
+  R16 23c2 1000
+  W16 23c0 1201
+  R16 23c0 1201
+  R16 23c2 210b
+  W16 23c0 1301
+  R16 23c0 1301
+  R16 23c2 3004
+  W16 23c0 1401
+  R16 23c0 1401
+  R16 23c2 410b
+  W16 23c0 1501
+  R16 23c0 1501
+  R16 23c2 5004
+  W16 23c0 1601
+  R16 23c0 1601
+  R16 23c2 61e4
+  W16 23c0 1701
+  R16 23c0 1701
+  R16 23c2 713c
+  W16 23c0 1801
+  R16 23c0 1801
+  R16 23c2 8280
+  W16 23c0 1901
+  R16 23c0 1901
+  R16 23c2 9300
+  W16 23c0 1a01
+  R16 23c0 1a01
+  R16 23c2 a000
+  W16 23c0 1b01
+  R16 23c0 1b01
+  R16 23c2 b0a5
+  W16 23c0 1c01
+  R16 23c0 1c01
+  R16 23c2 c000
+  W16 23c0 1d01
+  R16 23c0 1d01
+  R16 23c2 d000
+  W16 23c0 1e01
+  R16 23c0 1e01
+  R16 23c2 e0ff
+  W16 23c0 1f01
+  R16 23c0 1f01
+  R16 23c2 f0ff
+  W16 23c0 1002
+  R16 23c0 1002
+  R16 23c2 0000
+  W16 23c0 1102
+  R16 23c0 1102
+  R16 23c2 1000
+  W16 23c0 1202
+  R16 23c0 1202
+  R16 23c2 2014
+  W16 23c0 1302
+  R16 23c0 1302
+  R16 23c2 3001
+  W16 23c0 1402
+  R16 23c0 1402
+  R16 23c2 4000
+  W16 23c0 1502
+  R16 23c0 1502
+  R16 23c2 5041
+  W16 23c0 1602
+  R16 23c0 1602
+  R16 23c2 617a
+  W16 23c0 1702
+  R16 23c0 1702
+  R16 23c2 7047
+  W16 23c0 1802
+  R16 23c0 1802
+  R16 23c2 8000
+  W16 23c0 1002
+  R16 23c0 1002

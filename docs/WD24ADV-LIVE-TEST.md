@@ -167,9 +167,11 @@ watching):
 After every step: `dmesg | grep wd24adv` and `cat /proc/wd24adv/live`
 into the serial log.
 
-## S1: read-only 23C0h probe (prepared, not run)
+## S1: read-only 23C0h probe (run 2026-11-02: OK)
 
-Module `wd24adv.ko` from the `wd24adv` branch, `s1=1`. Text state, no fb
+Module `wd24adv.ko` from the `wd24adv` branch, `s1=1`, **built against the
+running 6.18.57-tc755x kernel tree** (vermagic `6.18.57-tc755x mod_unload 486`;
+a `build/kernel-obj` build is 6.18.57-tc755 and is refused, RC=8). Text state, no fb
 driver (wd90c24fb `text=1` + rmmod first, or never loaded), no X.
 
 Port writes, exactly, in order (host model; QEMU stops at CR34):
@@ -188,7 +190,7 @@ CNTRL1 start, or panel/PM/routing registers.
 | # | command (as root, ttyS0) | expected |
 |---|---|---|
 | 1 | copy `wd24adv.ko` over; `sha256sum wd24adv.ko` | the recorded sha |
-| 2 | `grep -cE 'wd90c24fb\|vga16fb' /proc/modules; cat /proc/fb; pidof Xorg` | 0, empty, nothing |
+| 2 | `grep -cE 'wd90c24fb\|vga16fb' /proc/modules; cat /proc/fb; pidof Xfbdev` | 0, empty, nothing |
 | 3 | `insmod wd24adv.ko dryrun=0 s1=1` | returns 0 (the result is held, not the insmod code) |
 | 4 | `cat /proc/wd24adv/s1; dmesg \| grep wd24adv` | `S1 result: OK` (or REFUSED/STOPPED/UNSTABLE/RESTORE_BAD with the reason) |
 | 5 | `rmmod wd24adv` | no port access |
@@ -258,3 +260,33 @@ Live modules must be built against the **6.18.57-tc755x** tree, not
 `build/kernel-obj` (6.18.57-tc755). A tc755x rebuild of the same source has
 sha256 `d5973eae…` (needs its own approval). The 755C line editor truncates
 input at about 500 characters, so keep each command line under ~400.
+
+### S1 live run 2026-11-02: OK (tc755x build)
+
+Build `d5973eae…` (945c255 source, tc755x tree). Two runs, both `S1 result:
+OK`, `/proc/wd24adv/s1` byte-identical (md5 `ebd7b296…`). Entry check passed
+(14 index writes, 0 data); 23C0h at entry 1002/1002; 3C1h:3C0h = 3f20; strict
+echo 1; 51 23C0h writes, 0 23C2h/23C4h writes, 0 guard refusals, 105 reads;
+restore wrote 1002, read 1002. Every select echoed in 23C0h. 23C2h:
+
+| idx | blk 1 | blk 2 |
+|---|---|---|
+| 0 | 0108 | 0000 |
+| 1 | 1000 | 1000 |
+| 2 | 210b | 2014 |
+| 3 | 3004 | 3001 |
+| 4 | 410b | 4000 |
+| 5 | 5004 | 5041 |
+| 6 | 61e4 | 617a |
+| 7 | 713c | 7047 |
+| 8 | 8280 | 8000 |
+| 9 | 9300 | |
+| A | a000 | |
+| B | b0a5 | |
+| C | c000 | |
+| D | d000 | |
+| E | e0ff | |
+| F | f0ff | |
+
+Pass 2 equals pass 1. Restore (wd90c24fb + X) and the wd24probe3 baseline
+matched all nine registers. Raw log: [s1-live-2026-11-02-run.txt](s1-live-2026-11-02-run.txt).
