@@ -20,4 +20,5 @@ vrom.bin
 sysbios.bin
 lowmem.bin
 /modules/wd24adv/tests/test_core
+/modules/wd24adv/tests/xcheck
 /.venv*/

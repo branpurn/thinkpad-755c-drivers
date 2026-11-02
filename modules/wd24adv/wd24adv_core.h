@@ -2,15 +2,24 @@
 /*
  * wd24adv - experimental "advanced" driver for the WD90C24/WD90C24A(2) on
  * the ThinkPad 755C.  This header is shared by the kernel module and the
- * host-side unit test (tests/), so it must not depend on kernel headers
+ * host-side unit tests (tests/), so it must not depend on kernel headers
  * beyond the small compat block below.
  *
  * wd24adv is a SEPARATE module from wd90c24fb: it shares no source, header,
  * ioctl or build file with it, and only one of the two may be loaded.
  *
- * Register knowledge comes from the public WD90C24 datasheet, the XFree86
- * WD driver and the clean-room Stage 0 BIOS trace (stage0/), never from
- * disassembled vendor code.
+ * Safety model (see README.md):
+ *  - no runtime panel/CRT routing at all: the BIOS chooses the route at
+ *    POST (Fn+F7 is handled by SMI).  PR18/PR19/PR1A/PR36, the shadow CRTC
+ *    (CR34 = xxxxx110b), CR35/CR3A, panel power (PR57 b2, PR4 b5) are never
+ *    written; PM ports 24h-27h, 0D00h/0D01h and CMOS are not representable;
+ *  - every write is either a standard VGA register or a register that
+ *    wd90c24fb already writes (whitelist in wd24_guard());
+ *  - unlock/relock idioms are exactly the wd90c24fb ones.
+ *
+ * Register knowledge: public WD90C24 data sheet, XFree86 pvga1 driver (via
+ * wd90c24fb), public IBM VGA mode values, and live reads of the 755C.  No
+ * vendor code is copied or disassembled here.
  */
 #ifndef WD24ADV_CORE_H
 #define WD24ADV_CORE_H
@@ -27,151 +36,195 @@
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
+typedef uint64_t u64;
 #endif
 
 /* ---- register files ---------------------------------------------------- */
 enum wd24_rf {
-	WD24_SR,	/* 3C4/3C5 sequencer (PR20-PR23 at 06-09, PR30A.. at 10..) */
-	WD24_GR,	/* 3CE/3CF graphics (PR0A-PR5 at 09-0F) */
-	WD24_CR,	/* 3D4/3D5 CRTC (PR10-PR1B at 29-34, PR36 at 3B) */
-	WD24_AR,	/* 3C0 attribute */
-	WD24_MISC,	/* 3C2 write / 3CC read */
+	WD24_SR,	/* 3C4/3C5 sequencer */
+	WD24_GR,	/* 3CE/3CF graphics */
+	WD24_CR,	/* 3D4/3D5 CRTC (colour: 3CC b0 = 1 on the 755C) */
+	WD24_AR,	/* 3C0 attribute (idx 20h = palette address source) */
+	WD24_MISC,	/* 3C2 write / 3CC read, idx 0 */
 	WD24_NRF
 };
 
-#define WD24_NIDX	0x40	/* indices tracked per file (shadow copy) */
+#define WD24_NIDX	0x40	/* indices tracked per file (model copy) */
 
-/* CRTC / sequencer / GR indices named after the WD "PR" numbers */
-#define WD24_GR_PR0A	0x09
-#define WD24_GR_PR1	0x0b	/* memory size / map: aperture bits b5:4 */
-#define WD24_GR_PR4	0x0e	/* b5: tri-state panel interface */
-#define WD24_GR_PR5	0x0f	/* write 05h to unlock PR0-PR4 */
-#define WD24_CR_PR10	0x29	/* write 85h to unlock PR11-PR17 */
-#define WD24_CR_PR18	0x31	/* flat panel status (routing) */
-#define WD24_CR_PR19	0x32	/* flat panel control: b5:4 route, b3:2 scale */
-#define WD24_CR_PR1A	0x33	/* flat panel control II */
-#define WD24_CR_PR1B	0x34	/* unlock: A0h = FP regs, xxxxx110b = shadows */
-#define WD24_CR_PR36	0x3b	/* panel interface / timing */
-#define WD24_SR_PR20	0x06	/* unlock: (old & EFh) | 48h */
-#define WD24_SR_PR57	0x19	/* b2: PNLOFF (panel power) */
-#define WD24_SR_PR64	0x27	/* stretch control (values from Stage 0) */
-#define WD24_SR_PR68	0x31	/* clock (VCLK/MCLK) - needs SR35=50h */
+/* Paradise registers by data-sheet name (same numbers as wd90c24_hw.h) */
+#define WD24_GR_PR0A	0x09	/* bank A */
+#define WD24_GR_PR0B	0x0a	/* bank B */
+#define WD24_GR_PR1	0x0b	/* memory size / map: b5:4 aperture (never) */
+#define WD24_GR_PR2	0x0c	/* video select (not written on a C24) */
+#define WD24_GR_PR3	0x0d	/* CRTC control */
+#define WD24_GR_PR4	0x0e	/* video control; b5 = panel pins tri-state */
+#define WD24_GR_PR5	0x0f	/* 05h unlocks PR0-PR4 */
+#define WD24_CR_PR10	0x29	/* 85h unlocks PR11-PR17 */
+#define WD24_CR_PR11	0x2a
+#define WD24_CR_PR12	0x2b
+#define WD24_CR_PR13	0x2c
+#define WD24_CR_PR14	0x2d
+#define WD24_CR_PR15	0x2e
+#define WD24_CR_PR16	0x2f
+#define WD24_CR_PR18	0x31	/* flat panel status   (read only here) */
+#define WD24_CR_PR19	0x32	/* flat panel control  (read only here) */
+#define WD24_CR_PR1A	0x33
+#define WD24_CR_PR1B	0x34	/* write-only lock: (L&0F)|A0 opens PR18.. */
+#define WD24_CR_PR36	0x3b
+#define WD24_SR_PR20	0x06	/* (S & EFh) | 48h unlocks SR07+ */
+#define WD24_SR_PR30A	0x10
+#define WD24_SR_PR31	0x11
+#define WD24_SR_PR32	0x12
+#define WD24_SR_PR57	0x19	/* b2: panel power (never written) */
+#define WD24_SR_PR68	0x31	/* clock select, behind SR35 = 50h */
 #define WD24_SR_PR69	0x32
-#define WD24_SR_PR68UL	0x35
+#define WD24_SR_PR72	0x35	/* 50h opens PR68/PR69 */
 
-#define WD24_PR19_ROUTE		0x30	/* b5:4: 00 off, 01 panel, 10 CRT, 11 both */
-#define WD24_PR19_PANEL		0x10
+#define WD24_PR19_LCD		0x10
 #define WD24_PR19_CRT		0x20
-#define WD24_PR19_SCALE		0x0c	/* b3:2: centre/expand (Stage 0 to confirm) */
-#define WD24_PR57_PNLON		0x04
+#define WD24_PR19_SCALE		0x0c	/* b2 centre/expand enable, b3 1 = expand */
+#define WD24_PR19_SC_ON		0x04
+#define WD24_PR19_SC_EXPAND	0x08
 #define WD24_PR4_TRISTATE	0x20
-#define WD24_PR1B_FP_UNLOCK	0xa0
-#define WD24_PR1B_SHADOW	0xa6	/* xxxxx110b: write the panel shadow CRTC */
+#define WD24_PR1B_FP		0xa0
+#define WD24_PR1_APERTURE	0x30
 
-/* ---- output routing ---------------------------------------------------- */
-enum wd24_route {
-	WD24_ROUTE_PANEL = 1,
-	WD24_ROUTE_CRT = 2,
-	WD24_ROUTE_BOTH = 3,
-};
+/* The only panel state wd24adv accepts: live-verified on the 755C
+ * (wd90c24fb load message and wd24probe3, 2026-11-02). */
+#define WD24_LIVE_PR18		0xc7	/* single TFT, LCD-only route */
+#define WD24_LIVE_PR19		0x54	/* LCD on, CRT off, centring on */
 
-/* ---- event log (what was, or in dry-run would have been, done) --------- */
+/* ---- event log (what, in dry-run, would have been done) --------------- */
 enum wd24_ev {
 	WD24_EV_WRITE,		/* rf, idx, old, val */
-	WD24_EV_DELAY,		/* ms in val32 */
 	WD24_EV_REFUSED,	/* guard refused rf/idx/val; err */
 	WD24_EV_NOTE,		/* static text */
 };
 
 struct wd24_event {
 	u8 type, rf, idx, old, val;
+	bool old_known;
 	int err;
-	u32 ms;
-	const char *note;
+	const char *note;	/* NOTE text, or the source tag of a write */
 };
 
-#define WD24_MAXEV	256
+#define WD24_MAXEV	320
 
-/* ---- context ----------------------------------------------------------- */
 struct wd24_ctx;
 
-/* Backend: dry-run (record only) or, from Stage 2 on, real ports. */
+/* Backend: only the dry-run recorder exists in this build. */
 struct wd24_backend {
 	const char *name;
 	int (*write)(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 val);
-	void (*delay)(struct wd24_ctx *c, unsigned int ms);
+	u8 (*read)(struct wd24_ctx *c, enum wd24_rf rf, u8 idx);
 };
 
-enum wd24_panel_state { WD24_PANEL_UNKNOWN, WD24_PANEL_ON, WD24_PANEL_OFF };
+/* Saved extended state: the same fields wd90c24fb's wd_ext_state has. */
+struct wd24_ext {
+	u8 misc, cr11;
+	u8 pr0a, pr0b, pr1, pr3, pr4, pr5;
+	u8 pr10, pr11, pr13, pr14, pr15, pr16;
+	u8 pr20, pr30a, pr31, pr32;
+	u8 pr68, pr69, pr72;
+};
 
 struct wd24_ctx {
 	const struct wd24_backend *be;
-	/* permissions from module parameters; all default to false */
-	bool allow_routing;	/* PR18/PR19 b7:4/PR1A/PR36/shadow CRTC */
-	bool allow_crt;		/* CRT-only modes (panel powered down) */
-	bool allow_clock;	/* PR68/PR69 (Stage 6/7) */
+	bool allow_clock;	/* PR68/PR69 data writes (no mode uses them) */
 	/* state */
-	enum wd24_panel_state panel;
-	bool in_panel_seq;	/* set only by wd24_panel_on/off */
-	bool shadow_open;	/* CR34 currently selects the shadow CRTC */
-	u8 reg[WD24_NRF][WD24_NIDX];	/* last known value of each register */
+	bool saved;		/* wd24_load() ran: bios is valid */
+	struct wd24_ext bios;	/* BIOS state saved at load */
+	bool pr1b_armed;	/* CR34 lock value just read: idiom may start */
+	bool pr1b_open;		/* inside the CR34 read idiom */
+	u8 pr1b_lock;		/* CR34 value read at the start of the idiom */
+	bool pr72_open;		/* SR35 = 50h written, not yet restored */
+	u8 reg[WD24_NRF][WD24_NIDX];	/* model: last known value */
+	u64 known[WD24_NRF];		/* bit i: reg[rf][i] is known */
+	const char *tag;	/* source tag attached to the next writes */
 	/* log */
 	struct wd24_event ev[WD24_MAXEV];
-	unsigned int nev;
-	unsigned int dropped;
+	unsigned int nev, nwrites, nrefused, dropped;
+};
+
+/* ---- standard VGA register set (same layout as wd90c24fb's wd_std) ----- */
+struct wd24_std {
+	u8 misc;
+	u8 seq[5];
+	u8 crtc[25];
+	u8 gfx[9];
+	u8 attr[21];
 };
 
 /* ---- mode table -------------------------------------------------------- */
-#define WD24M_PANEL_OK		0x0001	/* may be shown on the 640x480 TFT */
-#define WD24M_CRT_ONLY		0x0002	/* panel must be powered down */
-#define WD24M_PLANAR		0x0004	/* unchained 4-plane (Mode X/Y) */
-#define WD24M_DIRECT		0x0008	/* fits the 64 KiB window: direct mmap */
-#define WD24M_BANKED		0x0010	/* needs PR0A banking / RAM shadow */
-#define WD24M_DOUBLESCAN	0x0020
-#define WD24M_TEXT		0x0040
-#define WD24M_STAGE0		0x8000	/* register values pending the Stage 0 trace */
-
-struct wd24_reg {
-	u8 rf, idx, val;
+enum wd24_status { WD24_PROVEN = 1, WD24_UNPROVEN = 2 };
+enum wd24_extsel {
+	WD24_EXT_NONE,		/* UNPROVEN: no sequence */
+	WD24_EXT_PACKED8,	/* wd90c24fb 640x480x8 extended values */
+	WD24_EXT_BIOS,		/* the BIOS state saved at load (text restore) */
 };
+
+#define WD24M_DIRECT		0x0008	/* fits the 64 KiB window: direct mmap */
+#define WD24M_BANKED		0x0010	/* PR0A banking */
+#define WD24M_DOUBLESCAN	0x0020
+#define WD24M_PLANAR		0x0040	/* unchained 4-plane */
+#define WD24M_CENTRED		0x0080	/* < 480 lines: panel centres (PR19 b3:2=01) */
 
 struct wd24_mode {
 	const char *name;
 	u16 xres, yres;		/* visible */
-	u16 vxres, vyres;	/* virtual (panning / flipping) */
+	u16 vxres, vyres;	/* virtual */
 	u8 bpp;
 	u8 bios_mode;		/* INT 10h mode it corresponds to, 0 = none */
-	u8 stage;		/* staged-plan stage that enables it */
-	u8 pr19_scale;		/* PR19 b3:2 value for the panel (masked) */
-	u32 pixclock_khz;	/* dot clock; 0 = keep the BIOS value */
+	u8 status;		/* enum wd24_status */
+	u8 ext;			/* enum wd24_extsel */
 	u32 frame_bytes;
 	u32 flags;
-	const struct wd24_reg *regs;	/* std then ext, in write order */
-	unsigned int nregs;
+	const struct wd24_std *std;	/* NULL when UNPROVEN */
+	const char *evidence;	/* one line: why PROVEN / why not */
 };
 
 extern const struct wd24_mode wd24_modes[];
 extern const unsigned int wd24_nmodes;
 
 const struct wd24_mode *wd24_mode_find(const char *name);
-/* returns 0, or -EINVAL with *why set to a static explanation */
 int wd24_mode_check(const struct wd24_mode *m, const char **why);
 int wd24_modes_validate(const char **bad_name, const char **why);
 
+/* ---- model of the boot (BIOS text) state, for the dry-run backend ----- */
+enum wd24_src { WD24_SRC_LIVE = 'L', WD24_SRC_POST = 'P', WD24_SRC_STD = 'S' };
+struct wd24_model_reg {
+	u8 rf, idx, val, src;
+};
+extern const struct wd24_model_reg wd24_boot_model[];
+extern const unsigned int wd24_boot_model_n;
+void wd24_model_boot(struct wd24_ctx *c);
+
 /* ---- core API ---------------------------------------------------------- */
 void wd24_ctx_init(struct wd24_ctx *c, const struct wd24_backend *be);
-int wd24_guard(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 old, u8 val);
+int wd24_guard(const struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 old, u8 val);
 int wd24_write(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 val);
-int wd24_update(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 mask, u8 val);
+u8 wd24_read(struct wd24_ctx *c, enum wd24_rf rf, u8 idx);
+int wd24_modify(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 mask, u8 val);
 void wd24_note(struct wd24_ctx *c, const char *text);
 
+int wd24_read_panel(struct wd24_ctx *c, u8 *pr18, u8 *pr19);
+int wd24_check_panel(struct wd24_ctx *c);
 int wd24_unlock(struct wd24_ctx *c);
-int wd24_panel_off(struct wd24_ctx *c);
-int wd24_panel_on(struct wd24_ctx *c);
-int wd24_set_route(struct wd24_ctx *c, enum wd24_route r,
-		   const struct wd24_reg *shadow, unsigned int nshadow);
-int wd24_plan_mode(struct wd24_ctx *c, const struct wd24_mode *m,
-		   enum wd24_route r);
+int wd24_save_ext(struct wd24_ctx *c, struct wd24_ext *s);
+int wd24_restore_ext(struct wd24_ctx *c, const struct wd24_ext *s);
+int wd24_relock(struct wd24_ctx *c, const struct wd24_ext *s);
+int wd24_screen_on(struct wd24_ctx *c, bool on);
+int wd24_write_std(struct wd24_ctx *c, const struct wd24_std *std);
+void wd24_mode_ext(const struct wd24_mode *m, const struct wd24_ext *bios,
+		   struct wd24_ext *ext);
+
+int wd24_plan_load(struct wd24_ctx *c);
+int wd24_plan_mode(struct wd24_ctx *c, const struct wd24_mode *m);
+int wd24_plan_text(struct wd24_ctx *c);
+
+/* shared self-test (kernel /proc/wd24adv/selftest and host test) */
+typedef void (*wd24_report_fn)(void *arg, bool ok, const char *what);
+int wd24_selftest(struct wd24_ctx *t, wd24_report_fn report, void *arg);
 
 extern const struct wd24_backend wd24_dryrun_backend;
 
