@@ -1,0 +1,706 @@
+root@box:~# uname -r; cat /proc/modules | cut -d" " -f1 | tr "\n" " "; echo; wc 
+-l </proc/fb; pidof Xfbdev; ls -la /tmp/*.ko; sha256sum /tmp/wd24probe3.ko
+6.18.57-tc755x
+wd90c24fb evdev mousedev psmouse syscopyarea sysfillrect vgastate sysimgblt fb_sys_fops fb font serial_cs pata_pcmcia pcmcia firmware_class i82365 pcmcia_rsrc pcmcia_core 
+1
+530
+-rw-r--r--    1 root     root         65804 Nov  4 16:39 /tmp/wd24adv.ko
+-rw-r--r--    1 root     root          8188 Nov  4 16:39 /tmp/wd24probe3.ko
+eb0a36e23f7b0a512ba8c154530f8223d7dbe4840eb693b03e8d0222861f304d  /tmp/wd24probe3.ko
+root@box:~# sha256sum /tmp/wd24adv.ko /tmp/wd24probe3.ko; pidof Xfbdev; ps | gre
+p -E "startx|Xfbdev|jwm|rxvt"
+f55ee02fbcd3d513006ee92b1996d13e07c507567678d201d87a98d36c6fa89c  /tmp/wd24adv.ko
+eb0a36e23f7b0a512ba8c154530f8223d7dbe4840eb693b03e8d0222861f304d  /tmp/wd24probe3.ko
+530
+  520 root       580 S    {startx} /bin/sh /usr/local/bin/startx
+  530 root      1664 S    Xfbdev :0 -mouse /dev/input/mice -2button
+  532 root      2128 S    jwm
+  533 root      1924 S    rxvt -fn fixed -geometry 80x24+8+8
+  567 root       580 R    grep -E startx|Xfbdev|jwm|rxvt
+root@box:~# kill 530
+root@box:~# apm: set display: Unrecognized device ID
+echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c
+24fb
+wd90c24fb: text=1: back to text mode (now rmmod wd90c24fb can unload)
+Console: switching to colour VGA+ 80x25
+root@box:~# S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|
+vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null
+; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = f55ee02f001 ] && { dmesg -c >/dev/null; in
+smod /tmp/wd24adv.ko dryrun=0 s2=1; echo RC=$?; }
+G=f55ee02f001
+wd24adv: S2: OK; entry check 0 (index writes 14, data 0); 23C0h writes 110, 23C2h writes 34, reads 257
+wd24adv: S2: 23C0h restore read back 1002; details: /proc/wd24adv/s2
+wd24adv: loaded, S2 done, all restored inside insmod (no port region held); see /proc/wd24adv/s2
+RC=0
+root@box:~# cat /proc/wd24adv/s2 > /tmp/s2run1.txt; grep -E "S2 result|snapshot|
+restore:|writes|stopped" /tmp/s2run1.txt; dmesg | grep wd24adv
+wd24adv S2 result: OK
+entry check: passed (0); VGA index writes 14, data writes 0
+snapshot (25): 0108 1000 210b 3004 410b 5004 61e4 713c 8280 9300 a000 b0a5 c000 d000 e0ff f0ff 0000 1000 2014 3001 4000 5041 6140 70f0 8000
+snapshot 2 (25): 0108 1000 210b 3004 410b 5004 61e4 713c 8280 9300 a000 b0a5 c000 d000 e0ff f0ff 0000 1000 2014 3001 4000 5041 6140 70f0 8000
+restore: wrote 1002, read 1002 (equal)
+23C0h writes 110, 23C2h writes 34, 23C4h 0, guard refusals 0, reads 257
+<6>wd24adv: S2: OK; entry check 0 (index writes 14, data 0); 23C0h writes 110, 23C2h writes 34, reads 257
+<6>wd24adv: S2: 23C0h restore read back 1002; details: /proc/wd24adv/s2
+<6>wd24adv: loaded, S2 done, all restored inside insmod (no port region held); see /proc/wd24adv/s2
+root@box:~# grep -vE "^ +[WR]16 " /tmp/s2run1.txt
+wd24adv S2 result: OK
+entry check: passed (0); VGA index writes 14, data writes 0
+  # entry check passed (reads only)
+snapshot (25): 0108 1000 210b 3004 410b 5004 61e4 713c 8280 9300 a000 b0a5 c000 d000 e0ff f0ff 0000 1000 2014 3001 4000 5041 6140 70f0 8000
+snapshot 2 (25): 0108 1000 210b 3004 410b 5004 61e4 713c 8280 9300 a000 b0a5 c000 d000 e0ff f0ff 0000 1000 2014 3001 4000 5041 6140 70f0 8000
+  SRC_LO        step 4 test rb 2000 snap rb 210b safety 0108
+  SRC_HI        step 4 test rb 304c snap rb 3004 safety 0108
+  DST_LO        step 4 test rb 4000 snap rb 410b safety 0108
+  DST_HI        step 4 test rb 504c snap rb 5004 safety 0108
+  DIM_X         step 4 test rb 6008 snap rb 61e4 safety 0108
+  DIM_Y         step 4 test rb 7008 snap rb 713c safety 0108
+  PITCH         step 4 test rb 8280 snap rb 8280 safety 0108
+  ROP           step 4 test rb 9600 snap rb 9300 safety 0108
+  FG            step 4 test rb a05a snap rb a000 safety 0108
+  BG            step 4 test rb b05a snap rb b0a5 safety 0108
+  MASK          step 4 test rb e0ff snap rb e0ff safety 0108
+  CNTRL2        step 4 test rb 1008 snap rb 1000 safety 0108
+  CUR_PRIMARY   step 4 test rb 305a snap rb 3001 safety 0000
+  CUR_SECONDARY step 4 test rb 40a5 snap rb 4000 safety 0000
+  CUR_ORIGIN    step 4 test rb 5000 snap rb 5041 safety 0000
+  CUR_POS_X     step 4 test rb 6010 snap rb 6140 safety 0000
+  CUR_POS_Y     step 4 test rb 7010 snap rb 70f0 safety 0000
+post-pass (25): 0108 1000 210b 3004 410b 5004 61e4 713c 8280 9300 a000 b0a5 c000 d000 e0ff f0ff 0000 1000 2014 3001 4000 5041 6140 70f0 8000
+restore: wrote 1002, read 1002 (equal)
+23C0h writes 110, 23C2h writes 34, 23C4h 0, guard refusals 0, reads 257
+access log (in order):
+  R8 03c0 0020
+  R8 03c1 003f
+root@box:~# rmmod wd24adv; echo RM=$?
+RM=0
+root@box:~# insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; ech
+o RC=$?
+wd90c24fb: found WD90C24 (CR36/37 "24"), 1024 KiB video memory
+wd90c24fb: panel: PR18=0xc7 PR19=0x54: LCD on, CRT off
+wd90c24fb: extended register blocks (BITBLT, cursor) present: WD90C24A/A2
+Console: switching to colour frame buffer device 80x30
+wd90c24fb: BITBLT self-test passed: acceleration on
+wd90c24fb: colour expansion: var 0 works but is not faster (1.0x), off
+wd90c24fb: fb0: WD90C24, 640x480x8 via PR0(A) banking, 300 KiB shadow, BITBLT
+RC=0
+root@box:~# ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;
+ HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautost
+art.log 2>&1 & )
+root@box:~# pidof Xfbdev; wc -l </proc/fb
+597
+1
+root@box:~# dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | 
+grep wd24probe3 | grep -v " tr " | sort -u
+wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
+wd24probe3: GR0F=05 GR0E=01 SR06=0f CR11=8c CR29=85
+wd24probe3: CR34 L=a0 again=a0 wrote=a0 rb=a0 restored-rb=a0
+wd24probe3: PR18(CR31)=c7 PR19(CR32)=54 PR1A(CR33)=00 PR36(CR3B)=ef PR37(CR3C)=9a PR39(CR3E)=20
+wd24probe3: 3C4test pre=11 SR06again=00 wrote=00 rb=00 post=00 restored-rb=00 after=11
+wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
+wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
+wd24probe3: tr   0 in  3cc e3
+wd24probe3: tr   1 in  3d4 11
+wd24probe3: tr   2 in  3ce 09
+wd24probe3: tr   3 in  3c4 01
+wd24probe3: tr   4 out 3ce 0f
+wd24probe3: tr   5 in  3cf 05
+wd24probe3: tr   6 out 3ce 0e
+wd24probe3: tr   7 in  3cf 01
+wd24probe3: tr   8 out 3c4 06
+wd24probe3: tr   9 in  3c5 0f
+wd24probe3: tr  10 out 3d4 11
+wd24probe3: tr  11 in  3d5 8c
+wd24probe3: tr  12 out 3d4 29
+wd24probe3: tr  13 in  3d5 85
+wd24probe3: tr  14 out 3d4 34
+wd24probe3: tr  15 in  3d5 a0
+wd24probe3: tr  16 out 3d4 34
+wd24probe3: tr  17 in  3d5 a0
+wd24probe3: tr  18 out 3d4 34
+wd24probe3: tr  19 out 3d5 a0
+wd24probe3: tr  20 out 3d4 34
+wd24probe3: tr  21 in  3d5 a0
+wd24probe3: tr  22 out 3d4 31
+wd24probe3: tr  23 in  3d5 c7
+wd24probe3: tr  24 out 3d4 32
+wd24probe3: tr  25 in  3d5 54
+wd24probe3: tr  26 out 3d4 33
+wd24probe3: tr  27 in  3d5 00
+wd24probe3: tr  28 out 3d4 3b
+wd24probe3: tr  29 in  3d5 ef
+wd24probe3: tr  30 out 3d4 3c
+wd24probe3: tr  31 in  3d5 9a
+wd24probe3: tr  32 out 3d4 3e
+wd24probe3: tr  33 in  3d5 20
+wd24probe3: tr  34 out 3d4 34
+wd24probe3: tr  35 out 3d5 a0
+wd24probe3: tr  36 out 3d4 34
+wd24probe3: tr  37 in  3d5 a0
+wd24probe3: tr  38 out 3c4 11
+wd24probe3: tr  39 in  3c4 11
+wd24probe3: tr  40 out 3c4 11
+wd24probe3: tr  41 in  3c5 5d
+wd24probe3: tr  42 out 3c4 19
+wd24probe3: tr  43 in  3c5 35
+wd24probe3: tr  44 out 3c4 21
+wd24probe3: tr  45 in  3c5 15
+wd24probe3: tr  46 out 3c4 35
+wd24probe3: tr  47 in  3c5 00
+wd24probe3: tr  48 out 3c4 35
+wd24probe3: tr  49 out 3c5 50
+wd24probe3: tr  50 out 3c4 35
+wd24probe3: tr  51 in  3c5 50
+wd24probe3: tr  52 out 3c4 31
+wd24probe3: tr  53 in  3c5 0d
+wd24probe3: tr  54 out 3c4 35
+wd24probe3: tr  55 out 3c5 00
+wd24probe3: tr  56 out 3c4 35
+wd24probe3: tr  57 in  3c5 00
+wd24probe3: tr  58 out 3c4 11
+wd24probe3: tr  59 in  3c4 11
+wd24probe3: tr  60 out 3ce 0f
+wd24probe3: tr  61 in  3cf 05
+wd24probe3: tr  62 out 3ce 0e
+wd24probe3: tr  63 in  3cf 01
+wd24probe3: tr  64 out 3c4 06
+wd24probe3: tr  65 in  3c5 0f
+wd24probe3: tr  66 out 3d4 11
+wd24probe3: tr  67 in  3d5 8c
+wd24probe3: tr  68 out 3d4 29
+wd24probe3: tr  69 in  3d5 85
+wd24probe3: tr  70 out 3d4 34
+wd24probe3: tr  71 in  3d5 a0
+wd24probe3: tr  72 out 3c4 01
+wd24probe3: tr  73 in  3c4 01
+wd24probe3: tr  74 out 3ce 09
+wd24probe3: tr  75 in  3ce 09
+wd24probe3: tr  76 out 3d4 11
+wd24probe3: tr  77 in  3d4 11
+wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
+wd24probe3: GR0F=05 GR0E=01 SR06=0f CR11=8c CR29=85
+wd24probe3: CR34 L=a0 again=a0 wrote=a0 rb=a0 restored-rb=a0
+wd24probe3: PR18(CR31)=c7 PR19(CR32)=54 PR1A(CR33)=00 PR36(CR3B)=ef PR37(CR3C)=9a PR39(CR3E)=20
+wd24probe3: 3C4test pre=11 SR06again=00 wrote=00 rb=00 post=00 restored-rb=00 after=11
+wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
+wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
+wd24probe3: tr   0 in  3cc e3
+wd24probe3: tr   1 in  3d4 11
+wd24probe3: tr   2 in  3ce 09
+wd24probe3: tr   3 in  3c4 01
+wd24probe3: tr   4 out 3ce 0f
+wd24probe3: tr   5 in  3cf 05
+wd24probe3: tr   6 out 3ce 0e
+wd24probe3: tr   7 in  3cf 01
+wd24probe3: tr   8 out 3c4 06
+wd24probe3: tr   9 in  3c5 0f
+wd24probe3: tr  10 out 3d4 11
+wd24probe3: tr  11 in  3d5 8c
+wd24probe3: tr  12 out 3d4 29
+wd24probe3: tr  13 in  3d5 85
+wd24probe3: tr  14 out 3d4 34
+wd24probe3: tr  15 in  3d5 a0
+wd24probe3: tr  16 out 3d4 34
+wd24probe3: tr  17 in  3d5 a0
+wd24probe3: tr  18 out 3d4 34
+wd24probe3: tr  19 out 3d5 a0
+wd24probe3: tr  20 out 3d4 34
+wd24probe3: tr  21 in  3d5 a0
+wd24probe3: tr  22 out 3d4 31
+wd24probe3: tr  23 in  3d5 c7
+wd24probe3: tr  24 out 3d4 32
+wd24probe3: tr  25 in  3d5 54
+wd24probe3: tr  26 out 3d4 33
+wd24probe3: tr  27 in  3d5 00
+wd24probe3: tr  28 out 3d4 3b
+wd24probe3: tr  29 in  3d5 ef
+wd24probe3: tr  30 out 3d4 3c
+wd24probe3: tr  31 in  3d5 9a
+wd24probe3: tr  32 out 3d4 3e
+wd24probe3: tr  33 in  3d5 20
+wd24probe3: tr  34 out 3d4 34
+wd24probe3: tr  35 out 3d5 a0
+wd24probe3: tr  36 out 3d4 34
+wd24probe3: tr  37 in  3d5 a0
+wd24probe3: tr  38 out 3c4 11
+wd24probe3: tr  39 in  3c4 11
+wd24probe3: tr  40 out 3c4 11
+wd24probe3: tr  41 in  3c5 5d
+wd24probe3: tr  42 out 3c4 19
+wd24probe3: tr  43 in  3c5 35
+wd24probe3: tr  44 out 3c4 21
+wd24probe3: tr  45 in  3c5 15
+wd24probe3: tr  46 out 3c4 35
+wd24probe3: tr  47 in  3c5 00
+wd24probe3: tr  48 out 3c4 35
+wd24probe3: tr  49 out 3c5 50
+wd24probe3: tr  50 out 3c4 35
+wd24probe3: tr  51 in  3c5 50
+wd24probe3: tr  52 out 3c4 31
+wd24probe3: tr  53 in  3c5 0d
+wd24probe3: tr  54 out 3c4 35
+wd24probe3: tr  55 out 3c5 00
+wd24probe3: tr  56 out 3c4 35
+wd24probe3: tr  57 in  3c5 00
+wd24probe3: tr  58 out 3c4 11
+wd24probe3: tr  59 in  3c4 11
+wd24probe3: tr  60 out 3ce 0f
+wd24probe3: tr  61 in  3cf 05
+wd24probe3: tr  62 out 3ce 0e
+wd24probe3: tr  63 in  3cf 01
+wd24probe3: tr  64 out 3c4 06
+wd24probe3: tr  65 in  3c5 0f
+wd24probe3: tr  66 out 3d4 11
+wd24probe3: tr  67 in  3d5 8c
+wd24probe3: tr  68 out 3d4 29
+wd24probe3: tr  69 in  3d5 85
+wd24probe3: tr  70 out 3d4 34
+wd24probe3: tr  71 in  3d5 a0
+wd24probe3: tr  72 out 3c4 01
+wd24probe3: tr  73 in  3c4 01
+wd24probe3: tr  74 out 3ce 09
+wd24probe3: tr  75 in  3ce 09
+wd24probe3: tr  76 out 3d4 11
+wd24probe3: tr  77 in  3d4 11
+insmod: can't insert '/tmp/wd24probe3.ko': No such device
+RC=19
+<6>wd24probe3: 3C4test pre=11 SR06again=00 wrote=00 rb=00 post=00 restored-rb=00 after=11
+<6>wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
+<6>wd24probe3: CR34 L=a0 again=a0 wrote=a0 rb=a0 restored-rb=a0
+<6>wd24probe3: GR0F=05 GR0E=01 SR06=0f CR11=8c CR29=85
+<6>wd24probe3: PR18(CR31)=c7 PR19(CR32)=54 PR1A(CR33)=00 PR36(CR3B)=ef PR37(CR3C)=9a PR39(CR3E)=20
+<6>wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
+<6>wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
+<6>wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+root@box:~# cat /tmp/s2run1.txt; wc -l /tmp/s2run1.txt
+wd24adv S2 result: OK
+entry check: passed (0); VGA index writes 14, data writes 0
+  # entry check passed (reads only)
+snapshot (25): 0108 1000 210b 3004 410b 5004 61e4 713c 8280 9300 a000 b0a5 c000 d000 e0ff f0ff 0000 1000 2014 3001 4000 5041 6140 70f0 8000
+snapshot 2 (25): 0108 1000 210b 3004 410b 5004 61e4 713c 8280 9300 a000 b0a5 c000 d000 e0ff f0ff 0000 1000 2014 3001 4000 5041 6140 70f0 8000
+  SRC_LO        step 4 test rb 2000 snap rb 210b safety 0108
+  SRC_HI        step 4 test rb 304c snap rb 3004 safety 0108
+  DST_LO        step 4 test rb 4000 snap rb 410b safety 0108
+  DST_HI        step 4 test rb 504c snap rb 5004 safety 0108
+  DIM_X         step 4 test rb 6008 snap rb 61e4 safety 0108
+  DIM_Y         step 4 test rb 7008 snap rb 713c safety 0108
+  PITCH         step 4 test rb 8280 snap rb 8280 safety 0108
+  ROP           step 4 test rb 9600 snap rb 9300 safety 0108
+  FG            step 4 test rb a05a snap rb a000 safety 0108
+  BG            step 4 test rb b05a snap rb b0a5 safety 0108
+  MASK          step 4 test rb e0ff snap rb e0ff safety 0108
+  CNTRL2        step 4 test rb 1008 snap rb 1000 safety 0108
+  CUR_PRIMARY   step 4 test rb 305a snap rb 3001 safety 0000
+  CUR_SECONDARY step 4 test rb 40a5 snap rb 4000 safety 0000
+  CUR_ORIGIN    step 4 test rb 5000 snap rb 5041 safety 0000
+  CUR_POS_X     step 4 test rb 6010 snap rb 6140 safety 0000
+  CUR_POS_Y     step 4 test rb 7010 snap rb 70f0 safety 0000
+post-pass (25): 0108 1000 210b 3004 410b 5004 61e4 713c 8280 9300 a000 b0a5 c000 d000 e0ff f0ff 0000 1000 2014 3001 4000 5041 6140 70f0 8000
+restore: wrote 1002, read 1002 (equal)
+23C0h writes 110, 23C2h writes 34, 23C4h 0, guard refusals 0, reads 257
+access log (in order):
+  R16 23c0 1002
+  R16 23c0 1002
+  R8 03c0 0020
+  R8 03c1 003f
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1101
+  R16 23c0 1101
+  R16 23c2 1000
+  W16 23c0 1201
+  R16 23c0 1201
+  R16 23c2 210b
+  W16 23c0 1301
+  R16 23c0 1301
+  R16 23c2 3004
+  W16 23c0 1401
+  R16 23c0 1401
+  R16 23c2 410b
+  W16 23c0 1501
+  R16 23c0 1501
+  R16 23c2 5004
+  W16 23c0 1601
+  R16 23c0 1601
+  R16 23c2 61e4
+  W16 23c0 1701
+  R16 23c0 1701
+  R16 23c2 713c
+  W16 23c0 1801
+  R16 23c0 1801
+  R16 23c2 8280
+  W16 23c0 1901
+  R16 23c0 1901
+  R16 23c2 9300
+  W16 23c0 1a01
+  R16 23c0 1a01
+  R16 23c2 a000
+  W16 23c0 1b01
+  R16 23c0 1b01
+  R16 23c2 b0a5
+  W16 23c0 1c01
+  R16 23c0 1c01
+  R16 23c2 c000
+  W16 23c0 1d01
+  R16 23c0 1d01
+  R16 23c2 d000
+  W16 23c0 1e01
+  R16 23c0 1e01
+  R16 23c2 e0ff
+  W16 23c0 1f01
+  R16 23c0 1f01
+  R16 23c2 f0ff
+  W16 23c0 1002
+  R16 23c0 1002
+  R16 23c2 0000
+  W16 23c0 1102
+  R16 23c0 1102
+  R16 23c2 1000
+  W16 23c0 1202
+  R16 23c0 1202
+  R16 23c2 2014
+  W16 23c0 1302
+  R16 23c0 1302
+  R16 23c2 3001
+  W16 23c0 1402
+  R16 23c0 1402
+  R16 23c2 4000
+  W16 23c0 1502
+  R16 23c0 1502
+  R16 23c2 5041
+  W16 23c0 1602
+  R16 23c0 1602
+  R16 23c2 6140
+  W16 23c0 1702
+  R16 23c0 1702
+  R16 23c2 70f0
+  W16 23c0 1802
+  R16 23c0 1802
+  R16 23c2 8000
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1101
+  R16 23c0 1101
+  R16 23c2 1000
+  W16 23c0 1201
+  R16 23c0 1201
+  R16 23c2 210b
+  W16 23c0 1301
+  R16 23c0 1301
+  R16 23c2 3004
+  W16 23c0 1401
+  R16 23c0 1401
+  R16 23c2 410b
+  W16 23c0 1501
+  R16 23c0 1501
+  R16 23c2 5004
+  W16 23c0 1601
+  R16 23c0 1601
+  R16 23c2 61e4
+  W16 23c0 1701
+  R16 23c0 1701
+  R16 23c2 713c
+  W16 23c0 1801
+  R16 23c0 1801
+  R16 23c2 8280
+  W16 23c0 1901
+  R16 23c0 1901
+  R16 23c2 9300
+  W16 23c0 1a01
+  R16 23c0 1a01
+  R16 23c2 a000
+  W16 23c0 1b01
+  R16 23c0 1b01
+  R16 23c2 b0a5
+  W16 23c0 1c01
+  R16 23c0 1c01
+  R16 23c2 c000
+  W16 23c0 1d01
+  R16 23c0 1d01
+  R16 23c2 d000
+  W16 23c0 1e01
+  R16 23c0 1e01
+  R16 23c2 e0ff
+  W16 23c0 1f01
+  R16 23c0 1f01
+  R16 23c2 f0ff
+  W16 23c0 1002
+  R16 23c0 1002
+  R16 23c2 0000
+  W16 23c0 1102
+  R16 23c0 1102
+  R16 23c2 1000
+  W16 23c0 1202
+  R16 23c0 1202
+  R16 23c2 2014
+  W16 23c0 1302
+  R16 23c0 1302
+  R16 23c2 3001
+  W16 23c0 1402
+  R16 23c0 1402
+  R16 23c2 4000
+  W16 23c0 1502
+  R16 23c0 1502
+  R16 23c2 5041
+  W16 23c0 1602
+  R16 23c0 1602
+  R16 23c2 6140
+  W16 23c0 1702
+  R16 23c0 1702
+  R16 23c2 70f0
+  W16 23c0 1802
+  R16 23c0 1802
+  R16 23c2 8000
+  W16 23c0 1201
+  R16 23c0 1201
+  W16 23c2 2000
+  R16 23c0 1201
+  R16 23c2 2000
+  W16 23c2 210b
+  R16 23c2 210b
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1301
+  R16 23c0 1301
+  W16 23c2 304c
+  R16 23c0 1301
+  R16 23c2 304c
+  W16 23c2 3004
+  R16 23c2 3004
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1401
+  R16 23c0 1401
+  W16 23c2 4000
+  R16 23c0 1401
+  R16 23c2 4000
+  W16 23c2 410b
+  R16 23c2 410b
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1501
+  R16 23c0 1501
+  W16 23c2 504c
+  R16 23c0 1501
+  R16 23c2 504c
+  W16 23c2 5004
+  R16 23c2 5004
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1601
+  R16 23c0 1601
+  W16 23c2 6008
+  R16 23c0 1601
+  R16 23c2 6008
+  W16 23c2 61e4
+  R16 23c2 61e4
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1701
+  R16 23c0 1701
+  W16 23c2 7008
+  R16 23c0 1701
+  R16 23c2 7008
+  W16 23c2 713c
+  R16 23c2 713c
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1801
+  R16 23c0 1801
+  W16 23c2 8280
+  R16 23c0 1801
+  R16 23c2 8280
+  W16 23c2 8280
+  R16 23c2 8280
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1901
+  R16 23c0 1901
+  W16 23c2 9600
+  R16 23c0 1901
+  R16 23c2 9600
+  W16 23c2 9300
+  R16 23c2 9300
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1a01
+  R16 23c0 1a01
+  W16 23c2 a05a
+  R16 23c0 1a01
+  R16 23c2 a05a
+  W16 23c2 a000
+  R16 23c2 a000
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1b01
+  R16 23c0 1b01
+  W16 23c2 b05a
+  R16 23c0 1b01
+  R16 23c2 b05a
+  W16 23c2 b0a5
+  R16 23c2 b0a5
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1e01
+  R16 23c0 1e01
+  W16 23c2 e0ff
+  R16 23c0 1e01
+  R16 23c2 e0ff
+  W16 23c2 e0ff
+  R16 23c2 e0ff
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1101
+  R16 23c0 1101
+  W16 23c2 1008
+  R16 23c0 1101
+  R16 23c2 1008
+  W16 23c2 1000
+  R16 23c2 1000
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1302
+  R16 23c0 1302
+  W16 23c2 305a
+  R16 23c0 1302
+  R16 23c2 305a
+  W16 23c2 3001
+  R16 23c2 3001
+  W16 23c0 1002
+  R16 23c0 1002
+  R16 23c2 0000
+  W16 23c0 1402
+  R16 23c0 1402
+  W16 23c2 40a5
+  R16 23c0 1402
+  R16 23c2 40a5
+  W16 23c2 4000
+  R16 23c2 4000
+  W16 23c0 1002
+  R16 23c0 1002
+  R16 23c2 0000
+  W16 23c0 1502
+  R16 23c0 1502
+  W16 23c2 5000
+  R16 23c0 1502
+  R16 23c2 5000
+  W16 23c2 5041
+  R16 23c2 5041
+  W16 23c0 1002
+  R16 23c0 1002
+  R16 23c2 0000
+  W16 23c0 1602
+  R16 23c0 1602
+  W16 23c2 6010
+  R16 23c0 1602
+  R16 23c2 6010
+  W16 23c2 6140
+  R16 23c2 6140
+  W16 23c0 1002
+  R16 23c0 1002
+  R16 23c2 0000
+  W16 23c0 1702
+  R16 23c0 1702
+  W16 23c2 7010
+  R16 23c0 1702
+  R16 23c2 7010
+  W16 23c2 70f0
+  R16 23c2 70f0
+  W16 23c0 1002
+  R16 23c0 1002
+  R16 23c2 0000
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1101
+  R16 23c0 1101
+  R16 23c2 1000
+  W16 23c0 1201
+  R16 23c0 1201
+  R16 23c2 210b
+  W16 23c0 1301
+  R16 23c0 1301
+  R16 23c2 3004
+  W16 23c0 1401
+  R16 23c0 1401
+  R16 23c2 410b
+  W16 23c0 1501
+  R16 23c0 1501
+  R16 23c2 5004
+  W16 23c0 1601
+  R16 23c0 1601
+  R16 23c2 61e4
+  W16 23c0 1701
+  R16 23c0 1701
+  R16 23c2 713c
+  W16 23c0 1801
+  R16 23c0 1801
+  R16 23c2 8280
+  W16 23c0 1901
+  R16 23c0 1901
+  R16 23c2 9300
+  W16 23c0 1a01
+  R16 23c0 1a01
+  R16 23c2 a000
+  W16 23c0 1b01
+  R16 23c0 1b01
+  R16 23c2 b0a5
+  W16 23c0 1c01
+  R16 23c0 1c01
+  R16 23c2 c000
+  W16 23c0 1d01
+  R16 23c0 1d01
+  R16 23c2 d000
+  W16 23c0 1e01
+  R16 23c0 1e01
+  R16 23c2 e0ff
+  W16 23c0 1f01
+  R16 23c0 1f01
+  R16 23c2 f0ff
+  W16 23c0 1002
+  R16 23c0 1002
+  R16 23c2 0000
+  W16 23c0 1102
+  R16 23c0 1102
+  R16 23c2 1000
+  W16 23c0 1202
+  R16 23c0 1202
+  R16 23c2 2014
+  W16 23c0 1302
+  R16 23c0 1302
+  R16 23c2 3001
+  W16 23c0 1402
+  R16 23c0 1402
+  R16 23c2 4000
+  W16 23c0 1502
+  R16 23c0 1502
+  R16 23c2 5041
+  W16 23c0 1602
+  R16 23c0 1602
+  R16 23c2 6140
+  W16 23c0 1702
+  R16 23c0 1702
+  R16 23c2 70f0
+  W16 23c0 1802
+  R16 23c0 1802
+  R16 23c2 8000
+  W16 23c0 1002
+  R16 23c0 1002
+427 /tmp/s2run1.txt
+root@box:~# 

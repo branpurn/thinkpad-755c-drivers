@@ -199,7 +199,7 @@ CNTRL1 start, or panel/PM/routing registers.
 Any result other than OK: stop, save the log, cold boot if the text
 console looks wrong.
 
-## S2: write + readback, start bit never set (snapshot design; prepared, not run)
+## S2: write + readback, start bit never set (snapshot design; run OK 2026-11-04, docs/s2-live-2026-11-04-run2.txt)
 
 Module `wd24adv.ko`, `s2=1 dryrun=0`, tc755x build (vermagic `6.18.57-tc755x
 mod_unload 486`). Same state as S1: text, no fb driver, no X. Runs once
