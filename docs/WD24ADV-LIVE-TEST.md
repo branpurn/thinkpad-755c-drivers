@@ -260,6 +260,21 @@ CNTRL1 and cursor control are re-read after every register.
 | 4 | `cat /proc/wd24adv/s2 > /tmp/s2run1.txt; rmmod wd24adv` | `S2 result: OK`, restore read 1002 |
 | 5 | wd90c24fb back, startx; wd24probe3 baseline | RC=19, same values as before |
 
+Build: commit 45d2f32, tc755x tree, sha256 `ba71dcc718caa8863e7d6c21202b996837864f0f8092a002da1ae8d0c829539c`.
+Exact serial lines (each logged with plog.sh first; no retries):
+
+```
+pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
+kill <the Xfbdev PID printed above>
+echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb
+S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = ba71dcc7001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 s2=1; echo RC=$?; }
+cat /proc/wd24adv/s2 > /tmp/s2run1.txt; grep -E "S2 result|restore:|writes|stopped" /tmp/s2run1.txt; dmesg | grep wd24adv
+rmmod wd24adv; echo RM=$?
+insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?
+( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & )
+dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u
+```
+
 Any result other than OK: stop, save the log, cold boot if the text
 console looks wrong.
 
