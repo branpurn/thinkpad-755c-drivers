@@ -400,7 +400,9 @@ still cheaper than whole-frame copies.
 Note (S3, 2026-11-04): S3 uses 60000h-6FFFFh, wd90c24fb's own BITBLT self-test
 area (proven on every load), not 4C000h: 4 KiB cannot hold 32x32 at pitch
 640, and 60000h is above the frame and the cursor pattern (50000h) and
-outside the 256 KiB text/plane save. See WD24ADV-LIVE-TEST.md "S3".
+outside the 256 KiB text/plane save. See WD24ADV-LIVE-TEST.md "S3". After a timeout, a read-only idle re-check decides: idle gives the normal
+restore; still busy gives a registers-only revert, every video memory path
+refused, the module pinned, and power cycle required.
 
 General rules for all stages:
 

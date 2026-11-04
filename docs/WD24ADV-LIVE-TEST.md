@@ -325,12 +325,24 @@ Never written: block 2, BG, C, D, F, 23C4h; no abort.
 
 Timeout: <= 200000 polls (~0.2 s, as wd90c24fb) for ACT=0. On timeout S3
 stops: no further write of any kind (no abort, no restore, no PR0A, no
-23C0h) and no video memory access; /proc/wd24adv/s3 shows TIMEOUT/DEAD and
-the trial expiry restores the text state as for any trial mode.
+23C0h) and no video memory access; /proc/wd24adv/s3 shows TIMEOUT/DEAD.
+Then, still holding 23C0-23C3, one read-only idle re-check: 23C0h must
+still read 1001h, then <= 200000 reads of 23C2h.
 
-Build: commit 66b17cc (code), tc755x tree (kobj-vm86), vermagic
+- Seen idle (ACT clear): video memory unlocked; the trial expiry and rmmod
+  do the normal full text restore (planes, font, DAC, registers); rmmod OK.
+- Still busy (or 23C0h changed): LOCKED, sticky until power-off. The trial
+  expiry restores registers only (ext, std, DAC, relock, screen on): no plane
+  select, no plane/font/text memory read or write, no memset, nothing on
+  23C2h/23C4h. The text font/content is NOT restored (the screen may show
+  garbage). Every later video memory path is refused with "power cycle
+  required": control text/confirm/mode, mode set, pattern, plane save. The
+  module pins itself: rmmod gives EBUSY, a reload gives EEXIST. Do not load
+  wd90c24fb (its BITBLT self-test would touch the engine): power off.
+
+Build: commit d9c0884 (code), tc755x tree (kobj-vm86), vermagic
 `6.18.57-tc755x mod_unload 486`, sha256
-`f6fd81565c8bf5c7d659a1cb57bf529b00ce29912abad75654bab1f20c1f40b5`.
+`9c77fe90e8b393cdb1e510ffd967e834794ccfd3538e69076370f53e7f7460a1`.
 Same preparation as S2 (no X, wd90c24fb text=1 + rmmod). Exact serial
 lines (each logged with plog.sh first; no retries):
 
@@ -338,8 +350,8 @@ lines (each logged with plog.sh first; no retries):
 pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
 kill <the Xfbdev PID printed above>
 echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb
-S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = f6fd8156001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s3=1; echo RC=$?; }
-sleep 20; cat /proc/wd24adv/s3 > /tmp/s3run1.txt; cat /proc/wd24adv/live > /tmp/s3live1.txt; grep -E "S3 result|op [123]|DEAD|restore:|writes" /tmp/s3run1.txt; dmesg | grep wd24adv
+S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 9c77fe90001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s3=1; echo RC=$?; }
+sleep 20; cat /proc/wd24adv/s3 > /tmp/s3run1.txt; cat /proc/wd24adv/live > /tmp/s3live1.txt; grep -E "S3 result|op [123]|DEAD|idle|restore:|writes" /tmp/s3run1.txt; dmesg | grep wd24adv
 rmmod wd24adv; echo RM=$?
 insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?
 ```
@@ -348,6 +360,52 @@ Expected: RC=0, the test pattern for ~15 s (the screen is not touched by
 S3), `S3 result: OK`, three ops VERIFIED, restore read 1002, text back at
 expiry, RM=0. Any other result: stop, save the files, cold boot if the
 text console looks wrong.
+If the result is TIMEOUT, read the "idle re-check" line. IDLE seen: carry on
+(rmmod, wd90c24fb back). STILL BUSY / LOCKED: stop; do not rmmod, do not load
+wd90c24fb; save the files and power off.
+
+## Roll-up visual test (prepared 2026-11-04, not run)
+
+One sequence, each PROVEN mode as its own load with the 15 s auto-revert
+(no confirm), then optional S3 last. Any non-OK result touches /tmp/ru.stop
+and every later step prints SKIP/STOPPED. Same preparation (no X,
+wd90c24fb text=1 + rmmod), build d9c0884 / sha above. Log each line with
+plog.sh first. Pause ~10 s on the text console between steps.
+
+What to see (pattern=1: 16 colour bars of 40 pixels, odd lines in reverse
+order, so fine horizontal stripes over the bars):
+
+| step | mode | on screen during the ~15 s trial |
+|---|---|---|
+| 1 | 640x480-8 | full panel: 16 narrow bars, no black band |
+| 2 | 640x400-8 | the same 16 bars, black bands top and bottom (centred) |
+| 3 | 320x200-8 | 8 bars, each twice as wide (low res), full panel |
+| 4 (optional) | 640x480-8 + S3 | as step 1 (S3 is off screen) |
+
+After each: the text console comes back unchanged, then STEPn-OK.
+
+```
+pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
+kill <the Xfbdev PID printed above>
+echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; rm -f /tmp/ru.stop
+gt(){ S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 9c77fe90001 ]; }
+ru(){ [ -e /tmp/ru.stop ] && { echo SKIP; return 1; }; gt && dmesg -c >/dev/null && insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=$1 $2 && sleep 20 && grep -q "mismatches 0; in_text 1" /proc/wd24adv/live && echo OK-$1 $2 || { touch /tmp/ru.stop; echo STOP-$1; dmesg | grep wd24adv; return 1; }; }
+ru 640x480-8 && { rmmod wd24adv && echo STEP1-OK || touch /tmp/ru.stop; }
+ru 640x400-8 && { rmmod wd24adv && echo STEP2-OK || touch /tmp/ru.stop; }
+ru 320x200-8 && { rmmod wd24adv && echo STEP3-OK || touch /tmp/ru.stop; }
+ru 640x480-8 s3=1; cat /proc/wd24adv/s3 > /tmp/rus3.txt; grep -E "S3 result|DEAD|idle" /tmp/rus3.txt; grep -q "S3 result: OK" /tmp/rus3.txt || touch /tmp/ru.stop
+[ -e /tmp/ru.stop ] && echo "STOPPED: check before rmmod" || { rmmod wd24adv && echo STEP4-OK || touch /tmp/ru.stop; }
+[ -e /tmp/ru.stop ] && echo "STOPPED: do not load wd90c24fb until checked" || { insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?; }
+( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & )
+dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u
+```
+
+To skip S3, do not send its two lines. Expected end: X back, wd24probe3
+RC=19 with the baseline (3CC=67 GR0F=00 GR0E=40 SR06=0F CR11=AE CR29=85).
+STOP-<mode>: that step failed and the module may still be loaded; read dmesg
+and /proc/wd24adv/live and go no further; cold boot if the text console
+looks wrong. S3 TIMEOUT: as in the S3 section (STILL BUSY: power off,
+nothing else).
 
 ## Abort and revert
 
