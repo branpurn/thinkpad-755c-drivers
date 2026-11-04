@@ -58,7 +58,7 @@ def build_fake(kdir, dst):
     with open(os.path.join(dst, "Kbuild"), "w") as f:
         f.write("# QEMU TEST BUILD ONLY: modelled 23C0h values, never install\n"
                 "obj-m += wd24adv-qemufake.o\n"
-                "wd24adv-qemufake-y := wd24adv_main.o wd24adv_core.o wd24adv_modes.o wd24adv_port.o wd24adv_s1.o wd24adv_s2.o\n"
+                "wd24adv-qemufake-y := wd24adv_main.o wd24adv_core.o wd24adv_modes.o wd24adv_port.o wd24adv_s1.o wd24adv_s2.o wd24adv_s3.o\n"
                 "ccflags-y += -DWD24S1_QEMU_FAKE\n")
     subprocess.run(["make", "-s", "-C", kdir, "ARCH=i386", f"M={dst}", "modules"], check=True)
     return os.path.join(dst, "wd24adv-qemufake.ko")

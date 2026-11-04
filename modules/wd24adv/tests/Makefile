@@ -9,13 +9,14 @@ CFLAGS ?= -O2 -g -Wall -Wextra -Werror -std=gnu11
 CORE = ../wd24adv_core.c ../wd24adv_modes.c ../wd24adv_port.c
 HW = ../../wd90c24fb/wd90c24_hw.c
 
-test: test_core xcheck test_vga test_engine test_s1 test_s2
+test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3
 	./test_core
 	./xcheck
 	./test_vga
 	./test_engine
 	./test_s1
 	./test_s2
+	./test_s3
 
 test_core: test_core.c $(CORE) ../wd24adv_core.h
 	$(CC) $(CFLAGS) -o $@ test_core.c $(CORE)
@@ -35,7 +36,10 @@ test_s1: test_s1.c vgamodel.c vgamodel.h ../wd24adv_s1.c ../wd24adv_s1.h ../wd24
 test_s2: test_s2.c ../wd24adv_s2.c ../wd24adv_s2.h ../wd24adv_s1.c ../wd24adv_s1.h ../wd24adv_engine.c ../wd24adv_engine.h $(CORE) ../wd24adv_core.h
 	$(CC) $(CFLAGS) -o $@ test_s2.c ../wd24adv_s2.c ../wd24adv_s1.c ../wd24adv_engine.c $(CORE)
 
+test_s3: test_s3.c ../wd24adv_s3.c ../wd24adv_s3.h ../wd24adv_s2.c ../wd24adv_s1.c $(CORE) ../wd24adv_core.h
+	$(CC) $(CFLAGS) -o $@ test_s3.c ../wd24adv_s3.c ../wd24adv_s2.c ../wd24adv_s1.c ../wd24adv_engine.c $(CORE)
+
 clean:
-	rm -f test_core xcheck test_vga test_engine test_s1 test_s2
+	rm -f test_core xcheck test_vga test_engine test_s1 test_s2 test_s3
 
 .PHONY: test clean

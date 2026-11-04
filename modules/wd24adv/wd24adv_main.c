@@ -32,6 +32,7 @@
  *   /proc/wd24adv/control  - live only (root, write): mode NAME | text | confirm
  *   /proc/wd24adv/s1       - s1=1 only: the S1 probe plan (dryrun=1) or result
  *   /proc/wd24adv/s2       - s2=1 only: the S2 write list (dryrun=1) or result
+ *   /proc/wd24adv/s3       - s3=1 only: the S3 operation list (dryrun=1) or result
  *
  * S1 (s1=1 dryrun=0, never with live=1 or mode=): after the same read-only
  * entry check, a read-only probe of the 23C0h register blocks
@@ -44,6 +45,12 @@
  * 1 without CNTRL1, block 2 without the cursor control), each value put
  * back to its snapshot (read twice at load) and verified, 23C0h back to 1002h, all inside
  * this insmod.  Same load/unload behaviour as S1.
+ *
+ * S3 (s3=1 with dryrun=0 live=1 mode=640x480-8 only): right after that
+ * PROVEN trial mode set (trial timer already queued), three BITBLT
+ * operations in the off-screen scratch bank 60000h-6FFFFh, each verified
+ * against a model by reading video memory back (wd24adv_s3.h).  Once,
+ * inside insmod; the trial expiry (or rmmod) restores the text state.
  */
 #define pr_fmt(fmt) "wd24adv: " fmt
 
@@ -66,6 +73,7 @@
 
 #include "wd24adv_core.h"
 #include "wd24adv_s2.h"
+#include "wd24adv_s3.h"
 #include "wd24adv_s1.h"
 
 static bool dryrun = true;
@@ -116,6 +124,10 @@ static bool s2;
 module_param(s2, bool, 0444);
 MODULE_PARM_DESC(s2, "S2 write+readback of block 1/2 (start bit and cursor never set; all restored inside insmod): dryrun=1 lists, dryrun=0 runs once");
 
+static bool s3;
+module_param(s3, bool, 0444);
+MODULE_PARM_DESC(s3, "S3 off-screen BITBLT fill/copy at 60000h after the 640x480-8 trial mode set: dryrun=1 lists, dryrun=0 live=1 mode=640x480-8 runs once");
+
 #define TXT_MAX	(96 * 1024)
 
 #define TRIAL_MIN	5
@@ -144,6 +156,10 @@ static size_t s1_len;
 static struct wd24s2 *s2st;
 static char *s2_txt;
 static size_t s2_len;
+static struct wd24s3 *s3st;
+static char *s3_txt;
+static size_t s3_len;
+static u8 *s3_mem;	/* 3 x 64 KiB: pre, model, read buffer */
 static void trial_fn(struct work_struct *w);
 static DECLARE_DELAYED_WORK(trial_work, trial_fn);
 
@@ -236,6 +252,14 @@ static ssize_t s2_read(struct file *f, char __user *b, size_t n, loff_t *p)
 
 static const struct proc_ops s2_ops = {
 	.proc_read = s2_read, .proc_lseek = default_llseek };
+
+static ssize_t s3_read(struct file *f, char __user *b, size_t n, loff_t *p)
+{
+	return rd(b, n, p, s3_txt, s3_len);
+}
+
+static const struct proc_ops s3_ops = {
+	.proc_read = s3_read, .proc_lseek = default_llseek };
 
 static const struct proc_ops live_ops = {
 	.proc_read = live_read, .proc_lseek = default_llseek };
@@ -575,6 +599,12 @@ static void free_all(void)
 	vfree(s2_txt);
 	s2st = NULL;
 	s2_txt = NULL;
+	vfree(s3st);
+	vfree(s3_txt);
+	vfree(s3_mem);
+	s3st = NULL;
+	s3_txt = NULL;
+	s3_mem = NULL;
 	plan_txt = modes_txt = self_txt = NULL;
 	ctx = NULL;
 	free_hw();
@@ -852,6 +882,183 @@ static int s2_live(void)
 	return 0;
 }
 
+/* ---- S3: off-screen BITBLT ---------------------------------------------- */
+
+static void s3_plan_text(void)
+{
+	size_t len = 0;
+	unsigned int j, p;
+
+	APPEND(s3_txt, len, "wd24adv S3 plan (dryrun=1: no port was read or written)\n");
+	APPEND(s3_txt, len, "runs once inside insmod dryrun=0 live=1 mode=640x480-8 s3=1, after the trial mode set + pattern (timer queued)\n");
+	APPEND(s3_txt, len, "1. 23C0h read twice == %04x, 3C0h/3C1h alias check; snapshot 25 words twice (agree, echo, CNTRL1 ACT=0, cursor enable=0)\n", WD24S2_S);
+	APPEND(s3_txt, len, "2. VRAM (reads; PR0A 00-50h): banks 0-5 checksummed; PR0A 60h: bank 6 read twice == ; every op must change >= 1 byte\n");
+	APPEND(s3_txt, len, "3. per op: W 23C0h 1001, R; poll 23C2h ACT=0 (<= %u reads); params W sel, R, W, R == ; W 1001, R, R ACT=0; W CNTRL1 (last); poll ACT=0; bank 6 == model\n", WD24S3_SPINS);
+	for (j = 0; j < WD24S3_NOPS; j++) {
+		const struct wd24s3_op *o = &wd24s3_ops[j];
+
+		APPEND(s3_txt, len, "   op %u %-30s:", j + 1, o->name);
+		for (p = 0; p < o->npar; p++)
+			APPEND(s3_txt, len, " %04x", (o->par[p].idx << 12) | o->par[p].val);
+		APPEND(s3_txt, len, " CNTRL1 %04x\n", o->cntrl1);
+	}
+	APPEND(s3_txt, len, "4. restore every written parameter to the snapshot (W, R); post-pass 24 words == snapshot, ACT=0; banks 0-5 checksums equal; PR0A 00; W 23C0h %04x, R ==\n", WD24S2_S);
+	APPEND(s3_txt, len, "timeout: stop, no further write of any kind (no abort), no VRAM access; the trial expiry restores text\n");
+	APPEND(s3_txt, len, "never written: block 2 (cursor), BG, C, D, F, 23C4h; CNTRL1 only 0908/0900 (forward, packed)\n");
+	s3_len = len;
+}
+
+static void s3_report(const char *pre)
+{
+	const struct wd24s3 *s = s3st;
+	size_t len = 0;
+	unsigned int j, k;
+
+	APPEND(s3_txt, len, "wd24adv S3 result: %s%s%s\n", pre ? "NOT RUN: " : wd24s3_res_name(s->res),
+	       pre ? pre : (s->why ? ": " : ""), pre ? "" : (s->why ? s->why : ""));
+#ifdef WD24S1_QEMU_FAKE
+	APPEND(s3_txt, len, "*** QEMU FAKE BUILD: 23C0h/23C2h values and video memory are modelled ***\n");
+#endif
+	if (pre || s->res == WD24S3_NOT_RUN) {
+		s3_len = len;
+		return;
+	}
+	APPEND(s3_txt, len, "snapshot (%u):", s->nsnap);
+	for (k = 0; k < s->nsnap; k++)
+		APPEND(s3_txt, len, " %04x", s->snap[k]);
+	APPEND(s3_txt, len, "\nsnapshot 2 (%u):", s->nsnap2);
+	for (k = 0; k < s->nsnap2; k++)
+		APPEND(s3_txt, len, " %04x", s->snap2[k]);
+	APPEND(s3_txt, len, "\nchecksums 0-5 before:");
+	for (k = 0; k < WD24S3_NCRC; k++)
+		APPEND(s3_txt, len, " %08x", s->crc0[k]);
+	APPEND(s3_txt, len, "\nchecksums 0-5 after: ");
+	for (k = 0; k < WD24S3_NCRC; k++)
+		APPEND(s3_txt, len, " %08x", s->crc1[k]);
+	APPEND(s3_txt, len, "\n");
+	for (j = 0; j < WD24S3_NOPS; j++)
+		APPEND(s3_txt, len, "  op %u %-30s model changes %u; idle polls %u; busy %s, polls %u; CNTRL1 after %04x%s\n",
+		       j + 1, wd24s3_ops[j].name, s->changes[j], s->idle_spins[j],
+		       s->busy_seen[j] ? "seen" : "not seen", s->spins[j], s->c1_after[j],
+		       j < s->done ? " VERIFIED" : "");
+	if (s->ndiff)
+		APPEND(s3_txt, len, "VRAM: %u bytes differ; first %05x read %02x want %02x\n",
+		       s->ndiff, s->diff_off, s->diff_got, s->diff_want);
+	APPEND(s3_txt, len, "post-pass (%u):", s->npost);
+	for (k = 0; k < s->npost; k++)
+		APPEND(s3_txt, len, " %04x", s->post[k]);
+	APPEND(s3_txt, len, "\n");
+	if (s->restored)
+		APPEND(s3_txt, len, "restore: wrote %04x, read %04x (%s)\n", s->saved & 0x1fff,
+		       s->restore_rb, s->restore_rb == s->saved ? "equal" : "DIFFERENT");
+	if (s->dead)
+		APPEND(s3_txt, len, "DEAD: BITBLT timed out; nothing written after the start; text comes back at trial expiry\n");
+	APPEND(s3_txt, len, "23C0h writes %u, 23C2h writes %u (starts %u), PR0A writes %u, 23C4h 0, refusals %u, reads %u (polls %u), restore fails %x\n",
+	       s->wix, s->wdata, s->wgo, s->wbank, s->refused, s->reads, s->polls, s->restore_fail);
+	APPEND(s3_txt, len, "access log (in order; polls: first and last only; W8 03cf 09vv = PR0A):\n");
+	for (k = 0; k < s->nlog; k++)
+		APPEND(s3_txt, len, "  %c%u %04x %04x\n", s->log[k].w ? 'W' : 'R',
+		       s->log[k].width, s->log[k].port, s->log[k].val);
+	s3_len = len;
+}
+
+#ifdef WD24S1_QEMU_FAKE
+extern u8 *wd24s3_fake_vram;
+static u8 fake_pr0a;
+
+static int s3_bank(void *priv, u8 v)
+{
+	fake_pr0a = v;		/* no port access: the RAM model only */
+	return 0;
+}
+
+static void s3_vread(void *priv, u32 off, u8 *buf, u32 n)
+{
+	memcpy(buf, wd24s3_fake_vram + ((u32)fake_pr0a << 12) + off, n);
+}
+#else
+static int s3_bank(void *priv, u8 v)
+{
+	return wd24_write(hw, WD24_GR, WD24_GR_PR0A, v);
+}
+
+static void s3_vread(void *priv, u32 off, u8 *buf, u32 n)
+{
+	u32 i;
+
+	for (i = 0; i < n; i++)
+		buf[i] = readb(vmem + ((off + i) & (WD24_PLANE - 1)));
+}
+#endif
+
+static const struct wd24s3_mem s3_memops = { s3_bank, s3_vread, NULL };
+
+static int s3_alloc(void)
+{
+	s3st = vmalloc(sizeof(*s3st));
+	s3_txt = vmalloc(TXT_MAX);
+	s3_mem = vmalloc(3 * WD24S3_WIN);
+	return (s3st && s3_txt && s3_mem) ? 0 : -ENOMEM;
+}
+
+/* caller holds hw_lock; the trial mode is set and its timer queued */
+static void s3_live(const struct wd24_mode *m)
+{
+	const char *pre = NULL;
+
+	wd24s3_init(s3st, &wd24s3_kernel_io, &s3_memops, s3_mem,
+		    s3_mem + WD24S3_WIN, s3_mem + 2 * WD24S3_WIN);
+#ifndef WD24S1_QEMU_FAKE
+	if (!hw || hw->in_text || !hw->trial_pending || hw->nmismatch ||
+	    !m || strcmp(m->name, "640x480-8") || !vmem)
+		pre = "not in the 640x480-8 trial state";
+#endif
+	if (!pre && !request_region(WD24S1_P_INDEX, 4, "wd24adv s3"))
+		pre = "ports 23C0-23C3 busy";
+	if (pre) {
+		s3_report(pre);
+		pr_err("S3: not run: %s\n", pre);
+		return;
+	}
+	console_lock();
+#ifndef WD24S1_QEMU_FAKE
+	hw->be->begin(hw);
+	hw->tag = "S3: PR0A bank (video memory readback)";
+#endif
+	wd24s3_run(s3st);
+#ifndef WD24S1_QEMU_FAKE
+	hw->be->end(hw);
+#endif
+	console_unlock();
+	release_region(WD24S1_P_INDEX, 4);
+	s3_report(NULL);
+	pr_info("S3: %s%s%s; ops verified %u; 23C2h writes %u (starts %u), PR0A writes %u; details: /proc/wd24adv/s3\n",
+		wd24s3_res_name(s3st->res), s3st->why ? ": " : "",
+		s3st->why ? s3st->why : "", s3st->done, s3st->wdata, s3st->wgo, s3st->wbank);
+}
+
+#ifdef WD24S1_QEMU_FAKE
+/* QEMU TEST BUILD ONLY: S3 on the modelled registers + RAM video memory */
+static int s3_fake_run(void)
+{
+	u32 i;
+
+	if (s3_alloc())
+		return -ENOMEM;
+	wd24s3_fake_vram = vmalloc(7 * WD24S3_WIN);
+	if (!wd24s3_fake_vram)
+		return -ENOMEM;
+	for (i = 0; i < 7 * WD24S3_WIN; i++)
+		wd24s3_fake_vram[i] = (u8)(i * 7 + (i >> 9));
+	mutex_lock(&hw_lock);
+	s3_live(NULL);
+	mutex_unlock(&hw_lock);
+	vfree(wd24s3_fake_vram);
+	wd24s3_fake_vram = NULL;
+	return 0;
+}
+#endif
+
 /* live: claim the ports, map A0000, save the text state */
 static int live_start(void)
 {
@@ -911,11 +1118,30 @@ static int __init wd24adv_init(void)
 		pr_err("s2=1 is a separate stage: s1=1 / live=1 / mode= refused with it\n");
 		return -EINVAL;
 	}
+	if (s3 && (s1 || s2)) {
+		pr_err("s3=1 is a separate stage: s1=1 / s2=1 refused with it\n");
+		return -EINVAL;
+	}
+#ifdef WD24S1_QEMU_FAKE
+	if (s3 && !dryrun && (live || *mode)) {
+		pr_err("QEMU fake build: s3=1 runs on the model only, without live=1\n");
+		return -EINVAL;
+	}
+#else
+	if (s3 && !dryrun && (!live || strcmp(mode, "640x480-8"))) {
+		pr_err("s3=1 with dryrun=0 needs live=1 mode=640x480-8\n");
+		return -EINVAL;
+	}
+#endif
 	if (!s1_echo && !s1) {
 		pr_err("s1_echo= needs s1=1\n");
 		return -EINVAL;
 	}
+#ifdef WD24S1_QEMU_FAKE
+	if (!dryrun && !live && !s1 && !s2 && !s3) {
+#else
 	if (!dryrun && !live && !s1 && !s2) {
+#endif
 		pr_err("dryrun=0 without live=1, s1=1 or s2=1 refused\n");
 		return -EOPNOTSUPP;
 	}
@@ -1007,6 +1233,27 @@ static int __init wd24adv_init(void)
 			return err;
 		}
 	}
+	if (s3 && dryrun) {
+		s3_txt = vmalloc(TXT_MAX);
+		if (!s3_txt) {
+			free_all();
+			return -ENOMEM;
+		}
+		s3_plan_text();
+	}
+#ifdef WD24S1_QEMU_FAKE
+	if (s3 && !dryrun) {
+		if (fails || s3_fake_run()) {
+			free_all();
+			return -EINVAL;
+		}
+	}
+#else
+	if (s3 && !dryrun && s3_alloc()) {
+		free_all();
+		return -ENOMEM;
+	}
+#endif
 	if (live) {
 		if (fails) {
 			pr_err("live: self-test failed; no hardware access\n");
@@ -1039,6 +1286,7 @@ static int __init wd24adv_init(void)
 	    !proc_create_data("selftest", 0444, pdir, &self_ops, NULL) ||
 	    (s1 && !proc_create_data("s1", 0444, pdir, &s1_ops, NULL)) ||
 	    (s2 && !proc_create_data("s2", 0444, pdir, &s2_ops, NULL)) ||
+	    (s3 && !proc_create_data("s3", 0444, pdir, &s3_ops, NULL)) ||
 	    (live && (!proc_create_data("live", 0444, pdir, &live_ops, NULL) ||
 		      !proc_create_data("control", 0200, pdir, &control_ops, NULL)))) {
 		if (live && !hw_dead) {
@@ -1061,6 +1309,11 @@ static int __init wd24adv_init(void)
 			dryrun ? "plan only (dry-run, no port access)" : "done, all restored inside insmod (no port region held)");
 		return 0;
 	}
+	if (s3 && !live) {
+		pr_info("loaded, S3 %s; see /proc/wd24adv/s3\n",
+			dryrun ? "plan only (dry-run, no port access)" : "QEMU fake run done");
+		return 0;
+	}
 	if (!live) {
 		pr_info("loaded, dry-run (%u modes, selftest %s); see /proc/wd24adv/\n",
 			wd24_nmodes, fails ? "FAILED" : "ok");
@@ -1075,6 +1328,14 @@ static int __init wd24adv_init(void)
 		if (err)
 			pr_err("live: mode %s failed (%d); text restored, module stays loaded\n",
 			       m->name, err);
+		if (s3) {
+			mutex_lock(&hw_lock);
+			if (err)
+				s3_report("the mode set failed");
+			else
+				s3_live(m);
+			mutex_unlock(&hw_lock);
+		}
 	}
 	return 0;
 }

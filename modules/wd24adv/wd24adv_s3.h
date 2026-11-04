@@ -1,0 +1,137 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * wd24adv S3: the first BITBLT operations, off screen only.  Design doc
+ * docs/WD24ADV-DESKTOP-DESIGN.md section 7, stage S3.  Runs once, inside
+ * insmod, right after the PROVEN 640x480-8 trial mode set
+ * (dryrun=0 live=1 mode=640x480-8 s3=1); the 15 s trial timer is already
+ * queued, so the text state comes back on its own whatever S3 does.
+ *
+ * Operations (exactly wd90c24fb's wd_blt_go() programming, which its
+ * load-time self-test runs on this machine at the same addresses):
+ *   1 FILL  8 x  8 at 60000h, colour 3Ch     CNTRL1 0908h
+ *   2 FILL 32 x 32 at 60200h, colour C3h     CNTRL1 0908h
+ *   3 COPY 32 x 32 60200h -> 60100h forward  CNTRL1 0900h (dst < src:
+ *     wd90c24fb's forward case; the rectangles do not overlap)
+ * pitch 640, all inside 60000h-64F9Fh.  Scratch = 60000h-6FFFFh (one
+ * 64 KiB PR0A bank, 60h): wd90c24fb's BITBLT/colour-expansion self-test
+ * area (rewritten at every wd90c24fb load), above its cursor pattern
+ * (50000h-500FFh) and the 300 KiB frame (0-4AFFFh, CRTC start 0), and at or
+ * above 256 KiB, so outside anything text mode or wd24adv's 4 x 64 KiB
+ * plane save/restore reaches under either plane mapping.  Its contents
+ * do not matter and are not restored.  (The design's 4C000h slot is 4 KiB:
+ * a 32 x 32 rectangle at pitch 640 needs 19872 bytes.)
+ *
+ * Sequence:
+ *  entry: as S2 (23C0h read twice == 1002h, alias check), snapshot of all
+ *    25 words twice (agree, echo, CNTRL1 ACT clear, cursor enable clear);
+ *    VRAM: banks 0-5 (00000h-5FFFFh) checksummed, bank 6 read twice
+ *    (must agree) -> pre; refuse unless every op changes >= 1 byte.
+ *    All reads; the only writes so far are selects and PR0A (bank).
+ *  per op: wait idle (W 23C0h 1001h, R; poll 23C2h ACT clear, <= SPINS
+ *    reads); each parameter: W sel, R; W 23C2h word, R == word; then W
+ *    23C0h 1001h, R; R 23C2h ACT still clear; W 23C2h CNTRL1 (the only new
+ *    write, last); poll ACT clear (<= SPINS); bank 6 read back, compared
+ *    byte by byte with the model (pre + ops so far).
+ *  end: every parameter written is restored to the snapshot (W, R);
+ *    post-pass: 24 words == snapshot, CNTRL1 ACT clear (its other bits
+ *    read status, recorded); banks 0-5 checksums unchanged; PR0A 00h;
+ *    W 23C0h 1002h, R == 1002h.
+ *  TIMEOUT (ACT still set after SPINS reads): stop at once, NO further
+ *    write of any kind (no abort, no restore, no PR0A, no 23C0h) and no
+ *    VRAM access; latched (dead); the trial expiry restores the text state.
+ * Guard: 23C0h only the 25 selects and the final 1002h; 23C2h only block 1
+ * (never block 2, never 23C4h), only the current op's listed word for that
+ * register, or the snapshot word of a register S3 writes; CNTRL1 only the
+ * current op's word, once, right after the idle check.
+ */
+#ifndef WD24ADV_S3_H
+#define WD24ADV_S3_H
+#include "wd24adv_s2.h"
+
+#define WD24S3_BASE	0x60000u
+#define WD24S3_BANK	0x60		/* PR0A, 4 KiB units */
+#define WD24S3_WIN	0x10000u	/* bank 6, compared in full */
+#define WD24S3_PITCH	640
+#define WD24S3_NOPS	3
+#define WD24S3_NPAR	11
+#define WD24S3_SPINS	200000		/* as wd90c24fb WD_BLT_SPINS, ~0.2 s */
+#define WD24S3_NCRC	6		/* banks 0-5 */
+#define WD24S3_NLOG	900
+#define WD24S3_FILL	0x0908		/* ACT | PACKED | SRC_FCOL */
+#define WD24S3_COPY	0x0900		/* ACT | PACKED */
+
+struct wd24s3_par {
+	u8 idx;
+	u16 val;		/* 12 bits; word = idx << 12 | val */
+};
+
+struct wd24s3_op {
+	const char *name;
+	bool fill;
+	u32 src, dst;
+	u16 w, h;
+	u8 fg;
+	u16 cntrl1;
+	unsigned int npar;
+	struct wd24s3_par par[WD24S3_NPAR];
+};
+
+extern const struct wd24s3_op wd24s3_ops[WD24S3_NOPS];
+
+struct wd24s3_mem {
+	int (*bank)(void *priv, u8 pr0a);	/* PR0A write + readback; 0 ok */
+	void (*vread)(void *priv, u32 off, u8 *buf, u32 n);	/* A0000h window */
+	void *priv;
+};
+
+enum wd24s3_res {
+	WD24S3_NOT_RUN = 0,
+	WD24S3_OK,
+	WD24S3_REFUSED,		/* reads only */
+	WD24S3_SNAP_BAD,	/* selects only */
+	WD24S3_PRE_BAD,		/* VRAM pre-check: no 23C2h write */
+	WD24S3_MISMATCH,	/* a register readback differed: stopped, restored */
+	WD24S3_VRAM_BAD,	/* VRAM differs from the model: stopped, restored */
+	WD24S3_TIMEOUT,		/* engine busy: stopped, nothing more written */
+	WD24S3_RESTORE_BAD,
+};
+
+struct wd24s3 {
+	const struct wd24s1_io *io;
+	const struct wd24s3_mem *mem;
+	u8 *pre, *model, *buf;		/* WD24S3_WIN bytes each (caller) */
+	bool have_saved, snap_ok, armed, go, restored, dead;
+	u16 saved, cur;
+	u16 snap[WD24S1_NSEL], snap2[WD24S1_NSEL], post[WD24S1_NSEL];
+	unsigned int nsnap, nsnap2, npost;
+	u32 crc0[WD24S3_NCRC], crc1[WD24S3_NCRC];
+	int op;				/* op being programmed, -1 none */
+	unsigned int done;		/* ops run and verified */
+	u32 changes[WD24S3_NOPS];	/* bytes each op changes (model) */
+	u32 spins[WD24S3_NOPS], idle_spins[WD24S3_NOPS];
+	u16 c1_after[WD24S3_NOPS];
+	bool busy_seen[WD24S3_NOPS];
+	u32 ndiff, diff_off;
+	u8 diff_got, diff_want;
+	bool dirty[WD24S1_N_BLT];
+	u32 restore_fail;
+	u16 restore_rb;
+	u16 alias;
+	enum wd24s3_res res;
+	const char *why;
+	unsigned int wix, wdata, wgo, wbank, reads, polls, refused;
+	struct wd24s1_acc log[WD24S3_NLOG];
+	unsigned int nlog;
+};
+
+int wd24s3_guard_out(const struct wd24s3 *s, u16 port, u16 val);
+void wd24s3_init(struct wd24s3 *s, const struct wd24s1_io *io,
+		 const struct wd24s3_mem *mem, u8 *pre, u8 *model, u8 *buf);
+int wd24s3_run(struct wd24s3 *s);	/* 0 = OK */
+const char *wd24s3_res_name(enum wd24s3_res r);
+void wd24s3_apply(const struct wd24s3_op *o, u8 *win);	/* model, bank 6 */
+u32 wd24s3_sum(const u8 *p, u32 n, u32 h);		/* FNV-1a */
+#ifdef __KERNEL__
+extern const struct wd24s1_io wd24s3_kernel_io;
+#endif
+#endif
