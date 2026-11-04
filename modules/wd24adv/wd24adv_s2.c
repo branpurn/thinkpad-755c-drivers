@@ -66,9 +66,9 @@ int wd24s2_find(u8 blk, u8 idx)
 	return -1;
 }
 
-static u16 ref_of(const struct wd24s2_w *w)
+static u16 snap_of(const struct wd24s2 *s, const struct wd24s2_w *w)
 {
-	return wd24s2_ref[(w->blk == 1 ? 0 : WD24S1_N_BLT) + (w->idx & 0xf)];
+	return s->snap[(w->blk == 1 ? 0 : WD24S1_N_BLT) + (w->idx & 0xf)];
 }
 
 static u16 sel_of(u8 blk, u8 idx)
@@ -109,7 +109,10 @@ int wd24s2_guard_out(const struct wd24s2 *s, u16 port, u16 val)
 	j = wd24s2_find(blk, idx);
 	if (j < 0 || (val >> 12) != idx)
 		return -EPERM;		/* CNTRL1, cursor control, C/D/F, PAT, 8 */
-	if ((val & 0xfff) == wd24s2_list[j].test || val == ref_of(&wd24s2_list[j]))
+	if ((val & 0xfff) == wd24s2_list[j].test)
+		return 0;
+	/* the one snapshot allowance: this load's exact value, both passes agreed */
+	if (s->snap_ok && val == snap_of(s, &wd24s2_list[j]))
 		return 0;
 	return -EPERM;
 }
@@ -126,7 +129,7 @@ const char *wd24s2_res_name(enum wd24s2_res r)
 	switch (r) {
 	case WD24S2_OK: return "OK";
 	case WD24S2_REFUSED: return "REFUSED (no 23C0h write)";
-	case WD24S2_NOT_REF: return "NOT REFERENCE (selects only, no 23C2h write)";
+	case WD24S2_SNAP_BAD: return "SNAPSHOT REFUSED (selects only, no 23C2h write)";
 	case WD24S2_MISMATCH: return "MISMATCH (stopped, restored)";
 	case WD24S2_RESTORE_BAD: return "RESTORE MISMATCH";
 	default: return "not run";
@@ -199,8 +202,8 @@ static int refuse(struct wd24s2 *s, const char *why)
 	return -ENODEV;
 }
 
-/* all 25 selects: read and compare with the reference */
-static int verify_all(struct wd24s2 *s, u16 *out, unsigned int *n)
+/* all 25 selects: read; with want, stop at the first word != want[k] */
+static int read_all(struct wd24s2 *s, u16 *out, unsigned int *n, const u16 *want)
 {
 	unsigned int k;
 
@@ -209,10 +212,32 @@ static int verify_all(struct wd24s2 *s, u16 *out, unsigned int *n)
 			return -EIO;
 		out[k] = in16(s, WD24S1_P_DATA);
 		*n = k + 1;
-		if (out[k] != wd24s2_ref[k])
+		if (want && out[k] != want[k])
 			return -EIO;
 	}
 	return 0;
+}
+
+/* NULL = snapshot usable; else why not (reads only so far) */
+static const char *snapshot(struct wd24s2 *s)
+{
+	unsigned int k;
+
+	if (read_all(s, s->snap, &s->nsnap, NULL))
+		return "snapshot pass 1: 23C0h did not read back a select";
+	if (read_all(s, s->snap2, &s->nsnap2, NULL))
+		return "snapshot pass 2: 23C0h did not read back a select";
+	for (k = 0; k < WD24S1_NSEL; k++)
+		if (s->snap[k] != s->snap2[k])
+			return "snapshot unstable: the two passes differ";
+	for (k = 0; k < WD24S1_NSEL; k++)
+		if ((s->snap[k] >> 12) != (k < WD24S1_N_BLT ? k : k - WD24S1_N_BLT))
+			return "snapshot: a word does not echo its index in bits 15:12";
+	if (s->snap[0] & WD24S1_ACT)
+		return "snapshot: CNTRL1 ACT set (engine busy or started)";
+	if (s->snap[WD24S1_N_BLT] & WD24S2_CC_EN)
+		return "snapshot: cursor control enable set";
+	return NULL;
 }
 
 /* one write each to every register that may hold a test value */
@@ -222,7 +247,7 @@ static void restore_dirty(struct wd24s2 *s)
 
 	for (j = 0; j < WD24S2_NW; j++) {
 		const struct wd24s2_w *w = &wd24s2_list[j];
-		u16 ref = ref_of(w);
+		u16 ref = snap_of(s, w);
 
 		if (!s->dirty[j])
 			continue;
@@ -241,9 +266,9 @@ static const char *one(struct wd24s2 *s, int j)
 	const struct wd24s2_w *w = &wd24s2_list[j];
 	u16 sel = sel_of(w->blk, w->idx);
 	u16 tw = (u16)(w->idx << 12) | w->test;
-	u16 ref = ref_of(w);
+	u16 ref = snap_of(s, w);
 	u16 ssel = w->blk == 1 ? SEL_CNTRL1 : SEL_CURCTL;
-	u16 sref = w->blk == 1 ? wd24s2_ref[0] : wd24s2_ref[WD24S1_N_BLT];
+	u16 sref = w->blk == 1 ? s->snap[0] : s->snap[WD24S1_N_BLT];
 
 	s->step[j] = 1;
 	if (sel_rb(s, sel))
@@ -258,18 +283,18 @@ static const char *one(struct wd24s2 *s, int j)
 	if (s->rb_test[j] != tw)
 		return "test value did not read back";
 	if (out16(s, WD24S1_P_DATA, ref))
-		return "guard refused the reference write";
+		return "guard refused the snapshot write";
 	s->step[j] = 3;
-	s->rb_ref[j] = in16(s, WD24S1_P_DATA);
-	if (s->rb_ref[j] != ref)
-		return "reference value did not read back";
+	s->rb_snap[j] = in16(s, WD24S1_P_DATA);
+	if (s->rb_snap[j] != ref)
+		return "snapshot value did not read back";
 	s->dirty[j] = false;
 	if (sel_rb(s, ssel))
 		return "23C0h did not read back the safety select";
 	s->rb_safe[j] = in16(s, WD24S1_P_DATA);
 	if (s->rb_safe[j] != sref)
-		return w->blk == 1 ? "CNTRL1 changed (ACT / start must stay 0108h)"
-				   : "cursor control changed (must stay 0000h)";
+		return w->blk == 1 ? "CNTRL1 changed from its snapshot"
+				   : "cursor control changed from its snapshot";
 	s->step[j] = 4;
 	return NULL;
 }
@@ -301,11 +326,12 @@ int wd24s2_run(struct wd24s2 *s)
 	s->saved = a;
 	s->have_saved = true;
 
-	/* pre-pass: selects + reads only; the chip must equal the reference */
-	if (verify_all(s, s->pre, &s->npre)) {
-		res = WD24S2_NOT_REF;
-		why = "pre-pass: a register differs from the S1 reference";
+	/* snapshot: selects + reads only, twice; must agree and be safe */
+	why = snapshot(s);
+	if (why) {
+		res = WD24S2_SNAP_BAD;
 	} else {
+		s->snap_ok = true;
 		s->armed = true;
 		for (j = 0; j < WD24S2_NW; j++) {
 			why = one(s, j);
@@ -319,9 +345,9 @@ int wd24s2_run(struct wd24s2 *s)
 	if (res == WD24S2_MISMATCH)
 		restore_dirty(s);
 	s->armed = false;		/* no 23C2h write after this point */
-	if (res != WD24S2_NOT_REF && verify_all(s, s->post, &s->npost)) {
+	if (res != WD24S2_SNAP_BAD && read_all(s, s->post, &s->npost, s->snap)) {
 		if (res == WD24S2_OK)
-			why = "post-pass: a register differs from the S1 reference";
+			why = "post-pass: a register differs from the snapshot";
 		res = WD24S2_RESTORE_BAD;
 	}
 	if (s->restore_fail)
@@ -345,7 +371,8 @@ int wd24s2_run(struct wd24s2 *s)
 /*
  * QEMU TEST BUILD ONLY (wd24adv-qemufake.ko, never installed): real
  * inw()/outw() for the trace; values from a register file preset to the
- * S1 reference, so the full S2 sequence runs.
+ * S1 reference except SRC_LO = 2800h (the 2026-11-04 live reading), so
+ * the full S2 sequence runs on a snapshot that is not the S1 reference.
  */
 static u16 fake_ix = WD24S2_S;
 static u16 fake_reg[WD24S1_NSEL];
@@ -357,6 +384,7 @@ static u16 k_inw(void *priv, u16 port)
 
 	if (!fake_init) {
 		memcpy(fake_reg, wd24s2_ref, sizeof(fake_reg));
+		fake_reg[2] = 0x2800;
 		fake_init = true;
 	}
 	(void)inw(port);

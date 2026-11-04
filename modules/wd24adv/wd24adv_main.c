@@ -42,7 +42,7 @@
  * S2 (s2=1 dryrun=0, never with s1=1, live=1 or mode=): after the same
  * entry check, write + readback of the closed list in wd24adv_s2.h (block
  * 1 without CNTRL1, block 2 without the cursor control), each value put
- * back to the S1 reference and verified, 23C0h back to 1002h, all inside
+ * back to its snapshot (read twice at load) and verified, 23C0h back to 1002h, all inside
  * this insmod.  Same load/unload behaviour as S1.
  */
 #define pr_fmt(fmt) "wd24adv: " fmt
@@ -720,27 +720,25 @@ static int s1_live(void)
 static void s2_plan_text(void)
 {
 	size_t len = 0;
-	unsigned int j, k;
+	unsigned int j;
 
 	APPEND(s2_txt, len, "wd24adv S2 plan (dryrun=1: no port was read or written)\n");
 	APPEND(s2_txt, len, "1. entry check (as live=1): VGA index-register reads, index writes only, no data write\n");
 	APPEND(s2_txt, len, "2. read 23C0h twice, 3C0h, 3C1h; refuse with no write unless as S1 and 23C0h == %04x\n", WD24S2_S);
-	APPEND(s2_txt, len, "3. pre-pass, selects + reads only; every 23C2h must equal the S1 reference:\n  ");
-	for (k = 0; k < WD24S1_NSEL; k++)
-		APPEND(s2_txt, len, " %04x", wd24s2_ref[k]);
-	APPEND(s2_txt, len, "\n4. per register: W 23C0h sel, R; W 23C2h test, R 23C0h, R; W 23C2h ref, R; W 23C0h 1001/1002, R, R 23C2h == 0108/0000\n");
+	APPEND(s2_txt, len, "3. snapshot: all 25 words read twice (selects + reads only); refuse unless both passes agree, each echoes its index, CNTRL1 ACT=0, cursor enable=0\n");
+	APPEND(s2_txt, len, "4. per register: W 23C0h sel, R; W 23C2h test, R 23C0h, R; W 23C2h snapshot, R; W 23C0h 1001/1002, R, R 23C2h == its snapshot\n");
 	for (j = 0; j < WD24S2_NW; j++) {
 		const struct wd24s2_w *w = &wd24s2_list[j];
-		u16 ref = wd24s2_ref[wd24s2_k(w->blk, w->idx) & 31];
 
-		APPEND(s2_txt, len, "   %2u blk %u idx %X %-13s sel %04x test %04x restore %04x\n", j + 1,
+		APPEND(s2_txt, len, "   %2u blk %u idx %X %-13s sel %04x test %04x restore = snapshot\n", j + 1,
 		       w->blk, w->idx, w->name, WD24S1_NOINC | (w->idx << 8) | w->blk,
-		       (w->idx << 12) | w->test, ref);
+		       (w->idx << 12) | w->test);
 	}
-	APPEND(s2_txt, len, "5. post-pass (as 3); W 23C0h %04x; R == %04x\n", WD24S2_S, WD24S2_S);
+	APPEND(s2_txt, len, "5. post-pass: all 25 == snapshot; W 23C0h %04x; R == %04x\n", WD24S2_S, WD24S2_S);
 	APPEND(s2_txt, len, "never written: CNTRL1 (1001), blk1 C D F, cursor control (1002), blk2 1 2 8; 23C4h never accessed\n");
-	APPEND(s2_txt, len, "writes: 23C0h %u, 23C2h %u (any mismatch: stop, restore written registers, post-pass, 1002)\n",
-	       WD24S1_NSEL + 2 * WD24S2_NW + WD24S1_NSEL + 1, 2 * WD24S2_NW);
+	APPEND(s2_txt, len, "guard: 23C2h = the listed register's test word, or exactly its snapshot word from this load\n");
+	APPEND(s2_txt, len, "writes: 23C0h %u, 23C2h %u (any mismatch: stop, restore written registers to the snapshot, post-pass, 1002)\n",
+	       2 * WD24S1_NSEL + 2 * WD24S2_NW + WD24S1_NSEL + 1, 2 * WD24S2_NW);
 	s2_len = len;
 }
 
@@ -762,17 +760,20 @@ static void s2_report(int entry_err, unsigned long ewr_i, unsigned long ewr_d)
 		s2_len = len;
 		return;
 	}
-	APPEND(s2_txt, len, "pre-pass (%u):", s->npre);
-	for (k = 0; k < s->npre; k++)
-		APPEND(s2_txt, len, " %04x", s->pre[k]);
+	APPEND(s2_txt, len, "snapshot (%u):", s->nsnap);
+	for (k = 0; k < s->nsnap; k++)
+		APPEND(s2_txt, len, " %04x", s->snap[k]);
+	APPEND(s2_txt, len, "\nsnapshot 2 (%u):", s->nsnap2);
+	for (k = 0; k < s->nsnap2; k++)
+		APPEND(s2_txt, len, " %04x", s->snap2[k]);
 	APPEND(s2_txt, len, "\n");
 	for (j = 0; j < WD24S2_NW; j++) {
 		const struct wd24s2_w *w = &wd24s2_list[j];
 
 		if (!s->step[j])
 			break;
-		APPEND(s2_txt, len, "  %-13s step %u test rb %04x ref rb %04x safety %04x%s%s\n", w->name,
-		       s->step[j], s->rb_test[j], s->rb_ref[j], s->rb_safe[j],
+		APPEND(s2_txt, len, "  %-13s step %u test rb %04x snap rb %04x safety %04x%s%s\n", w->name,
+		       s->step[j], s->rb_test[j], s->rb_snap[j], s->rb_safe[j],
 		       s->dirty[j] ? " DIRTY" : "", s->restore_fail & (1u << j) ? " RESTORE-FAIL" : "");
 	}
 	if (s->stop_j >= 0)

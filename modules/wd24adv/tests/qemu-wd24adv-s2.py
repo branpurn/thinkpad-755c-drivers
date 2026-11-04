@@ -8,7 +8,8 @@ from the working tree against --kdir (the QEMU tc755 kernel), under out/:
   * refusals: s2 with s1=1 / live=1 / mode=: zero accesses;
   * the real wd24adv.ko, s2=1 dryrun=0: the entry check refuses (QEMU is not
     a WD90C24): no VGA data write, ZERO 23Cxh accesses (no 23C2h write);
-  * the TEST-ONLY fake build (registers preset to the S1 reference): the
+  * the TEST-ONLY fake build (registers preset to the S1 reference with
+    SRC_LO = 2800h, a snapshot that is NOT the S1 reference): the
     exact 23Cxh access sequence (restated from wd24adv_s2.h), 34 23C2h
     writes, only to the closed list, ending with 23C0h = 1002h.
 
@@ -99,6 +100,7 @@ def fmt(a):
 REF = [0x0108, 0x1000, 0x210b, 0x3004, 0x410b, 0x5004, 0x61e4, 0x713c,
        0x8280, 0x9300, 0xa000, 0xb0a5, 0xc000, 0xd000, 0xe0ff, 0xf0ff,
        0x0000, 0x1000, 0x2014, 0x3001, 0x4000, 0x5041, 0x617a, 0x7047, 0x8000]
+SNAP = list(REF); SNAP[2] = 0x2800   # the fake build's register file at load
 LIST = [(1, 2, 0x000), (1, 3, 0x04c), (1, 4, 0x000), (1, 5, 0x04c), (1, 6, 0x008), (1, 7, 0x008),
         (1, 8, 0x280), (1, 9, 0x600), (1, 0xa, 0x05a), (1, 0xb, 0x05a), (1, 0xe, 0x0ff), (1, 1, 0x008),
         (2, 3, 0x05a), (2, 4, 0x0a5), (2, 5, 0x000), (2, 6, 0x010), (2, 7, 0x010)]
@@ -108,13 +110,14 @@ def expected():
     e = [("R", 0x23c0, 0x1002)] * 2
     def vall():
         for k, sel in enumerate(SEL):
-            e.extend([("W", 0x23c0, sel), ("R", 0x23c0, sel), ("R", 0x23c2, REF[k])])
+            e.extend([("W", 0x23c0, sel), ("R", 0x23c0, sel), ("R", 0x23c2, SNAP[k])])
+    vall()
     vall()
     for blk, idx, test in LIST:
         sel = 0x1000 | idx << 8 | blk
         tw = idx << 12 | test
-        ref = REF[(0 if blk == 1 else 16) + idx]
-        ss, sr = (0x1001, 0x0108) if blk == 1 else (0x1002, 0x0000)
+        ref = SNAP[(0 if blk == 1 else 16) + idx]
+        ss, sr = (0x1001, SNAP[0]) if blk == 1 else (0x1002, SNAP[16])
         e += [("W", 0x23c0, sel), ("R", 0x23c0, sel), ("W", 0x23c2, tw), ("R", 0x23c0, sel),
               ("R", 0x23c2, tw), ("W", 0x23c2, ref), ("R", 0x23c2, ref),
               ("W", 0x23c0, ss), ("R", 0x23c0, ss), ("R", 0x23c2, sr)]
@@ -210,8 +213,8 @@ def main():
         out, acc = step(g, "insmod /wd24/wd24adv.ko s2=1; echo RC=$?; dmesg -c")
         check("s2=1 (dry-run) loads, zero port accesses", "RC=0" in out and len(acc) == 0, f"{len(acc)}")
         pl, _ = g.run("cat /proc/wd24adv/s2")
-        check("s2 dry-run: plan lists 17 registers, 85 + 34 writes",
-              "CUR_POS_Y" in pl and "23C0h 85, 23C2h 34" in pl and "S2 plan" in pl)
+        check("s2 dry-run: plan lists 17 registers, 110 + 34 writes",
+              "CUR_POS_Y" in pl and "23C0h 110, 23C2h 34" in pl and "S2 plan" in pl)
         out, acc = step(g, "rmmod wd24adv; echo RC=$?")
         check("s2 dry-run: rmmod clean, zero accesses", "RC=0" in out and len(acc) == 0)
 
@@ -255,9 +258,12 @@ def main():
         lg = [(m.group(1), int(m.group(2), 16), int(m.group(3), 16))
               for m in re.finditer(r"^\s+([WR])16 (23c[0-7]) ([0-9a-f]{4})", res.replace("\r", ""), re.M)]
         check("fake .ko s2: module access log == expected (all values)", lg == ex, f"{len(lg)} vs {len(ex)}")
-        check("fake .ko s2: 34 23C2h writes, 85 23C0h writes",
+        snapl = next((l for l in res.splitlines() if l.startswith("snapshot (25):")), "")
+        check("fake .ko s2: /proc logs the snapshot (SRC_LO 2800, not the S1 reference)",
+              snapl.split(":", 1)[-1].split() == [f"{v:04x}" for v in SNAP], snapl.strip())
+        check("fake .ko s2: 34 23C2h writes, 110 23C0h writes",
               sum(1 for x in ext if x[0] == "W" and x[1] == 0x23c2) == 34 and
-              sum(1 for x in ext if x[0] == "W" and x[1] == 0x23c0) == 85)
+              sum(1 for x in ext if x[0] == "W" and x[1] == 0x23c0) == 110)
         check("fake .ko s2: nothing on 23C4h-23C7h", not any(x[1] >= 0x23c4 for x in ext))
         vd = vga_data_writes(acc)
         check("fake .ko s2: ZERO VGA data writes", len(vd) == 0, ", ".join(fmt(x) for x in vd) or "none")
