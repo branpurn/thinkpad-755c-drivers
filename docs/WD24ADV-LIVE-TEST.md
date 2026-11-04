@@ -199,35 +199,40 @@ CNTRL1 start, or panel/PM/routing registers.
 Any result other than OK: stop, save the log, cold boot if the text
 console looks wrong.
 
-## S2: write + readback, start bit never set (prepared on the box; not run)
+## S2: write + readback, start bit never set (snapshot design; prepared, not run)
 
 Module `wd24adv.ko`, `s2=1 dryrun=0`, tc755x build (vermagic `6.18.57-tc755x
 mod_unload 486`). Same state as S1: text, no fb driver, no X. Runs once
 inside insmod and puts everything back before insmod returns (nothing stays
 changed; rmmod touches no port). Deviation from the design's S2 row
-("640x480-8 under trial"): run in the text state, like S1, so the restore is
-inside the same insmod and no mode/trial is involved.
+("640x480-8 under trial"): run in the text state, like S1.
 
-Reference = the S1 live readings (2 runs, identical): 23C0h = 1002,
-block 1 `0108 1000 210b 3004 410b 5004 61e4 713c 8280 9300 a000 b0a5 c000 d000 e0ff f0ff`,
-block 2 `0000 1000 2014 3001 4000 5041 617a 7047 8000`.
+Why a snapshot: the first live S2 run (docs/s2-live-2026-11-04-run.txt)
+stopped NOT REFERENCE at SRC_LO (2800, S1 had 210b): the register file is
+not the same across boots. S2 now restores the values it read in the same
+load instead of the S1 reference.
 
 Sequence (`wd24adv_s2.[ch]`; exact order checked by `tests/test_s2.c` and QEMU):
 1. entry check (as S1; 0 data writes). Refused: 0 23Cxh accesses.
 2. R 23C0h twice, 3C0h/3C1h (S1 rules) and 23C0h must be 1002: else no write.
-3. pre-pass: 25 selects + reads; every 23C2h must equal the reference
-   (so CNTRL1 = 0108, ACT 0; CNTRL2 = 000; cursor control = 0000). Else stop
-   with selects only, 23C0h back to 1002.
+3. snapshot: 25 selects + reads (block 1 0-F, block 2 0-8), twice. Refused
+   (SNAPSHOT REFUSED, selects only, no 23C2h write, 23C0h back to 1002) if
+   the passes differ, a word does not echo its index, CNTRL1 has ACT (0800)
+   set or cursor control has enable (0800) set. Snapshot logged in /proc.
 4. per register in the table: W 23C0h sel, R == sel; W 23C2h test, R 23C0h
-   == sel, R 23C2h == test; W 23C2h restore, R == restore; W 23C0h 1001
-   (block 1) / 1002 (block 2), R, R 23C2h == 0108 / 0000.
-5. post-pass (as 3), then W 23C0h 1002, R == 1002.
+   == sel, R 23C2h == test; W 23C2h snapshot value, R == snapshot; W 23C0h
+   1001 / 1002, R, R 23C2h == snapshot CNTRL1 / cursor control.
+5. post-pass: all 25 == snapshot, then W 23C0h 1002, R == 1002.
 
-Any mismatch: stop; write the reference to every register that may hold a
-test value (one write each, read back); post-pass; 23C0h = 1002; result
-MISMATCH or RESTORE_BAD. No retries. Totals: 85 23C0h + 34 23C2h writes.
+Any mismatch: stop; write the snapshot value to every touched register (one
+write each, read back); post-pass; 23C0h = 1002; result MISMATCH or
+RESTORE_BAD. No retries. Totals: 110 23C0h + 34 23C2h writes.
 
-| # | reg | sel | test write | restore write | why the test value is safe |
+Guard: a 23C2h write is allowed only if it is the table's test word for the
+selected register, or (after a good snapshot in this same load) exactly that
+register's snapshot value. The old S1-reference allowance is removed.
+
+| # | reg | sel | test write | restore (S1 ref, for info) | why the test value is safe |
 |---|---|---|---|---|---|
 | 1 | SRC_LO | 1201 | 2000 | 210b | address only; no start |
 | 2 | SRC_HI | 1301 | 304c | 3004 | 4C000h scratch (guard 0-ff) |
@@ -257,18 +262,18 @@ CNTRL1 and cursor control are re-read after every register.
 | 1 | copy over; `sha256sum /tmp/wd24adv.ko` | the recorded sha |
 | 2 | `pidof Xfbdev`, then `kill <PID>`; wd90c24fb `text=1` + rmmod | no X, no fb |
 | 3 | gate line, then `insmod /tmp/wd24adv.ko dryrun=0 s2=1` | RC=0 |
-| 4 | `cat /proc/wd24adv/s2 > /tmp/s2run1.txt; rmmod wd24adv` | `S2 result: OK`, restore read 1002 |
+| 4 | `cat /proc/wd24adv/s2 > /tmp/s2run1.txt; rmmod wd24adv` | `S2 result: OK`, snapshot logged, restore read 1002 |
 | 5 | wd90c24fb back, startx; wd24probe3 baseline | RC=19, same values as before |
 
-Build: commit 45d2f32, tc755x tree, sha256 `ba71dcc718caa8863e7d6c21202b996837864f0f8092a002da1ae8d0c829539c`.
+Build: commit 8f9fcc6 (code), tc755x tree (kobj-vm86), sha256 `f55ee02fbcd3d513006ee92b1996d13e07c507567678d201d87a98d36c6fa89c`.
 Exact serial lines (each logged with plog.sh first; no retries):
 
 ```
 pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
 kill <the Xfbdev PID printed above>
 echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb
-S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = ba71dcc7001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 s2=1; echo RC=$?; }
-cat /proc/wd24adv/s2 > /tmp/s2run1.txt; grep -E "S2 result|restore:|writes|stopped" /tmp/s2run1.txt; dmesg | grep wd24adv
+S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = f55ee02f001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 s2=1; echo RC=$?; }
+cat /proc/wd24adv/s2 > /tmp/s2run1.txt; grep -E "S2 result|snapshot|restore:|writes|stopped" /tmp/s2run1.txt; dmesg | grep wd24adv
 rmmod wd24adv; echo RM=$?
 insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?
 ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & )
