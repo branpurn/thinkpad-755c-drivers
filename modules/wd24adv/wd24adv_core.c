@@ -738,6 +738,10 @@ int wd24_save_planes(struct wd24_ctx *c)
 	u8 gr4, gr5, gr6, seq1, seq2, seq4;
 	int p;
 
+	if (c->no_vram) {
+		wd24_note(c, "REFUSED: video memory locked (BITBLT may be running): power cycle required");
+		return -EIO;
+	}
 	c->tag = "vgastate save_vga_text";
 	gr4 = wd24_read(c, WD24_GR, 0x04);
 	gr5 = wd24_read(c, WD24_GR, 0x05);
@@ -777,6 +781,10 @@ int wd24_restore_planes(struct wd24_ctx *c)
 
 	if (!(c->have & WD24_HAVE_STD))
 		return 0;
+	if (c->no_vram) {	/* registers only: no plane select, no memory */
+		wd24_note(c, "planes NOT restored: video memory locked (BITBLT may be running): power cycle required");
+		return 0;
+	}
 	c->tag = "vgastate restore_vga_text";
 	gr1 = wd24_read(c, WD24_GR, 0x01);
 	gr3 = wd24_read(c, WD24_GR, 0x03);
@@ -950,6 +958,10 @@ int wd24_plan_mode(struct wd24_ctx *c, const struct wd24_mode *m)
 		wd24_note(c, why);
 		return -EINVAL;
 	}
+	if (c->no_vram) {
+		wd24_note(c, "REFUSED: video memory locked (BITBLT may be running): power cycle required");
+		return -EIO;
+	}
 	if (m->status != WD24_PROVEN) {
 		wd24_note(c, "UNPROVEN: disabled, no register is written");
 		return -EOPNOTSUPP;
@@ -1064,7 +1076,7 @@ int wd24_pattern(struct wd24_ctx *c, const struct wd24_mode *m)
 	static u8 line[2][640];
 	u32 x, size, bank, L, end;
 
-	if (c->in_text)
+	if (c->in_text || c->no_vram)
 		return -EINVAL;
 	if (m->ext == WD24_EXT_BIOS && (m->flags & WD24M_DIRECT))
 		return pattern_direct(c, m);

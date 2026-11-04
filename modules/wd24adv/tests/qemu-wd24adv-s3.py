@@ -243,6 +243,39 @@ def main():
         check("fake .ko s3: ZERO VGA data writes", len(vd) == 0, ", ".join(fmt(x) for x in vd) or "none")
         out, acc = step(g, "rmmod wd24adv_qemufake; echo RC=$?")
         check("fake .ko: rmmod clean, zero accesses", "RC=0" in out and len(acc) == 0)
+
+        # timeout, then the (fake) BITBLT goes idle: normal path, rmmod OK
+        out, acc = step(g, "insmod /wd24/wd24adv-qemufake.ko dryrun=0 s3=1 fake_hang=2; echo RC=$?; dmesg -c")
+        res, _ = g.run("cat /proc/wd24adv/s3")
+        seqlog.append("\n# fake_hang=2\n" + out + "\n" + res)
+        check("fake_hang=2: TIMEOUT, then seen idle (unlocked)", "RC=0" in out and "S3 result: TIMEOUT" in res
+              and "IDLE seen" in res and "LOCKED" not in out, next((l for l in res.splitlines() if "idle" in l), ""))
+        ext = [x for x in acc if x[1] in EXT]
+        st = max(i for i, x in enumerate(ext) if x[0] == "W" and x[1] == 0x23c2)
+        check("fake_hang=2: no 23Cxh write after the start that timed out", not any(x[0] == "W" for x in ext[st + 1:]))
+        check("fake_hang=2: ZERO VGA data writes", len(vga_data_writes(acc)) == 0)
+        out, _ = g.run("rmmod wd24adv_qemufake; echo RC=$?")
+        check("fake_hang=2: rmmod OK (not pinned)", "RC=0" in out and not loaded(g))
+
+        # timeout, BITBLT never finishes: LOCKED, sticky, pinned (last: stays loaded)
+        out, acc = step(g, "insmod /wd24/wd24adv-qemufake.ko dryrun=0 s3=1 fake_hang=1; echo RC=$?; dmesg -c")
+        res, _ = g.run("cat /proc/wd24adv/s3")
+        seqlog.append("\n# fake_hang=1\n" + out + "\n" + res)
+        check("fake_hang=1: TIMEOUT, STILL BUSY, LOCKED, power cycle required", "RC=0" in out and
+              "S3 result: TIMEOUT" in res and "STILL BUSY" in res and "LOCKED" in out and "power cycle required" in out)
+        ext = [x for x in acc if x[1] in EXT]
+        st = max(i for i, x in enumerate(ext) if x[0] == "W" and x[1] == 0x23c2)
+        check("fake_hang=1: no 23Cxh write after the start", not any(x[0] == "W" for x in ext[st + 1:]))
+        check("fake_hang=1: nothing on 23C4h-23C7h", not any(x[1] >= 0x23c4 for x in ext))
+        check("fake_hang=1: ZERO VGA data writes", len(vga_data_writes(acc)) == 0)
+        # the fake build has no live=1 control file; control/mode gating is host + review only
+        out, _ = g.run("ls /proc/wd24adv/")
+        check("fake_hang=1: s3 report present, no control file (fake build)", "s3" in out and "control" not in out)
+        out, acc = step(g, "rmmod wd24adv_qemufake; echo RC=$?; dmesg -c")
+        check("fake_hang=1: rmmod refused (pinned), still loaded, zero accesses",
+              "RC=0" not in out and loaded(g) and len(acc) == 0)
+        out, acc = step(g, "insmod /wd24/wd24adv-qemufake.ko; echo RC=$?")
+        check("fake_hang=1: reload refused (still loaded), zero accesses", "RC=0" not in out and len(acc) == 0)
     except (TimeoutError, EOFError) as e:
         check("guest responded", False, str(e))
     finally:

@@ -295,6 +295,32 @@ int main(void)
 		CHECK(wd24s3_guard_out(&s, WD24S1_P_INDEX, 0x1002) && wd24s3_guard_out(&s, WD24S1_P_DATA, 0x1000),
 		      "hang op %d: guard closed after the timeout", i);
 		only_listed("timeout");
+		/* idle re-check while still hung: reads only, busy */
+		m.writes_after_timeout = 0;
+		CHECK(wd24s3_idle_poll(&s) == 0 && !s.idle_seen && m.writes_after_timeout == 0,
+		      "hang op %d: idle re-check busy, zero writes", i);
+		CHECK(s.idle_last_ix == 0x1001 && s.idle_last_spins >= WD24S3_SPINS, "hang op %d: re-check bounded (%u)", i,
+		      s.idle_last_spins);
+		CHECK(wd24s3_idle_poll(&s) == 0 && s.idle_checks == 2 && m.writes_after_timeout == 0,
+		      "hang op %d: second re-check still busy, still zero writes", i);
+		/* engine finishes later: seen idle */
+		m.busy = 3;
+		CHECK(wd24s3_idle_poll(&s) == 1 && s.idle_seen && m.writes_after_timeout == 0,
+		      "hang op %d: engine idle later: seen idle, zero writes", i);
+		CHECK(wd24s3_idle_poll(&s) == 1 && s.idle_checks == 3, "hang op %d: idle sticky, no more access", i);
+	}
+	/* 23C0h select changed by someone else: unknown, stays busy */
+	reset(); m.hang_op = 1; run();
+	m.ix = 0x1002; m.busy = 0;
+	CHECK(wd24s3_idle_poll(&s) == 0 && !s.idle_seen && m.writes_after_timeout == 0,
+	      "23C0h changed: re-check refuses (unknown), zero writes");
+	/* not dead: no access at all */
+	reset(); r = run();
+	{
+		int nr = m.ndw;
+
+		CHECK(!s.dead && wd24s3_idle_poll(&s) == 1 && s.idle_checks == 0 && m.ndw == nr,
+		      "not dead: re-check returns idle without access");
 	}
 
 	/* engine wrong: width + 1 -> VRAM mismatch, stopped after op 1, restored */

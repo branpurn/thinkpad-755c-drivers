@@ -195,6 +195,7 @@ struct wd24_ctx {
 	bool in_text;		/* chip is (believed) in the BIOS text state */
 	bool trial_pending;	/* a mode set waits for confirm or expiry */
 	bool confirmed;		/* the pending mode was confirmed */
+	bool no_vram;		/* sticky: BITBLT may still run; no video memory access */
 	/* entry state the next plan expects (set at the end of each plan) */
 	u8 exp_misc, exp_gr0f, exp_cr29, exp_sr06;
 	struct wd24_std vga;	/* saved standard registers */

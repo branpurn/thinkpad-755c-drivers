@@ -147,6 +147,12 @@ static u8 *hw_planes;
 static void __iomem *vmem;
 static bool have_ports;
 static bool hw_dead;	/* a live load failed after writing: restored, inert */
+/* sticky: an S3 BITBLT timed out and was not seen idle afterwards; no
+ * video memory access of any kind, module pinned (rmmod refused) */
+static bool vram_dead;
+static bool s3_pinned;
+static struct wd24s3 *s3st;
+static int vram_gate(const char *what);
 static struct wd24_io hw_io;
 static char *live_txt;
 static size_t live_len;
@@ -156,7 +162,6 @@ static size_t s1_len;
 static struct wd24s2 *s2st;
 static char *s2_txt;
 static size_t s2_len;
-static struct wd24s3 *s3st;
 static char *s3_txt;
 static size_t s3_len;
 static u8 *s3_mem;	/* 3 x 64 KiB: pre, model, read buffer */
@@ -517,6 +522,8 @@ static int hw_mode(const struct wd24_mode *m)
 		return -EBUSY;	/* text first; one trial timer at a time */
 	if (hw->nmismatch)
 		return -EIO;	/* after any readback mismatch: text/rmmod only */
+	if (vram_gate("mode set"))
+		return -EIO;
 	err = hw_run(OP_MODE, m);
 	if (!err) {
 		queue_delayed_work_on(WORK_CPU_UNBOUND, system_percpu_wq,
@@ -530,8 +537,10 @@ static int hw_mode(const struct wd24_mode *m)
 static void trial_fn(struct work_struct *w)
 {
 	mutex_lock(&hw_lock);
-	if (hw && hw->trial_pending)
+	if (hw && hw->trial_pending) {
+		vram_gate("trial expiry: plane restore");	/* sets no_vram if locked */
 		hw_run(OP_EXPIRE, NULL);
+	}
 	mutex_unlock(&hw_lock);
 }
 
@@ -552,6 +561,8 @@ static ssize_t control_write(struct file *f, const char __user *b, size_t n,
 		err = -ENODEV;
 	else if (hw_dead)
 		err = -EIO;
+	else if (vram_gate("control"))
+		err = -EIO;	/* every command, sticky */
 	else if (!strcmp(cmd, "confirm"))
 		err = wd24_confirm(hw);
 	else if (!strcmp(cmd, "text"))
@@ -952,7 +963,12 @@ static void s3_report(const char *pre)
 		APPEND(s3_txt, len, "restore: wrote %04x, read %04x (%s)\n", s->saved & 0x1fff,
 		       s->restore_rb, s->restore_rb == s->saved ? "equal" : "DIFFERENT");
 	if (s->dead)
-		APPEND(s3_txt, len, "DEAD: BITBLT timed out; nothing written after the start; text comes back at trial expiry\n");
+		APPEND(s3_txt, len, "DEAD: BITBLT timed out; nothing written after the start\n");
+	if (s->dead)
+		APPEND(s3_txt, len, "idle re-check (reads only): %u checks, last 23C0h %04x, %u polls, CNTRL1 %04x: %s\n",
+		       s->idle_checks, s->idle_last_ix, s->idle_last_spins, s->idle_last_c1,
+		       s->idle_seen ? "IDLE seen: video memory unlocked, normal text restore" :
+		       !vram_dead ? "busy, not locked yet" : "STILL BUSY: video memory LOCKED (registers-only restore, rmmod refused): power cycle required");
 	APPEND(s3_txt, len, "23C0h writes %u, 23C2h writes %u (starts %u), PR0A writes %u, 23C4h 0, refusals %u, reads %u (polls %u), restore fails %x\n",
 	       s->wix, s->wdata, s->wgo, s->wbank, s->refused, s->reads, s->polls, s->restore_fail);
 	APPEND(s3_txt, len, "access log (in order; polls: first and last only; W8 03cf 09vv = PR0A):\n");
@@ -960,6 +976,47 @@ static void s3_report(const char *pre)
 		APPEND(s3_txt, len, "  %c%u %04x %04x\n", s->log[k].w ? 'W' : 'R',
 		       s->log[k].width, s->log[k].port, s->log[k].val);
 	s3_len = len;
+}
+
+static bool s3_region;	/* 23C0-23C3 held by s3_live */
+
+/* caller holds hw_lock.  0: video memory may be accessed.  After an S3
+ * timeout, a bounded read-only ACT poll decides; still busy -> sticky
+ * vram_dead (hw->no_vram: registers-only restore; every memory path
+ * refused; module stays pinned). */
+static int vram_gate(const char *what)
+{
+	bool got = false;
+
+	if (!vram_dead && s3st && s3st->dead && !s3st->idle_seen) {
+		if (!s3_region && request_region(WD24S1_P_INDEX, 4, "wd24adv s3 idle"))
+			got = true;
+		if (s3_region || got)
+			wd24s3_idle_poll(s3st);
+		if (got)
+			release_region(WD24S1_P_INDEX, 4);
+		if (s3st->idle_seen) {
+			pr_info("S3: BITBLT seen idle (%s; %u polls): video memory unlocked\n",
+				what, s3st->idle_last_spins);
+			if (s3_pinned) {
+				module_put(THIS_MODULE);
+				s3_pinned = false;
+			}
+		} else {
+			vram_dead = true;
+			pr_crit("S3: BITBLT still busy (%s; 23C0h %04x, CNTRL1 %04x): video memory LOCKED, registers-only restore, rmmod refused: power cycle required\n",
+				what, s3st->idle_last_ix, s3st->idle_last_c1);
+		}
+		if (s3_txt)
+			s3_report(NULL);
+	}
+	if (vram_dead) {
+		if (hw)
+			hw->no_vram = true;
+		pr_err("%s: video memory access refused (S3 BITBLT timeout): power cycle required\n", what);
+		return -EIO;
+	}
+	return 0;
 }
 
 #ifdef WD24S1_QEMU_FAKE
@@ -1020,6 +1077,7 @@ static void s3_live(const struct wd24_mode *m)
 		pr_err("S3: not run: %s\n", pre);
 		return;
 	}
+	s3_region = true;
 	console_lock();
 #ifndef WD24S1_QEMU_FAKE
 	hw->be->begin(hw);
@@ -1030,6 +1088,12 @@ static void s3_live(const struct wd24_mode *m)
 	hw->be->end(hw);
 #endif
 	console_unlock();
+	if (s3st->dead) {
+		__module_get(THIS_MODULE);	/* rmmod refused until seen idle */
+		s3_pinned = true;
+		vram_gate("after the S3 timeout");
+	}
+	s3_region = false;
 	release_region(WD24S1_P_INDEX, 4);
 	s3_report(NULL);
 	pr_info("S3: %s%s%s; ops verified %u; 23C2h writes %u (starts %u), PR0A writes %u; details: /proc/wd24adv/s3\n",
@@ -1291,6 +1355,7 @@ static int __init wd24adv_init(void)
 		      !proc_create_data("control", 0200, pdir, &control_ops, NULL)))) {
 		if (live && !hw_dead) {
 			mutex_lock(&hw_lock);
+			vram_gate("load failure: plane restore");
 			hw_run(OP_TEXT, NULL);
 			mutex_unlock(&hw_lock);
 		}
@@ -1349,7 +1414,9 @@ static void __exit wd24adv_exit(void)
 		pdir = NULL;
 		cancel_delayed_work_sync(&trial_work);
 		mutex_lock(&hw_lock);
-		hw_run(OP_TEXT, NULL);
+		/* not reached while pinned; defensive: registers only if locked */
+		if (!vram_gate("rmmod: plane restore") || !hw->in_text)
+			hw_run(OP_TEXT, NULL);
 		mutex_unlock(&hw_lock);
 	}
 	free_all();

@@ -238,6 +238,36 @@ static int wait_idle(struct wd24s3 *s, u32 *spins, bool *busy, u16 *last)
 	return n < WD24S3_SPINS ? 0 : -ETIMEDOUT;
 }
 
+int wd24s3_idle_poll(struct wd24s3 *s)
+{
+	u32 n;
+	u16 v = WD24S1_ACT;
+
+	if (!s->dead || s->idle_seen)
+		return 1;
+	s->idle_checks++;
+	s->idle_last_ix = in16(s, WD24S1_P_INDEX);
+	s->idle_last_spins = 0;
+	s->idle_last_c1 = 0xffff;
+	if (s->idle_last_ix != SEL_CNTRL1)
+		return 0;	/* select not as left at the start: unknown */
+	for (n = 0; n < WD24S3_SPINS; n++) {
+		v = s->io->rd16(s->io->priv, WD24S1_P_DATA);
+		s->reads++;
+		s->polls++;
+		if (!(v & WD24S1_ACT))
+			break;
+	}
+	logacc(s, false, 16, WD24S1_P_DATA, v);
+	s->idle_last_spins = n;
+	s->idle_last_c1 = v;
+	if (n < WD24S3_SPINS) {
+		s->idle_seen = true;
+		return 1;
+	}
+	return 0;
+}
+
 static int read_all(struct wd24s3 *s, u16 *out, unsigned int *n)
 {
 	unsigned int k;
@@ -497,6 +527,7 @@ final:
 
 #ifdef __KERNEL__
 #ifdef WD24S1_QEMU_FAKE
+#include <linux/moduleparam.h>
 /*
  * QEMU TEST BUILD ONLY (wd24adv-qemufake.ko, never installed): real
  * inw()/outw() for the trace; values from a register file preset to the
@@ -512,6 +543,11 @@ static u16 fake_reg[WD24S1_NSEL] = {
 	0x8000,
 };
 static unsigned int fake_busy;
+/* 0: busy 3 reads per op; 1: the first start never finishes; 2: the first
+ * start stays busy for SPINS + 100 reads (S3 times out, then goes idle) */
+static int fake_hang;
+module_param(fake_hang, int, 0444);
+static bool fake_started;
 
 static void fake_blt(u16 c1)
 {
@@ -531,6 +567,9 @@ static void fake_blt(u16 c1)
 					(u8)fake_reg[0xa] : wd24s3_fake_vram[sa];
 		}
 	fake_busy = 3;
+	if (!fake_started && fake_hang)
+		fake_busy = fake_hang == 1 ? UINT_MAX : WD24S3_SPINS + 100;
+	fake_started = true;
 }
 
 static u16 k_inw(void *priv, u16 port)
@@ -541,7 +580,8 @@ static u16 k_inw(void *priv, u16 port)
 	if (port == WD24S1_P_INDEX)
 		return fake_ix;
 	if (k == 0 && fake_busy) {
-		fake_busy--;
+		if (fake_busy != UINT_MAX)
+			fake_busy--;
 		return fake_reg[0] | WD24S1_ACT;
 	}
 	return k < 0 ? 0xffff : fake_reg[k];

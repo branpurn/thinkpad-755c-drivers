@@ -101,6 +101,11 @@ struct wd24s3 {
 	const struct wd24s3_mem *mem;
 	u8 *pre, *model, *buf;		/* WD24S3_WIN bytes each (caller) */
 	bool have_saved, snap_ok, armed, go, restored, dead;
+	/* after a timeout: idle re-check (reads only) */
+	bool idle_seen;
+	unsigned int idle_checks;
+	u32 idle_last_spins;
+	u16 idle_last_ix, idle_last_c1;
 	u16 saved, cur;
 	u16 snap[WD24S1_NSEL], snap2[WD24S1_NSEL], post[WD24S1_NSEL];
 	unsigned int nsnap, nsnap2, npost;
@@ -128,6 +133,10 @@ int wd24s3_guard_out(const struct wd24s3 *s, u16 port, u16 val);
 void wd24s3_init(struct wd24s3 *s, const struct wd24s1_io *io,
 		 const struct wd24s3_mem *mem, u8 *pre, u8 *model, u8 *buf);
 int wd24s3_run(struct wd24s3 *s);	/* 0 = OK */
+/* after TIMEOUT: reads only (23C0h must still be 1001h, then <= SPINS
+ * 23C2h reads); 1 = CNTRL1 ACT seen clear (sets idle_seen), 0 = busy or
+ * unknown.  Not dead or already idle: 1, no access. */
+int wd24s3_idle_poll(struct wd24s3 *s);
 const char *wd24s3_res_name(enum wd24s3_res r);
 void wd24s3_apply(const struct wd24s3_op *o, u8 *win);	/* model, bank 6 */
 u32 wd24s3_sum(const u8 *p, u32 n, u32 h);		/* FNV-1a */
