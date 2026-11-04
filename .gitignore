@@ -24,4 +24,5 @@ lowmem.bin
 /modules/wd24adv/tests/test_vga
 /modules/wd24adv/tests/test_engine
 /modules/wd24adv/tests/test_s1
+/modules/wd24adv/tests/test_s2
 /.venv*/

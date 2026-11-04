@@ -155,7 +155,7 @@ watching):
 
 | # | command (as root) | expected | evidence | risk |
 |---|---|---|---|---|
-| 1 | Stop X: do not start it, or quit it and `pkill Xorg`; check `pidof Xorg` prints nothing. | no X | – | none |
+| 1 | Stop X: do not start it, or quit it: `pidof Xfbdev` gives its PID, then `kill <that PID>` (the exact PID; never `pkill`/`pkill -f`); check `pidof Xfbdev` prints nothing. | no X | – | none |
 | 2 | If wd90c24fb is loaded: `echo 1 > /sys/module/wd90c24fb/parameters/text`, wait 2 s, `rmmod wd90c24fb`. Check `grep -c wd90c24fb /proc/modules` = 0 and `cat /proc/fb` is empty. Also no vga16fb. | text console back via vgacon | Q (fake=3, `make wd24adv-qemu`); **L** (2026-11-02) | low-medium: if the console does not come back, cold boot and start at step 3 without loading wd90c24fb at all |
 | 3 | `dmesg -n 1; printf '\033[9;0]' > /dev/tty1` (no console blanking), then `insmod wd24adv.ko dryrun=0 live=1; dmesg \| tail -20; cat /proc/wd24adv/live` | `LIVE: text state saved (4 planes, DAC, VGA + ext regs); trial 15 s`, `live load: 0 (port data writes 46, index writes 224, mismatches 0)` (model counts; seen exactly live, **L**). The panel may blink once (screen off during the plane copy). If the chip is not in the expected state: `entry check: ...` and `REFUSED by the entry check: no data register written`, insmod fails `No such device` (twice in dmesg: busybox insmod retries). | H (model identical after load); Q (refusal, zero data writes); the load's data writes are value-identical idioms + the vgastate plane-copy sequence that wd90c24fb's load already runs on the 755C (L) | low |
 | 4 | `rmmod wd24adv; dmesg \| tail` | `live text: 0 (... mismatches 0)`; text console unchanged | H, **L** | low |
@@ -195,6 +195,70 @@ CNTRL1 start, or panel/PM/routing registers.
 | 4 | `cat /proc/wd24adv/s1; dmesg \| grep wd24adv` | `S1 result: OK` (or REFUSED/STOPPED/UNSTABLE/RESTORE_BAD with the reason) |
 | 5 | `rmmod wd24adv` | no port access |
 | 6 | `insmod wd24adv.ko dryrun=0 s1=1; cat /proc/wd24adv/s1; rmmod wd24adv` | only if 4 was OK: same S at entry, same values |
+
+Any result other than OK: stop, save the log, cold boot if the text
+console looks wrong.
+
+## S2: write + readback, start bit never set (prepared on the box; not run)
+
+Module `wd24adv.ko`, `s2=1 dryrun=0`, tc755x build (vermagic `6.18.57-tc755x
+mod_unload 486`). Same state as S1: text, no fb driver, no X. Runs once
+inside insmod and puts everything back before insmod returns (nothing stays
+changed; rmmod touches no port). Deviation from the design's S2 row
+("640x480-8 under trial"): run in the text state, like S1, so the restore is
+inside the same insmod and no mode/trial is involved.
+
+Reference = the S1 live readings (2 runs, identical): 23C0h = 1002,
+block 1 `0108 1000 210b 3004 410b 5004 61e4 713c 8280 9300 a000 b0a5 c000 d000 e0ff f0ff`,
+block 2 `0000 1000 2014 3001 4000 5041 617a 7047 8000`.
+
+Sequence (`wd24adv_s2.[ch]`; exact order checked by `tests/test_s2.c` and QEMU):
+1. entry check (as S1; 0 data writes). Refused: 0 23Cxh accesses.
+2. R 23C0h twice, 3C0h/3C1h (S1 rules) and 23C0h must be 1002: else no write.
+3. pre-pass: 25 selects + reads; every 23C2h must equal the reference
+   (so CNTRL1 = 0108, ACT 0; CNTRL2 = 000; cursor control = 0000). Else stop
+   with selects only, 23C0h back to 1002.
+4. per register in the table: W 23C0h sel, R == sel; W 23C2h test, R 23C0h
+   == sel, R 23C2h == test; W 23C2h restore, R == restore; W 23C0h 1001
+   (block 1) / 1002 (block 2), R, R 23C2h == 0108 / 0000.
+5. post-pass (as 3), then W 23C0h 1002, R == 1002.
+
+Any mismatch: stop; write the reference to every register that may hold a
+test value (one write each, read back); post-pass; 23C0h = 1002; result
+MISMATCH or RESTORE_BAD. No retries. Totals: 85 23C0h + 34 23C2h writes.
+
+| # | reg | sel | test write | restore write | why the test value is safe |
+|---|---|---|---|---|---|
+| 1 | SRC_LO | 1201 | 2000 | 210b | address only; no start |
+| 2 | SRC_HI | 1301 | 304c | 3004 | 4C000h scratch (guard 0-ff) |
+| 3 | DST_LO | 1401 | 4000 | 410b | address only |
+| 4 | DST_HI | 1501 | 504c | 5004 | scratch 4C000h |
+| 5 | DIM_X | 1601 | 6008 | 61e4 | 8 px (guard 1..2048) |
+| 6 | DIM_Y | 1701 | 7008 | 713c | 8 lines |
+| 7 | PITCH | 1801 | 8280 | 8280 | guard set {280}: same value, weak proof |
+| 8 | ROP | 1901 | 9600 | 9300 | guard set (copy 300 / xor 600) |
+| 9 | FG | 1A01 | a05a | a000 | colour latch |
+| 10 | BG | 1B01 | b05a | b0a5 | colour latch |
+| 11 | MASK | 1E01 | e0ff | e0ff | guard set {ff}: same value, weak proof |
+| 12 | CNTRL2 | 1101 | 1008 | 1000 | guard set {000,008}; b7 quick start never |
+| 13 | CUR primary | 1302 | 305a | 3001 | colour; cursor off |
+| 14 | CUR secondary | 1402 | 40a5 | 4000 | colour; cursor off |
+| 15 | CUR origin | 1502 | 5000 | 5041 | hotspot, mask 7df; cursor off |
+| 16 | CUR pos X | 1602 | 6010 | 617a | 0..639; cursor off |
+| 17 | CUR pos Y | 1702 | 7010 | 7047 | 0..479; cursor off |
+
+Never written: CNTRL1 (1001, holds ACT/start), block 1 C/D/F, cursor control
+(1002, holds enable), cursor pattern address (1102/1202: references 000/014
+are outside the guard set {400}/{13}), block 2 idx 8; 23C4h never accessed.
+CNTRL1 and cursor control are re-read after every register.
+
+| # | command (as root, ttyS0) | expected |
+|---|---|---|
+| 1 | copy over; `sha256sum /tmp/wd24adv.ko` | the recorded sha |
+| 2 | `pidof Xfbdev`, then `kill <PID>`; wd90c24fb `text=1` + rmmod | no X, no fb |
+| 3 | gate line, then `insmod /tmp/wd24adv.ko dryrun=0 s2=1` | RC=0 |
+| 4 | `cat /proc/wd24adv/s2 > /tmp/s2run1.txt; rmmod wd24adv` | `S2 result: OK`, restore read 1002 |
+| 5 | wd90c24fb back, startx; wd24probe3 baseline | RC=19, same values as before |
 
 Any result other than OK: stop, save the log, cold boot if the text
 console looks wrong.
