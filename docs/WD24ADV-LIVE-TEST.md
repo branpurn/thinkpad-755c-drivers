@@ -372,14 +372,14 @@ and every later step prints SKIP/STOPPED. Same preparation (no X,
 wd90c24fb text=1 + rmmod), build d9c0884 / sha above. Log each line with
 plog.sh first. Pause ~10 s on the text console between steps.
 
-What to see (pattern=1: 16 colour bars of 40 pixels, odd lines in reverse
-order, so fine horizontal stripes over the bars):
+What to see (pattern=1, wd24adv_core.c wd24_pattern/pattern_direct; panel
+results as recorded live on 2026-11-02):
 
 | step | mode | on screen during the ~15 s trial |
 |---|---|---|
-| 1 | 640x480-8 | full panel: 16 narrow bars, no black band |
-| 2 | 640x400-8 | the same 16 bars, black bands top and bottom (centred) |
-| 3 | 320x200-8 | 8 bars, each twice as wide (low res), full panel |
+| 1 | 640x480-8 | 16 vertical bars of 40 px over the whole frame, no black band; from line ~410 (256 KiB) down the bar order is reversed (as recorded: "bars over the whole frame") |
+| 2 | 640x400-8 | 16 bars of 40 px, letterboxed (black bands top and bottom), no reversed part (frame < 256 KiB) |
+| 3 | 320x200-8 | 16 bars of 20 px (pixel-doubled), letterboxed, as recorded with 5f275b4/5767c74 |
 | 4 (optional) | 640x480-8 + S3 | as step 1 (S3 is off screen) |
 
 After each: the text console comes back unchanged, then STEPn-OK.
@@ -397,11 +397,15 @@ ru 640x480-8 s3=1; cat /proc/wd24adv/s3 > /tmp/rus3.txt; grep -E "S3 result|DEAD
 [ -e /tmp/ru.stop ] && echo "STOPPED: check before rmmod" || { rmmod wd24adv && echo STEP4-OK || touch /tmp/ru.stop; }
 [ -e /tmp/ru.stop ] && echo "STOPPED: do not load wd90c24fb until checked" || { insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?; }
 ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & )
-dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u
+i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X
+pidof Xfbdev >/dev/null && { dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u; }
 ```
 
-To skip S3, do not send its two lines. Expected end: X back, wd24probe3
-RC=19 with the baseline (3CC=67 GR0F=00 GR0E=40 SR06=0F CR11=AE CR29=85).
+To skip S3, do not send its two lines. Expected end: wd90c24fb RC=0, X-UP, then
+the X baseline (as in docs/s2-live-2026-11-04-run2.txt): insmod RC=19 (the
+probe always unloads itself) with `result=ok`, 3CC=E3 GR0F=05 GR0E=01
+CR11=8C CR29=85 CR34=A0 PR18=C7 PR19=54 SR06=0F. (3CC=67 GR0F=00 is the
+text state, not this one.) NO-X: stop, no probe.
 STOP-<mode>: that step failed and the module may still be loaded; read dmesg
 and /proc/wd24adv/live and go no further; cold boot if the text console
 looks wrong. S3 TIMEOUT: as in the S3 section (STILL BUSY: power off,
