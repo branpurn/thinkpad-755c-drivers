@@ -283,6 +283,72 @@ dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | grep wd24pro
 Any result other than OK: stop, save the log, cold boot if the text
 console looks wrong.
 
+## S3: first BITBLT, off screen (prepared 2026-11-04, not run)
+
+`insmod wd24adv.ko dryrun=0 live=1 mode=640x480-8 s3=1`: after the PROVEN
+640x480-8 trial mode set and test pattern (15 s trial timer already queued),
+inside the same insmod, three BITBLT operations in the off-screen scratch
+bank 60000h-6FFFFh (PR0A 60h), each verified by reading video memory back:
+
+| op | what | CNTRL1 |
+|---|---|---|
+| 1 | FILL 8x8 at 60000h, colour 3Ch | 0908 |
+| 2 | FILL 32x32 at 60200h, colour C3h | 0908 |
+| 3 | COPY 32x32 60200h -> 60100h (forward, dst < src) | 0900 |
+
+Why 60000h: it is the area wd90c24fb's own BITBLT self-test fills and copies
+on every load (wd_blt_selftest: 64x4 at 60000h -> 61000h, pitch 640), above
+the 640x480x8 frame (0-4AFFFh, CRTC start 0) and the hardware cursor pattern
+(50000h, snapshot 014h << 14), and at or above 256 KiB, outside the text
+state and outside the four 64 KiB planes wd24adv saves/restores. Its
+contents are overwritten by every wd90c24fb load, so they are not restored.
+The design's 4C000h slot (4 KiB) is too small for 32x32 at pitch 640.
+
+Entry: 23C0h read twice == 1002h, snapshot of the 25 words read twice
+(agree, echo, ACT=0, cursor enable=0). Banks 0-5 checksummed before and
+after (must be equal); bank 6 read twice (must agree); after each op the
+whole of bank 6 must equal the model, and the op must change >= 1 byte.
+
+Exact 23C2h writes (46, block 1 only):
+
+```
+op1  2000 3060 4000 5060 8280 6008 7008 e0ff 9300 1000 a03c 0908
+op2  2200 3060 4200 5060 8280 6020 7020 e0ff 9300 1000 a0c3 0908
+op3  2200 3060 4100 5060 8280 6020 7020 e0ff 9300 1000 0900
+rest 1000 210b 3004 410b 5004 61e4 713c 8280 9300 a000 e0ff
+```
+
+CNTRL1 (with ACT) is the only new register and is written last, once per op,
+after ACT=0 was read. 23C0h: selects 1001h..1F01h/1002h..1802h (block 2
+read only) and a final 1002h. GR09 (PR0A): 00h..60h for readback, then 00h.
+Never written: block 2, BG, C, D, F, 23C4h; no abort.
+
+Timeout: <= 200000 polls (~0.2 s, as wd90c24fb) for ACT=0. On timeout S3
+stops: no further write of any kind (no abort, no restore, no PR0A, no
+23C0h) and no video memory access; /proc/wd24adv/s3 shows TIMEOUT/DEAD and
+the trial expiry restores the text state as for any trial mode.
+
+Build: commit 66b17cc (code), tc755x tree (kobj-vm86), vermagic
+`6.18.57-tc755x mod_unload 486`, sha256
+`f6fd81565c8bf5c7d659a1cb57bf529b00ce29912abad75654bab1f20c1f40b5`.
+Same preparation as S2 (no X, wd90c24fb text=1 + rmmod). Exact serial
+lines (each logged with plog.sh first; no retries):
+
+```
+pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
+kill <the Xfbdev PID printed above>
+echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb
+S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = f6fd8156001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s3=1; echo RC=$?; }
+sleep 20; cat /proc/wd24adv/s3 > /tmp/s3run1.txt; cat /proc/wd24adv/live > /tmp/s3live1.txt; grep -E "S3 result|op [123]|DEAD|restore:|writes" /tmp/s3run1.txt; dmesg | grep wd24adv
+rmmod wd24adv; echo RM=$?
+insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?
+```
+
+Expected: RC=0, the test pattern for ~15 s (the screen is not touched by
+S3), `S3 result: OK`, three ops VERIFIED, restore read 1002, text back at
+expiry, RM=0. Any other result: stop, save the files, cold boot if the
+text console looks wrong.
+
 ## Abort and revert
 
 1. Picture wrong / panel blank after a mode set: **do nothing for 15 s**;

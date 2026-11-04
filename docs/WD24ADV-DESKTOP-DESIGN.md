@@ -397,6 +397,11 @@ still cheaper than whole-frame copies.
 
 ## 7. Staged plan (each stage small, revertible and gated)
 
+Note (S3, 2026-11-04): S3 uses 60000h-6FFFFh, wd90c24fb's own BITBLT self-test
+area (proven on every load), not 4C000h: 4 KiB cannot hold 32x32 at pitch
+640, and 60000h is above the frame and the cursor pattern (50000h) and
+outside the 256 KiB text/plane save. See WD24ADV-LIVE-TEST.md "S3".
+
 General rules for all stages:
 
 - Brandon approves each stage before it touches the 755C.
@@ -412,7 +417,7 @@ General rules for all stages:
 | **S0** model (box only) | Nothing | The engine model, the guard masks for XB/XC, validator fuzzing, the address math and direction choice. Done: `wd24adv_engine.[ch]` (not in Kbuild, `WD24X_LIVE_ALLOWED 0`) and `tests/test_engine.c` against the 23C0h model in `tests/vgamodel.c` | n/a |
 | **S1** read-only | wd24adv (live, text mode, no fb driver). Saves 23C0h, reads block 1 idx 0–Fh and block 2 idx 0–8, restores 23C0h. Run twice, compare | Registers are readable, which ones are stable, the busy bit is idle, 23C0h restores exactly. **The only writes are the 23C0h selects** | Nothing visible changes. Any oddity: stop. **Run on the 755C 2026-11-02: OK, twice, identical (docs/s1-live-2026-11-02-run.txt)** |
 | **S2** write + readback, no start | 640x480-8 under trial. Write each XB register except CNTRL1-start, plus XC position/address with enable **off**. Read back, then restore saved values | Per-register readback masks for §1.3, and that writes without ACT have no visible effect | Trial auto-revert at 15 s. Mismatch → `accel_dead`, revert. **Prepared on the box (wd24adv `s2=1`): text state, like S1, restore inside the same insmod to a snapshot read twice in the same load (refused if unstable, ACT or cursor enable set); 17 registers, 110 + 34 writes; model + QEMU tested; first live run stopped NOT REFERENCE (SRC_LO 2800); snapshot version run OK on the 755C 2026-11-04 (17/17 test words read back, all restored). See WD24ADV-LIVE-TEST.md S2** |
-| **S3** first blit, off screen | 640x480-8 under trial. FILL 8x8 in scratch at 4C000h, then 32x32, then COPY scratch → scratch. Wait after each op, VRAM readback vs model | The engine starts and stops within bound, and writes exactly the model's bytes and nothing outside | Screen untouched (the frame stays the test pattern). Timeout → latch + revert |
+| **S3** first blit, off screen | 640x480-8 under trial. FILL 8x8 in scratch (implemented at 60000h, see note), then 32x32, then COPY scratch → scratch. Wait after each op, VRAM readback vs model | The engine starts and stops within bound, and writes exactly the model's bytes and nothing outside | Screen untouched (the frame stays the test pattern). Timeout → latch + revert |
 | **S4** on-screen fill/copy | Same, but FILL bars onto the frame, then forward and backward overlapping COPYs. Checksum vs model, and Brandon looks | Visible correctness, overlap direction, all ROPs used by X (copy, xor, and, or, invert, clear, set) | Trial revert |
 | **S5** host data | MONO expansion (opaque, then transparent), then HOSTCOL, small to 64x64, exact word counts | The host port neither stalls nor locks the bus, the bit order and packing are right, transparency works | Trial revert. Run only after S3/S4 are clean, because this is the riskiest op type |
 | **S6** fbdev + fault-banked mmap, **no accel** | Unaccelerated Xfbdev on wd24adv, started by hand (not via the boot autostart) | The CPU path is correct, there are no fault storms, and VT switch, exit and `kill -9` of the X PID all restore text | Last close → `restore_all`. wd90c24fb restored after |
