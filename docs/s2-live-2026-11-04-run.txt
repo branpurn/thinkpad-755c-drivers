@@ -1,0 +1,292 @@
+# S2 live run 2026-11-04 (wd24adv ba71dcc7). Host command log:
+2026-11-04 15:37:51 EST  S2: step0 read-only state check (retry after FTDI re-add)
+2026-11-04 15:37:52 EST  slow: echo Q1; uptime; grep -E "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules; cat /proc/fb; pidof Xfbdev; sha256sum /tmp/wd24probe3.ko /tmp/wd24adv.ko; echo Q2 CR
+2026-11-04 15:39:03 EST  S2 step1: stop logger 58008 (exact PID) for XMODEM; send wd24adv ba71dcc7 -> /tmp/wd24adv.ko and wd24probe3 eb0a36e2 -> /tmp/wd24probe3.ko
+2026-11-04 15:39:04 EST  host: SIGSTOP logger 524383; send-file.sh /tmp/wd24adv-ba71dcc.ko -> /tmp/wd24adv.ko (38400)
+2026-11-04 15:39:47 EST  host: SIGCONT logger 524383
+2026-11-04 15:39:47 EST  host: SIGSTOP logger 524383; send-file.sh /tmp/wd24probe3.ko -> /tmp/wd24probe3.ko (38400)
+2026-11-04 15:39:56 EST  host: SIGCONT logger 524383
+2026-11-04 15:40:02 EST  host: restart serial logger after transfers
+2026-11-04 15:40:03 EST  S2 step1 line1: pidof Xfbdev; ps
+2026-11-04 15:40:03 EST  slow: pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt" CR
+2026-11-04 15:40:21 EST  S2 step2: kill 449 (Xfbdev exact PID)
+2026-11-04 15:40:21 EST  slow: kill 449 CR
+2026-11-04 15:40:28 EST  S2 step3: text=1; rmmod wd90c24fb
+2026-11-04 15:40:28 EST  slow: echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo RMW=$? CR
+2026-11-04 15:40:54 EST  S2 step4: gate + insmod wd24adv dryrun=0 s2=1 (once)
+2026-11-04 15:40:54 EST  slow: S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = ba71dcc7001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 s2=1; echo RC=$?; } CR
+2026-11-04 15:41:54 EST  S2 step5: NOT REFERENCE -> save /proc/wd24adv/s2, then restore
+2026-11-04 15:41:54 EST  slow: cat /proc/wd24adv/s2 > /tmp/s2run1.txt; wc -l /tmp/s2run1.txt; sed -n 1,30p /tmp/s2run1.txt CR
+2026-11-04 15:42:21 EST  S2 step6: rmmod wd24adv
+2026-11-04 15:42:21 EST  slow: dmesg | grep -c wd24adv; rmmod wd24adv; echo RM=$? CR
+2026-11-04 15:42:34 EST  S2 step7: insmod wd90c24fb
+2026-11-04 15:42:34 EST  slow: insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$? CR
+2026-11-04 15:43:00 EST  S2 step8: startx detached
+2026-11-04 15:43:00 EST  slow: ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & ) CR
+2026-11-04 15:43:53 EST  S2 step9: X check + wd24probe3 baseline
+2026-11-04 15:43:54 EST  slow: pidof Xfbdev; dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u CR
+2026-11-04 15:44:32 EST  S2 rerun done: NOT REFERENCE (SRC_LO 2800 vs 210b), no data writes, restored; X 530; probe ok
+
+# 755C serial console (raw, CR/ANSI stripped):
+echo Q1; uptime; grep -E "^(wd90c24fb|vga16fb|wd24adv) " /proc/modul
+es; cat /proc/fb; pidof Xfbdev; sha256sum /tmp/wd24probe3.ko /tmp/wd24adv.ko; ec
+ho Q2
+Q1
+ 16:38:03 up 21 min,  load average: 0.12, 0.08, 0.10
+wd90c24fb 28672 2 - Live 0xc2d9a000 (O)
+0 WD90C24
+449
+sha256sum: can't open '/tmp/wd24probe3.ko': No such file or directory
+sha256sum: can't open '/tmp/wd24adv.ko': No such file or directory
+Q2
+root@box:~# pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
+449
+   98 root       580 S    {startx} /bin/sh /usr/local/bin/startx
+  449 root      1664 S    Xfbdev :0 -mouse /dev/input/mice -2button
+  454 root      2128 S    jwm
+  455 root      1924 S    rxvt -fn fixed -geometry 80x24+8+8
+  501 root       576 R    grep -E startx|Xfbdev|jwm|rxvt
+root@box:~# kill 449
+root@box:~# apm: set display: Unrecognized device ID
+echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c
+24fb; echo RMW=$?
+wd90c24fb: text=1: back to text mode (now rmmod wd90c24fb can unload)
+Console: switching to colour VGA+ 80x25
+RMW=0
+root@box:~# S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|
+vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null
+; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = ba71dcc7001 ] && { dmesg -c >/dev/null; in
+smod /tmp/wd24adv.ko dryrun=0 s2=1; echo RC=$?; }
+G=ba71dcc7001
+wd24adv: S2: NOT REFERENCE (selects only, no 23C2h write): pre-pass: a register differs from the S1 reference; entry check 0 (index writes 14, data 0); 23C0h writes 4, 23C2h writes 0, reads 11
+wd24adv: S2: 23C0h restore read back 1002; details: /proc/wd24adv/s2
+wd24adv: loaded, S2 done, all restored inside insmod (no port region held); see /proc/wd24adv/s2
+RC=0
+root@box:~# cat /proc/wd24adv/s2 > /tmp/s2run1.txt; wc -l /tmp/s2run1.txt; sed -
+n 1,30p /tmp/s2run1.txt
+23 /tmp/s2run1.txt
+wd24adv S2 result: NOT REFERENCE (selects only, no 23C2h write): pre-pass: a register differs from the S1 reference
+entry check: passed (0); VGA index writes 14, data writes 0
+  # entry check passed (reads only)
+pre-pass (3): 0108 1000 2800
+post-pass (0):
+restore: wrote 1002, read 1002 (equal)
+23C0h writes 4, 23C2h writes 0, 23C4h 0, guard refusals 0, reads 11
+access log (in order):
+  R16 23c0 1002
+  R16 23c0 1002
+  R8 03c0 0020
+  R8 03c1 003f
+  W16 23c0 1001
+  R16 23c0 1001
+  R16 23c2 0108
+  W16 23c0 1101
+  R16 23c0 1101
+  R16 23c2 1000
+  W16 23c0 1201
+  R16 23c0 1201
+  R16 23c2 2800
+  W16 23c0 1002
+  R16 23c0 1002
+root@box:~# dmesg | grep -c wd24adv; rmmod wd24adv; echo RM=$?
+3
+RM=0
+root@box:~# insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; ech
+o RC=$?
+wd90c24fb: found WD90C24 (CR36/37 "24"), 1024 KiB video memory
+wd90c24fb: panel: PR18=0xc7 PR19=0x54: LCD on, CRT off
+wd90c24fb: extended register blocks (BITBLT, cursor) present: WD90C24A/A2
+Console: switching to colour frame buffer device 80x30
+wd90c24fb: BITBLT self-test passed: acceleration on
+wd90c24fb: colour expansion: var 0 works but is not faster (1.0x), off
+wd90c24fb: fb0: WD90C24, 640x480x8 via PR0(A) banking, 300 KiB shadow, BITBLT
+RC=0
+root@box:~# ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;
+ HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautost
+art.log 2>&1 & )
+root@box:~# pidof Xfbdev; dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo R
+C=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u
+530
+wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
+wd24probe3: GR0F=05 GR0E=01 SR06=0f CR11=8c CR29=85
+wd24probe3: CR34 L=a0 again=a0 wrote=a0 rb=a0 restored-rb=a0
+wd24probe3: PR18(CR31)=c7 PR19(CR32)=54 PR1A(CR33)=00 PR36(CR3B)=ef PR37(CR3C)=9a PR39(CR3E)=20
+wd24probe3: 3C4test pre=11 SR06again=00 wrote=00 rb=00 post=00 restored-rb=00 after=11
+wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
+wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
+wd24probe3: tr   0 in  3cc e3
+wd24probe3: tr   1 in  3d4 11
+wd24probe3: tr   2 in  3ce 09
+wd24probe3: tr   3 in  3c4 01
+wd24probe3: tr   4 out 3ce 0f
+wd24probe3: tr   5 in  3cf 05
+wd24probe3: tr   6 out 3ce 0e
+wd24probe3: tr   7 in  3cf 01
+wd24probe3: tr   8 out 3c4 06
+wd24probe3: tr   9 in  3c5 0f
+wd24probe3: tr  10 out 3d4 11
+wd24probe3: tr  11 in  3d5 8c
+wd24probe3: tr  12 out 3d4 29
+wd24probe3: tr  13 in  3d5 85
+wd24probe3: tr  14 out 3d4 34
+wd24probe3: tr  15 in  3d5 a0
+wd24probe3: tr  16 out 3d4 34
+wd24probe3: tr  17 in  3d5 a0
+wd24probe3: tr  18 out 3d4 34
+wd24probe3: tr  19 out 3d5 a0
+wd24probe3: tr  20 out 3d4 34
+wd24probe3: tr  21 in  3d5 a0
+wd24probe3: tr  22 out 3d4 31
+wd24probe3: tr  23 in  3d5 c7
+wd24probe3: tr  24 out 3d4 32
+wd24probe3: tr  25 in  3d5 54
+wd24probe3: tr  26 out 3d4 33
+wd24probe3: tr  27 in  3d5 00
+wd24probe3: tr  28 out 3d4 3b
+wd24probe3: tr  29 in  3d5 ef
+wd24probe3: tr  30 out 3d4 3c
+wd24probe3: tr  31 in  3d5 9a
+wd24probe3: tr  32 out 3d4 3e
+wd24probe3: tr  33 in  3d5 20
+wd24probe3: tr  34 out 3d4 34
+wd24probe3: tr  35 out 3d5 a0
+wd24probe3: tr  36 out 3d4 34
+wd24probe3: tr  37 in  3d5 a0
+wd24probe3: tr  38 out 3c4 11
+wd24probe3: tr  39 in  3c4 11
+wd24probe3: tr  40 out 3c4 11
+wd24probe3: tr  41 in  3c5 5d
+wd24probe3: tr  42 out 3c4 19
+wd24probe3: tr  43 in  3c5 35
+wd24probe3: tr  44 out 3c4 21
+wd24probe3: tr  45 in  3c5 15
+wd24probe3: tr  46 out 3c4 35
+wd24probe3: tr  47 in  3c5 00
+wd24probe3: tr  48 out 3c4 35
+wd24probe3: tr  49 out 3c5 50
+wd24probe3: tr  50 out 3c4 35
+wd24probe3: tr  51 in  3c5 50
+wd24probe3: tr  52 out 3c4 31
+wd24probe3: tr  53 in  3c5 0d
+wd24probe3: tr  54 out 3c4 35
+wd24probe3: tr  55 out 3c5 00
+wd24probe3: tr  56 out 3c4 35
+wd24probe3: tr  57 in  3c5 00
+wd24probe3: tr  58 out 3c4 11
+wd24probe3: tr  59 in  3c4 11
+wd24probe3: tr  60 out 3ce 0f
+wd24probe3: tr  61 in  3cf 05
+wd24probe3: tr  62 out 3ce 0e
+wd24probe3: tr  63 in  3cf 01
+wd24probe3: tr  64 out 3c4 06
+wd24probe3: tr  65 in  3c5 0f
+wd24probe3: tr  66 out 3d4 11
+wd24probe3: tr  67 in  3d5 8c
+wd24probe3: tr  68 out 3d4 29
+wd24probe3: tr  69 in  3d5 85
+wd24probe3: tr  70 out 3d4 34
+wd24probe3: tr  71 in  3d5 a0
+wd24probe3: tr  72 out 3c4 01
+wd24probe3: tr  73 in  3c4 01
+wd24probe3: tr  74 out 3ce 09
+wd24probe3: tr  75 in  3ce 09
+wd24probe3: tr  76 out 3d4 11
+wd24probe3: tr  77 in  3d4 11
+wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
+wd24probe3: GR0F=05 GR0E=01 SR06=0f CR11=8c CR29=85
+wd24probe3: CR34 L=a0 again=a0 wrote=a0 rb=a0 restored-rb=a0
+wd24probe3: PR18(CR31)=c7 PR19(CR32)=54 PR1A(CR33)=00 PR36(CR3B)=ef PR37(CR3C)=9a PR39(CR3E)=20
+wd24probe3: 3C4test pre=11 SR06again=00 wrote=00 rb=00 post=00 restored-rb=00 after=11
+wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
+wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
+wd24probe3: tr   0 in  3cc e3
+wd24probe3: tr   1 in  3d4 11
+wd24probe3: tr   2 in  3ce 09
+wd24probe3: tr   3 in  3c4 01
+wd24probe3: tr   4 out 3ce 0f
+wd24probe3: tr   5 in  3cf 05
+wd24probe3: tr   6 out 3ce 0e
+wd24probe3: tr   7 in  3cf 01
+wd24probe3: tr   8 out 3c4 06
+wd24probe3: tr   9 in  3c5 0f
+wd24probe3: tr  10 out 3d4 11
+wd24probe3: tr  11 in  3d5 8c
+wd24probe3: tr  12 out 3d4 29
+wd24probe3: tr  13 in  3d5 85
+wd24probe3: tr  14 out 3d4 34
+wd24probe3: tr  15 in  3d5 a0
+wd24probe3: tr  16 out 3d4 34
+wd24probe3: tr  17 in  3d5 a0
+wd24probe3: tr  18 out 3d4 34
+wd24probe3: tr  19 out 3d5 a0
+wd24probe3: tr  20 out 3d4 34
+wd24probe3: tr  21 in  3d5 a0
+wd24probe3: tr  22 out 3d4 31
+wd24probe3: tr  23 in  3d5 c7
+wd24probe3: tr  24 out 3d4 32
+wd24probe3: tr  25 in  3d5 54
+wd24probe3: tr  26 out 3d4 33
+wd24probe3: tr  27 in  3d5 00
+wd24probe3: tr  28 out 3d4 3b
+wd24probe3: tr  29 in  3d5 ef
+wd24probe3: tr  30 out 3d4 3c
+wd24probe3: tr  31 in  3d5 9a
+wd24probe3: tr  32 out 3d4 3e
+wd24probe3: tr  33 in  3d5 20
+wd24probe3: tr  34 out 3d4 34
+wd24probe3: tr  35 out 3d5 a0
+wd24probe3: tr  36 out 3d4 34
+wd24probe3: tr  37 in  3d5 a0
+wd24probe3: tr  38 out 3c4 11
+wd24probe3: tr  39 in  3c4 11
+wd24probe3: tr  40 out 3c4 11
+wd24probe3: tr  41 in  3c5 5d
+wd24probe3: tr  42 out 3c4 19
+wd24probe3: tr  43 in  3c5 35
+wd24probe3: tr  44 out 3c4 21
+wd24probe3: tr  45 in  3c5 15
+wd24probe3: tr  46 out 3c4 35
+wd24probe3: tr  47 in  3c5 00
+wd24probe3: tr  48 out 3c4 35
+wd24probe3: tr  49 out 3c5 50
+wd24probe3: tr  50 out 3c4 35
+wd24probe3: tr  51 in  3c5 50
+wd24probe3: tr  52 out 3c4 31
+wd24probe3: tr  53 in  3c5 0d
+wd24probe3: tr  54 out 3c4 35
+wd24probe3: tr  55 out 3c5 00
+wd24probe3: tr  56 out 3c4 35
+wd24probe3: tr  57 in  3c5 00
+wd24probe3: tr  58 out 3c4 11
+wd24probe3: tr  59 in  3c4 11
+wd24probe3: tr  60 out 3ce 0f
+wd24probe3: tr  61 in  3cf 05
+wd24probe3: tr  62 out 3ce 0e
+wd24probe3: tr  63 in  3cf 01
+wd24probe3: tr  64 out 3c4 06
+wd24probe3: tr  65 in  3c5 0f
+wd24probe3: tr  66 out 3d4 11
+wd24probe3: tr  67 in  3d5 8c
+wd24probe3: tr  68 out 3d4 29
+wd24probe3: tr  69 in  3d5 85
+wd24probe3: tr  70 out 3d4 34
+wd24probe3: tr  71 in  3d5 a0
+wd24probe3: tr  72 out 3c4 01
+wd24probe3: tr  73 in  3c4 01
+wd24probe3: tr  74 out 3ce 09
+wd24probe3: tr  75 in  3ce 09
+wd24probe3: tr  76 out 3d4 11
+wd24probe3: tr  77 in  3d4 11
+insmod: can't insert '/tmp/wd24probe3.ko': No such device
+RC=19
+<6>wd24probe3: 3C4test pre=11 SR06again=00 wrote=00 rb=00 post=00 restored-rb=00 after=11
+<6>wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
+<6>wd24probe3: CR34 L=a0 again=a0 wrote=a0 rb=a0 restored-rb=a0
+<6>wd24probe3: GR0F=05 GR0E=01 SR06=0f CR11=8c CR29=85
+<6>wd24probe3: PR18(CR31)=c7 PR19(CR32)=54 PR1A(CR33)=00 PR36(CR3B)=ef PR37(CR3C)=9a PR39(CR3E)=20
+<6>wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
+<6>wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
+<6>wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+root@box:~# 
