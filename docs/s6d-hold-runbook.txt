@@ -1,0 +1,144 @@
+S6d --hold process-death runbook. Not started. Not an insmod approval.
+Source commit cfda0c4e14beeaa9c46ed55aa73124a4886b71f2.
+Tool: modules/wd24adv/tests/wd24s6d-mmap.c
+Driver: modules/wd24adv/wd24adv_main.c (s6d_vma_close, s6d_fb_release, s6d_end_locked, s6d_stop, s6d_read, trial_fn, hw_run)
+
+The registered no-fbcon mmap pass already happened with module
+7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36
+and tool 93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8.
+This file is only the next cleanup sequence. Do not run it until the
+operator is watching and the preflight below is repeated.
+
+--hold means one argument and only that argument
+  wd24s6d-mmap --hold
+It always opens /dev/fb0. There is no form that selects another device.
+wd24s6d-mmap --hold /dev/fb0
+and
+wd24s6d-mmap /dev/fb0 --hold
+are argc 3. The tool prints
+  usage: wd24s6d-mmap [/dev/fbN | --hold]
+and returns 1 before open. wd24s6d-mmap /dev/fb0 is the normal path:
+it munmaps, closes, and prints "WD24S6D-MMAP ok stamps 5 tail 1".
+That is not this test.
+
+Order inside --hold (wd24s6d-mmap.c main)
+  alarm(20) is armed before open.
+  open /dev/fb0, check fix id wd24s6d and line length 640, mmap.
+  The same touches and stamp read-back as the passing run.
+  No stdout line is printed for a good stamp check.
+  Only after bad==0: printf "WD24S6D-MMAP hold", fflush, alarm(60)
+  which replaces the 20 s alarm, then pause().
+  The fd stays open and the mapping stays up across that pause.
+  "WD24S6D-MMAP ok stamps" is not printed on this path.
+
+The PID line is not readiness. Kill only after the exact line
+  WD24S6D-MMAP hold
+and only with the decimal PID from echo, typed as digits.
+kill -9 does not pull a task out of mutex_lock, console_lock, or a
+fault that has not returned. Those waits are uninterruptible.
+pause() is interruptible, so a kill sent after the hold line is the
+case this sequence is allowed to use. If that kill does not return,
+stop. Do not send another kill as a remedy.
+
+If the hold line is absent, the 20 s alarm may already have called
+_exit(2) during the stamps. That is not the SIGKILL case. Stop.
+If 60 s pass after the hold line with no kill, alarm calls _exit(2).
+That is also not the SIGKILL case. Stop and do not record it as one.
+
+What SIGKILL reaches, once the process is in pause()
+  Kernel exit unmaps the VMA first. s6d_vma_close only clears the
+  driver's VMA pointer. It does not end the banking session and it
+  does not unregister the framebuffer.
+  Kernel exit then closes the fd. s6d_fb_release(user=1) sets
+  stopping, calls s6d_end_locked("fb release"), and clears busy.
+  The banking session ends there. It does not stay active until the
+  trial expires.
+  The framebuffer stays registered until trial expiry, "text", or
+  rmmod. Those call s6d_stop, which unregisters. s6d_end_locked
+  returns immediately if active is already 0, so expiry does not
+  print a second "S6d: end (trial expiry)" after a successful release.
+  The trial mode itself stays until expiry. Expiry prints
+  "live trial expiry: 0" on success and sets in_text.
+
+s6d proc fields are only the ones s6d_read prints:
+  armed active stopping busy fb_reg node
+  fbcon_param bind_param
+  faults switches thrash latched mapped_base
+  why
+After release and before expiry, the code leaves armed 1, active 0,
+stopping 1, busy 0, fb_reg 1. mapped_base is cleared to all-bits-one.
+faults/switches/thrash are not zeroed by release. latched is cleared
+by the thrash reset inside end. node is whatever register printed.
+After expiry, armed 0 and fb_reg 0. /proc/fb empty is the registration
+check. Do not require node to become -1; unregister does not clear it.
+
+Sequence. One line, then a real prompt, except the background start.
+No /proc/wd24adv/* . No second command until the previous one has
+returned, other than waiting for the hold line before kill.
+Repeat immediately before insmod:
+  cat /proc/fb
+  cat /sys/class/vtconsole/vtcon0/name
+  cat /sys/class/vtconsole/vtcon0/bind
+Empty /proc/fb. Name (S) VGA+. Bind 1. If vtcon1 exists, stop.
+dmesg must not show a new "Console: switching" line. Then:
+
+  dmesg -c >/dev/null
+  insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=120 s6d=1 pattern=1 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
+  echo RC=$?
+
+Stop unless RC=0, the register line says fb0 and register -19, and
+there is no "Console: switching". If the node is not fb0, stop.
+--hold cannot select another device.
+
+  wd24s6d-mmap --hold & echo PID=$!
+
+The digits after PID= are the only kill argument. Wait for
+  WD24S6D-MMAP hold
+Do not kill on the PID line alone. Then, within 60 s of that line,
+type the digits, not $! :
+
+  kill -9 0000
+  echo KILL=$?
+
+Replace 0000 with the PID digits. KILL=0 only means the signal was
+sent. Wait for
+  S6d: end (fb release): faults 10 switches 10 thrash 0
+Then one read:
+
+  cat /proc/wd24adv/s6d
+
+Expect armed 1, active 0, stopping 1, busy 0, fb_reg 1, bind_param 0,
+faults 10, switches 10, thrash 0, latched 0. /proc/fb still lists fb0.
+Do not rmmod yet. Wait for the trial line
+  live trial expiry: 0
+and in_text 1 in that same printk's mismatch count of 0. Then:
+
+  cat /proc/fb
+  cat /sys/class/vtconsole/vtcon0/name
+  cat /sys/class/vtconsole/vtcon0/bind
+  rmmod wd24adv
+  echo RM=$?
+
+Expect an empty /proc/fb, name (S) VGA+, bind 1, RM=0, and a shell
+that still answers.
+
+Stop on: usage text, "WD24S6D-MMAP bad", no hold line, "Console:
+switching", a kill that does not return, an end line whose counts are
+not 10/10/0, expiry not 0, in_text not 1, /proc/fb still occupied after
+expiry, any vtcon other than VGA+, or a shell that stops answering.
+Do not retry inside the same trial.
+
+Later framebuffer-console trial (s6d_bind=1) is not this run.
+Headless checks that can be read from the serial shell: RC, the
+register errno, "Console: switching", /proc/fb, vtcon name and bind,
+/proc/wd24adv/s6d, the expiry line, RM.
+Operator-only: whether the panel shows bars, the five blocks, the
+corner pixel, or a text console, and whether the keyboard follows the
+VT. This floppy has no deferred console takeover (FB=m). s6d_bind=1
+lets fbcon bind and paint with per-pixel writes. copyarea is a no-op.
+There is no fb_setcolreg. A byte that spans two 64 KiB windows can
+trip the thrash latch. Xfbdev is not part of this sequence; nothing in
+the preflight shows an X server on this floppy, and starting one is a
+separate approval after a kill cleanup and a separate bind trial.
+The serial shell used for these commands is not proof it will survive
+an fbcon bind. The next command either returns or it does not.

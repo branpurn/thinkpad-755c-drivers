@@ -204,3 +204,19 @@ A read-only preflight later the same day (15:49 America/New_York) recorded this 
 The same preflight: `uname -r` `6.18.57-tc755x`; `/proc/fb` empty; only vtcon0 `(S) VGA+` bind 1; `fb` loaded and unused, `font` used by `fb`. No frame-buffer vtconsole. Current dmesg ring had been cleared and still contains the earlier `s6d_fbcon=0` arm line. No insmod was performed.
 
 `5b75c66` made `/proc` reads trylock and added `s6d_fbcon=0`. Trylock does not fix the armed-line deadlock. `s6d_fbcon=0` avoids it by never registering. The next stage registers and refuses the fbcon open instead.
+
+---
+
+## Registered no-fbcon mmap pass — source cfda0c4
+
+Module sha256 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36.
+Tool sha256 93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8.
+insmod returned 0. fb0 registered, fbcon did not bind, register returned -19.
+Tool printed `WD24S6D-MMAP ok stamps 5 tail 1` with status 0.
+/proc/wd24adv/s6d: faults 10, switches 10, thrash 0, latched 0.
+Trial expiry 0, in_text 1. /proc/fb empty. rmmod 0.
+Shell answered. Only vtcon was VGA+.
+Operator saw bars, five blocks, the corner pixel, and the root text console.
+This is the normal mmap path. The --hold / SIGKILL run was not started.
+Runbook: docs/s6d-hold-runbook.txt. kill -9 does not break an
+uninterruptible kernel wait.
