@@ -36,6 +36,7 @@
  *   /proc/wd24adv/s4       - s4=1 only: the S4 operation list (dryrun=1) or result
  *   /proc/wd24adv/s5       - s5=1|2 only: the S5 host-data list (dryrun=1) or result
  *   /proc/wd24adv/s6       - s6=1 only: the S6 dual-window proof (dryrun=1: run on the model) or result
+ *   /proc/wd24adv/s6b      - s6b=1 only: S6b session log (/dev/wd24s6b, dual-window mmap + copy)
  *
  * S1 (s1=1 dryrun=0, never with live=1 or mode=): after the same read-only
  * entry check, a read-only probe of the 23C0h register blocks
@@ -88,6 +89,11 @@
 #include "wd24adv_s3.h"
 #include "wd24adv_s1.h"
 #include "wd24adv_s6.h"
+#include "wd24adv_s6b.h"
+#include "wd24adv_ioctl.h"
+#include <linux/fs.h>
+#include <linux/device.h>
+#include <asm/video.h>
 
 static bool dryrun = true;
 module_param(dryrun, bool, 0444);
@@ -298,6 +304,10 @@ static bool s6c;
 module_param(s6c, bool, 0444);
 MODULE_PARM_DESC(s6c, "with s6=1: S6c, set PR31 b7, relock SR06 and run the dual-window copy test while LOCKED, then re-unlock, PR31 back to BIOS, relock");
 
+static bool s6b;
+module_param(s6b, bool, 0444);
+MODULE_PARM_DESC(s6b, "S6b: /dev/wd24s6b explicit dual-window mmap (A0000 half = PR0B, A8000 half = PR0A via PR1 b3) + kernel dual-window copy (PR31 b7, SR06 locked); dryrun=1 runs a model session, dryrun=0 live=1 mode=640x480-8 opens the device");
+
 static struct wd24s6 *s6st;
 static u8 *s6_save;
 
@@ -500,6 +510,9 @@ static void k_memw(void *priv, u32 off, u8 val)
 enum hw_op { OP_LOAD, OP_MODE, OP_TEXT, OP_EXPIRE };
 static const char *const op_name[] = { "load", "mode", "text", "trial expiry" };
 
+static void s6b_stop(const char *why);
+static void s6b_free(void);
+
 static int hw_run(enum hw_op op, const struct wd24_mode *m)
 {
 	unsigned long d0 = hw->hw_data, i0 = hw->hw_index;
@@ -507,6 +520,8 @@ static int hw_run(enum hw_op op, const struct wd24_mode *m)
 	size_t len = 0;
 	int err;
 
+	if (op != OP_LOAD)
+		s6b_stop(op_name[op]);	/* the S6b session ends before any mode change */
 	wd24_log_reset(hw);
 	console_lock();
 	hw->be->begin(hw);
@@ -638,6 +653,7 @@ static void free_hw(void)
 
 static void free_all(void)
 {
+	s6b_free();
 	if (pdir)
 		proc_remove(pdir);
 	pdir = NULL;
@@ -1307,6 +1323,363 @@ static void s6_live(const struct wd24_mode *m)
 			s6st->v_wr, s6st->v_copy, s6st->v_x);
 }
 
+/*
+ * S6b: /dev/wd24s6b.  One exclusive open = one session (wd24s6b_begin ..
+ * wd24s6b_end).  The window is mapped once (no fault handler: the tc755
+ * kernel exports neither vmf_insert_pfn nor zap_vma_ptes, and a fault
+ * banker would livelock on a cross-bank memmove anyway).  Teardown: the
+ * vma holds the file, so release() (= end of session, registers restored)
+ * runs at the last munmap/close, including process exit and kill -9.
+ * Every operation runs under hw_lock + console_lock.
+ */
+static struct wd24s6b *s6b_st;
+static char *s6b_txt;
+static size_t s6b_len;
+static int s6b_major = -1;
+static struct class *s6b_cls;
+static bool s6b_dev, s6b_busy, s6b_armed;
+static const struct wd24s6_io *s6b_io;
+#ifdef WD24S1_QEMU_FAKE
+static struct wd24s6_model *s6b_mdl;
+static u8 *s6b_vr, *s6b_win;	/* fake: model VRAM, user-visible window */
+static struct wd24s6_io s6b_mio;
+#endif
+
+static ssize_t s6b_read(struct file *f, char __user *b, size_t n, loff_t *p)
+{
+	return s6b_txt ? rd(b, n, p, s6b_txt, s6b_len) : 0;
+}
+
+static const struct proc_ops s6b_ops = {
+	.proc_read = s6b_read, .proc_lseek = default_llseek };
+
+static void s6b_report(const char *what, int err)
+{
+	size_t len = s6b_len;
+
+	if (!s6b_txt)
+		return;
+	if (len > TXT_MAX - 8192)
+		len = 0;	/* keep the newest */
+	APPEND(s6b_txt, len, "--- %s -> %d; state %s%s%s; w0 %02x w1 %02x; copies %u setwin %u writes %u restore-bad %u\n",
+	       what, err, s6b_st ? wd24s6b_state_name(s6b_st->state) : "-",
+	       s6b_st && s6b_st->why ? ": " : "", s6b_st && s6b_st->why ? s6b_st->why : "",
+	       s6b_st ? s6b_st->w0 : 0, s6b_st ? s6b_st->w1 : 0,
+	       s6b_st ? s6b_st->ncopy : 0, s6b_st ? s6b_st->nset : 0,
+	       s6b_st ? s6b_st->nwr : 0, s6b_st ? s6b_st->rest_bad : 0);
+	if (s6b_st)
+		APPEND(s6b_txt, len, "%.*s", (int)s6b_st->loglen, s6b_st->log);
+	s6b_len = len;
+	if (s6b_st)
+		s6b_st->loglen = 0;
+}
+
+#ifdef WD24S1_QEMU_FAKE
+/* the fake window is plain memory: flush it to the model before any bank
+ * change, reload it after (steady state: b3 on, b7 off) */
+static void s6b_sync(bool out)
+{
+	if (!s6b_st || s6b_st->state != WD24S6B_ON)
+		return;
+	if (out)
+		s6b_mio.mw(s6b_mio.priv, 0, s6b_win, 0x10000);
+	else
+		s6b_mio.mr(s6b_mio.priv, 0, s6b_win, 0x10000);
+}
+#define S6B_HW_BEGIN()	do { } while (0)
+#define S6B_HW_END()	do { } while (0)
+#else
+static void s6b_sync(bool out) { }
+#define S6B_HW_BEGIN()	do { console_lock(); hw->be->begin(hw); \
+	hw->tag = "S6b: dual-window session"; } while (0)
+#define S6B_HW_END()	do { hw->be->end(hw); console_unlock(); } while (0)
+#endif
+
+/* caller holds hw_lock */
+static void s6b_end_locked(const char *why)
+{
+	int err;
+
+	if (!s6b_st || s6b_st->state == WD24S6B_OFF || !s6b_busy)
+		return;
+	s6b_sync(true);
+	S6B_HW_BEGIN();
+	err = wd24s6b_end(s6b_st);
+	S6B_HW_END();
+	if (err)
+		pr_err("S6b: end (%s): %d, %s\n", why, err, wd24s6b_state_name(s6b_st->state));
+	s6b_report(why, err);
+	s6b_st->state = WD24S6B_OFF;
+}
+
+/* hw_run (text, mode, trial expiry, rmmod): the session ends first and
+ * no new session can start */
+static void s6b_stop(const char *why)
+{
+	s6b_armed = false;
+	s6b_end_locked(why);
+}
+
+static int s6b_fopen(struct inode *in, struct file *f)
+{
+	int err = 0;
+
+	mutex_lock(&hw_lock);
+	if (s6b_busy)
+		err = -EBUSY;
+#ifndef WD24S1_QEMU_FAKE
+	else if (!s6b_armed || !hw || hw_dead || hw->in_text || hw->nmismatch ||
+		 !vmem || hw->no_vram || vram_dead)
+		err = -ENODEV;
+#else
+	else if (!s6b_armed)
+		err = -ENODEV;
+#endif
+	if (!err) {
+		S6B_HW_BEGIN();
+		err = wd24s6b_begin(s6b_st, s6b_io);
+		S6B_HW_END();
+		s6b_report("open: begin", err);
+		if (err) {
+			if (s6b_st->state == WD24S6B_DEAD)
+				s6b_armed = false;	/* failed after writes */
+			s6b_st->state = WD24S6B_OFF;
+		} else {
+			s6b_busy = true;
+			s6b_sync(false);
+		}
+	}
+	mutex_unlock(&hw_lock);
+	return err;
+}
+
+static int s6b_frelease(struct inode *in, struct file *f)
+{
+	mutex_lock(&hw_lock);
+	s6b_end_locked("release (close / munmap / exit)");
+	s6b_busy = false;
+	mutex_unlock(&hw_lock);
+	return 0;
+}
+
+static int s6b_fmmap(struct file *f, struct vm_area_struct *vma)
+{
+	unsigned long len = vma->vm_end - vma->vm_start;
+	int err;
+
+	if (vma->vm_pgoff || len > 0x10000)
+		return -EINVAL;
+	mutex_lock(&hw_lock);
+	if (!s6b_st || s6b_st->state != WD24S6B_ON) {
+		mutex_unlock(&hw_lock);
+		return -ENODEV;
+	}
+	vm_flags_set(vma, VM_DONTCOPY | VM_DONTEXPAND | VM_DONTDUMP);
+#ifdef WD24S1_QEMU_FAKE
+	err = remap_vmalloc_range(vma, s6b_win, 0);
+#else
+	/* uncached (486: UC-), like a framebuffer mmap */
+	vma->vm_page_prot = pgprot_framebuffer(vma->vm_page_prot, vma->vm_start,
+					       vma->vm_end, 0xa0000);
+	err = vm_iomap_memory(vma, 0xa0000, 0x10000);
+#endif
+	mutex_unlock(&hw_lock);
+	return err;
+}
+
+static long s6b_fioctl(struct file *f, unsigned int cmd, unsigned long arg)
+{
+	void __user *up = (void __user *)arg;
+	struct wd24s6b_win w;
+	struct wd24s6b_copy c;
+	struct wd24s6b_info in;
+	int err;
+
+	switch (cmd) {
+	case WD24S6B_IOC_SETWIN:
+		if (copy_from_user(&w, up, sizeof(w)))
+			return -EFAULT;
+		break;
+	case WD24S6B_IOC_COPY:
+		if (copy_from_user(&c, up, sizeof(c)))
+			return -EFAULT;
+		break;
+	case WD24S6B_IOC_INFO:
+		break;
+	default:
+		return -ENOTTY;
+	}
+	mutex_lock(&hw_lock);
+	if (cmd == WD24S6B_IOC_INFO) {
+		memset(&in, 0, sizeof(in));
+		in.state = s6b_st->state;
+		in.w0 = s6b_st->w0;
+		in.w1 = s6b_st->w1;
+		in.ncopy = s6b_st->ncopy;
+		in.nset = s6b_st->nset;
+		in.nwr = s6b_st->nwr;
+		in.vram = WD24S6B_VRAM;
+		in.frame = WD24S6B_FRAME;
+		mutex_unlock(&hw_lock);
+		return copy_to_user(up, &in, sizeof(in)) ? -EFAULT : 0;
+	}
+	if (s6b_st->state != WD24S6B_ON) {
+		mutex_unlock(&hw_lock);
+		return -EIO;
+	}
+	s6b_sync(true);
+	S6B_HW_BEGIN();
+	if (cmd == WD24S6B_IOC_SETWIN)
+		err = wd24s6b_setwin(s6b_st, w.w0, w.w1);
+	else
+		err = wd24s6b_copy(s6b_st, c.dst, c.src, c.len);
+	S6B_HW_END();
+	s6b_sync(false);
+	if (err || s6b_st->state != WD24S6B_ON) {
+		s6b_report(cmd == WD24S6B_IOC_SETWIN ? "SETWIN" : "COPY", err);
+		if (s6b_st->state == WD24S6B_DEAD) {
+			s6b_armed = false;
+			pr_err("S6b: session DEAD (%s); restored best effort; see /proc/wd24adv/s6b\n",
+			       s6b_st->why ? s6b_st->why : "?");
+		}
+	}
+	mutex_unlock(&hw_lock);
+	return err;
+}
+
+static const struct file_operations s6b_fops = {
+	.owner = THIS_MODULE,
+	.open = s6b_fopen,
+	.release = s6b_frelease,
+	.mmap = s6b_fmmap,
+	.unlocked_ioctl = s6b_fioctl,
+	.llseek = noop_llseek,
+};
+
+static void s6b_free(void)
+{
+	if (s6b_dev)
+		device_destroy(s6b_cls, MKDEV(s6b_major, 0));
+	s6b_dev = false;
+	if (s6b_cls)
+		class_destroy(s6b_cls);
+	s6b_cls = NULL;
+	if (s6b_major >= 0)
+		__unregister_chrdev(s6b_major, 0, 1, "wd24s6b");
+	s6b_major = -1;
+	vfree(s6b_st);
+	vfree(s6b_txt);
+	s6b_st = NULL;
+	s6b_txt = NULL;
+#ifdef WD24S1_QEMU_FAKE
+	vfree(s6b_mdl);
+	vfree(s6b_vr);
+	vfree(s6b_win);
+	s6b_mdl = NULL;
+	s6b_vr = NULL;
+	s6b_win = NULL;
+#endif
+}
+
+/* dryrun=1: one model session (cross-bank scroll + memmove), no device */
+static int s6b_model_session(void)
+{
+	struct wd24s6_model *mdl = vmalloc(sizeof(*mdl));
+	u8 *vr = vmalloc(0x100000);
+	struct wd24s6_io io = wd24s6_model_io;
+	int err;
+
+	if (!mdl || !vr) {
+		vfree(mdl);
+		vfree(vr);
+		return -ENOMEM;
+	}
+	wd24s6_model_init(mdl, vr);
+	io.priv = mdl;
+	err = wd24s6b_begin(s6b_st, &io);
+	s6b_report("model: begin", err);
+	if (!err) {
+		err = wd24s6b_setwin(s6b_st, 0x50, 0x70);
+		s6b_report("model: SETWIN 50/70", err);
+	}
+	if (!err) {
+		err = wd24s6b_copy(s6b_st, 0, 640 * 16, WD24S6B_FRAME - 640 * 16);
+		s6b_report("model: COPY frame scroll up 16 lines (cross-bank)", err);
+	}
+	if (!err) {
+		err = wd24s6b_copy(s6b_st, 0x52000, 0x50800, 0x18000);
+		s6b_report("model: COPY overlapping memmove forward-dst", err);
+	}
+	wd24s6b_end(s6b_st);
+	s6b_report("model: end", 0);
+	s6b_st->state = WD24S6B_OFF;
+	pr_info("S6b (model, no port access): %s\n", err ? "FAIL" : "OK");
+	vfree(mdl);
+	vfree(vr);
+	return err;
+}
+
+static int s6b_setup(void)
+{
+	struct device *d;
+
+	s6b_st = vmalloc(sizeof(*s6b_st));
+	s6b_txt = vmalloc(TXT_MAX);
+	if (!s6b_st || !s6b_txt)
+		return -ENOMEM;
+	memset(s6b_st, 0, sizeof(*s6b_st));
+	s6b_len = 0;
+	if (dryrun)
+		return s6b_model_session();
+#ifdef WD24S1_QEMU_FAKE
+	s6b_mdl = vmalloc(sizeof(*s6b_mdl));
+	s6b_vr = vmalloc(0x100000);
+	s6b_win = vmalloc_user(0x10000);
+	if (!s6b_mdl || !s6b_vr || !s6b_win)
+		return -ENOMEM;
+	wd24s6_model_init(s6b_mdl, s6b_vr);
+	s6b_mio = wd24s6_model_io;
+	s6b_mio.priv = s6b_mdl;
+	s6b_io = &s6b_mio;
+	s6b_armed = true;
+#else
+	s6b_io = &s6_live_io;
+#endif
+	s6b_major = __register_chrdev(0, 0, 1, "wd24s6b", &s6b_fops);
+	if (s6b_major < 0)
+		return s6b_major;
+	s6b_cls = class_create("wd24s6b");
+	if (IS_ERR(s6b_cls)) {
+		s6b_cls = NULL;
+		return -ENOMEM;
+	}
+	d = device_create(s6b_cls, NULL, MKDEV(s6b_major, 0), NULL, "wd24s6b");
+	if (IS_ERR(d))
+		return PTR_ERR(d);
+	s6b_dev = true;
+	APPEND(s6b_txt, s6b_len, "S6b: /dev/wd24s6b major %d minor 0%s\n", s6b_major,
+	       s6b_armed ? " (QEMU fake: model)" : " (armed after the 640x480-8 mode set)");
+	pr_info("S6b: /dev/wd24s6b major %d\n", s6b_major);
+	return 0;
+}
+
+#ifndef WD24S1_QEMU_FAKE
+/* caller holds hw_lock; the 640x480-8 trial mode is set */
+static void s6b_arm(const struct wd24_mode *m)
+{
+	if (!hw || hw->in_text || hw->nmismatch || !m || strcmp(m->name, "640x480-8") ||
+	    !vmem || hw->no_vram || vram_dead) {
+		pr_err("S6b: not armed: not in the 640x480-8 state\n");
+		return;
+	}
+	s6b_armed = true;
+	pr_info("S6b: armed: open /dev/wd24s6b (major %d); text/mode/trial expiry/rmmod ends it\n",
+		s6b_major);
+}
+#else
+static void s6b_arm(const struct wd24_mode *m) { }
+#endif
+
 /* live: claim the ports, map A0000, save the text state */
 static int live_start(void)
 {
@@ -1390,6 +1763,21 @@ static int __init wd24adv_init(void)
 		return -EINVAL;
 	}
 #endif
+	if (s6b && (s1 || s2 || sx || s6)) {
+		pr_err("s6b=1 is a separate stage: s1-s6 refused with it\n");
+		return -EINVAL;
+	}
+#ifdef WD24S1_QEMU_FAKE
+	if (s6b && !dryrun && (live || *mode)) {
+		pr_err("QEMU fake build: s6b=1 runs on the model only, without live=1\n");
+		return -EINVAL;
+	}
+#else
+	if (s6b && !dryrun && (!live || strcmp(mode, "640x480-8"))) {
+		pr_err("s6b=1 with dryrun=0 needs live=1 mode=640x480-8\n");
+		return -EINVAL;
+	}
+#endif
 	if (s5 < 0 || s5 > 2) {
 		pr_err("s5 must be 1 (MONO) or 2 (HOSTCOL)\n");
 		return -EINVAL;
@@ -1418,7 +1806,7 @@ static int __init wd24adv_init(void)
 		return -EINVAL;
 	}
 #ifdef WD24S1_QEMU_FAKE
-	if (!dryrun && !live && !s1 && !s2 && !sx && !s6) {
+	if (!dryrun && !live && !s1 && !s2 && !sx && !s6 && !s6b) {
 #else
 	if (!dryrun && !live && !s1 && !s2) {
 #endif
@@ -1529,6 +1917,11 @@ static int __init wd24adv_init(void)
 		free_all();
 		return -ENOMEM;
 	}
+	if (s6b && (fails || s6b_setup())) {
+		pr_err("S6b: setup failed; nothing touched\n");
+		free_all();
+		return -EINVAL;
+	}
 #ifdef WD24S1_QEMU_FAKE
 	if (sx && !dryrun) {
 		if (fails || s3_fake_run()) {
@@ -1576,6 +1969,7 @@ static int __init wd24adv_init(void)
 	    (s2 && !proc_create_data("s2", 0444, pdir, &s2_ops, NULL)) ||
 	    (sx && !proc_create_data(sprog->param, 0444, pdir, &s3_ops, NULL)) ||
 	    (s6 && !proc_create_data("s6", 0444, pdir, &s6_ops, NULL)) ||
+	    (s6b && !proc_create_data("s6b", 0444, pdir, &s6b_ops, NULL)) ||
 	    (live && (!proc_create_data("live", 0444, pdir, &live_ops, NULL) ||
 		      !proc_create_data("control", 0200, pdir, &control_ops, NULL)))) {
 		if (live && !hw_dead) {
@@ -1602,6 +1996,12 @@ static int __init wd24adv_init(void)
 	if (s6 && !live) {
 		pr_info("loaded, S6 %s; see /proc/wd24adv/s6\n",
 			dryrun ? "run on the model (dry-run, no port access)" : "QEMU fake run on the model done");
+		return 0;
+	}
+	if (s6b && !live) {
+		pr_info("loaded, S6b %s; see /proc/wd24adv/s6b\n",
+			dryrun ? "model session run (dry-run, no port access)" :
+			"QEMU fake: /dev/wd24s6b on the model");
 		return 0;
 	}
 	if (sx && !live) {
@@ -1635,6 +2035,11 @@ static int __init wd24adv_init(void)
 		if (s6 && !err) {
 			mutex_lock(&hw_lock);
 			s6_live(m);
+			mutex_unlock(&hw_lock);
+		}
+		if (s6b && !err) {
+			mutex_lock(&hw_lock);
+			s6b_arm(m);
 			mutex_unlock(&hw_lock);
 		}
 	}

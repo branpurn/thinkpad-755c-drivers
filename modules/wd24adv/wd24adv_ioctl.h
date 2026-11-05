@@ -34,4 +34,22 @@ struct wd24adv_modeinfo {
  * was removed for good: 0x31 stays reserved and must never be assigned.
  */
 
+/*
+ * S6b (s6b=1 only): /dev/wd24s6b, explicit dual-window mmap of A0000-AFFFF.
+ * Steady state: A0000-A7FFF = VRAM w0*4K.., A8000-AFFFF = VRAM w1*4K..
+ * (4 KiB pages, w0 + 8 <= w1 or w1 + 8 <= w0, w1 >= 8, both <= 78h).
+ * COPY is a memmove inside VRAM (offsets in bytes, below 80000h) done by
+ * the kernel through the PR31 b7 dual window; the user mapping must not be
+ * touched during COPY (single-threaded tool).
+ */
+struct wd24s6b_win { __u32 w0, w1; };
+struct wd24s6b_copy { __u32 dst, src, len; };
+struct wd24s6b_info {
+	__u32 state;		/* 0 off, 1 on, 2 dead */
+	__u32 w0, w1, ncopy, nset, nwr, vram, frame;
+};
+#define WD24S6B_IOC_SETWIN	_IOW('W', 0x37, struct wd24s6b_win)
+#define WD24S6B_IOC_COPY	_IOW('W', 0x38, struct wd24s6b_copy)
+#define WD24S6B_IOC_INFO	_IOR('W', 0x39, struct wd24s6b_info)
+
 #endif

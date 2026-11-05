@@ -30,7 +30,7 @@ Doom), direct mapping and, later, page flipping on the **internal panel only**.
 | `wd24adv_modes.c` | Standard VGA register sets, the mode table with status and evidence, the validator and the boot-state model. |
 | `wd24adv_port.c` | Live backend: executes plans with inb/outb + the A0000 window through `struct wd24_io`; reads every write back; SR06 latch index-width test; DAC and planar memory access. |
 | `wd24adv_main.c` | Module: parameters and gates, single-driver check, `/proc/wd24adv/`, live setup (ports, ioremap, console lock), trial timer. |
-| `wd24adv_ioctl.h` | Placeholder user API: `'W'` 0x30 (modeinfo, not implemented); 0x31 stays reserved and is never assigned. |
+| `wd24adv_ioctl.h` | User API: `'W'` 0x30 (modeinfo, not implemented); 0x31 stays reserved and is never assigned; 0x37-0x39 S6b. |
 | `wd24adv_engine.h/.c` | **S0, host only.** BITBLT (23C0h block 1) and cursor (block 2) closed register lists with DS / observed / UNPROVEN status, port guard, command validator (surfaces, VRAM range, overlap direction, host word counts) and op sequencer (bounded waits, readback, 23C0h save/restore, latch-dead on timeout or mismatch, never abort). Not in Kbuild; no caller in the module; `WD24X_LIVE_ALLOWED` is 0 and every live access is refused. See `docs/WD24ADV-DESKTOP-DESIGN.md` §7. |
 | `tests/test_engine.c` | S0 test of the engine code against the 23C0h model: guard fuzz over every value, the core guard's panel/routing/PM/clock refusals, validation, overlap vs memmove, exact host words, no CPU VRAM access while busy, timeout/mismatch latch, 23C0h restore on every path, a static check that no live source references the engine. |
 | `wd24adv_s1.h/.c` | **S1 probe (read-only, built in, off unless `s1=1`).** Separate from the S0 engine (shares no code with it) and from wd90c24fb. Its own guard allows exactly 26 port writes values, all to 23C0h: the 25 selects (block 1 idx 0-Fh, block 2 idx 0-8, NOINC) and the restore of the saved 23C0h & 1FFFh; reads only 23C0h/23C2h (16-bit) and 3C0h/3C1h (alias check). Never 23C2h/23C4h writes, never the CNTRL1 start bit. |
@@ -41,6 +41,10 @@ Doom), direct mapping and, later, page flipping on the **internal panel only**.
 | `tests/vgamodel.h/.c` | Port-level VGA model (WD90C24 and QEMU std VGA profiles): registers with WD lock rules, AR flip-flop, DAC, 4 planes with write/read mode 0 and chain-4, latches; flags forbidden registers; fault injection (stuck register, read-only plane). Optional 23C0h block model (`struct vm_eng`): BITBLT fill/copy/mono/colour-from-host executed byte by byte in hardware order into 1 MB, busy bit, cursor registers; flags writes while busy, aborts, 23C4h reads or idle writes, CPU VRAM access while busy; fault injection (stuck busy, readback, index echo, word-count skew). |
 | `tests/test_vga.c` | Live backend against the model: round trip, trial revert/confirm, zero-write refusals, readback mismatch handling. |
 | `tests/qemu-wd24adv.py` | QEMU system test against `-vga std` with VGA port tracing. |
+| `wd24adv_s6b.h/.c` | **S6b** (`s6b=1`): explicit dual-window session (begin / SETWIN / COPY / end) on the S6 io + guard: A0000 half = PR0B, A8000 half = PR0A+8000 (PR1 b3), SR06 locked; COPY = memmove in VRAM through PR31 b7 (PR1 b3 off, 2 SR06 unlocks per COPY); any failure -> restore -> DEAD. Pure logic. |
+| `tests/test_s6b.c` | S6b against the S6 model: memmove/scroll vs reference, 200 random copies, locked/b3-xor-b7 asserts on every VRAM access, unlock counts, refusals, faults (PR1 stuck, relock clears b7, lock ignored, relock stuck, re-unlock refused, b7 preset). |
+| `tests/wd24s6b-test.c` | User tool for /dev/wd24s6b (static i486): `run` (save, SETWIN refusals, cross-bank memmove through the mmap, 4 kernel COPYs, frame scroll, restore, `S6B-RESULT`), `hold` (kill -9 test). |
+| `tests/qemu-wd24adv-s6b.py` | QEMU: S6b dry-run model session, refusals, real .ko zero 23Cxh / VGA data writes, fake build running the tool (OK, exclusive open, kill -9 teardown, rmmod pinned while held). |
 
 Built by `make oot` / `make wd24adv`. There is still **no `ext/*.ext`**, so no
 `.tcz` is produced. Uses only symbols the trimmed tc755 kernel exports
@@ -60,6 +64,7 @@ Built by `make oot` / `make wd24adv`. There is still **no `ext/*.ext`**, so no
 | `allow_clock` | 0 | Permits the PR68 b4:3 / PR69 clock block. No table mode needs it: with the boot clock it is a no-op and is skipped; a differing clock is refused while 0. |
 | `s1` | 0 | The S1 read-only 23C0h probe. Dry-run: `/proc/wd24adv/s1` shows the plan only. With `dryrun=0` (and **without** `live=1` / `mode=`): runs once at load in text mode with no fb driver, after the wd24adv entry check; result in `/proc/wd24adv/s1` and dmesg. insmod returns 0 either way (the result is held); no port region is kept, so rmmod touches nothing. |
 | `s1_echo` | 1 | S1: require the 23C2h b15:12 index echo (DS 17.1, UNPROVEN). 0 only records it. Needs `s1=1`. |
+| `s6b` | 0 | S6b: /dev/wd24s6b (chrdev; ioctls `'W'` 0x37 SETWIN, 0x38 COPY, 0x39 INFO in `wd24adv_ioctl.h`). dryrun=1: one model session, no device. dryrun=0 needs `live=1 mode=640x480-8`; the device arms after the mode set and the session ends at close/exit/kill -9, text, mode, trial expiry or rmmod. Refused with s1-s6. |
 | `also_conflict` | "" | Test aid: also refuse to load while the named module is loaded. |
 
 ## /proc/wd24adv/
