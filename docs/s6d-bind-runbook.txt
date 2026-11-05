@@ -1,0 +1,107 @@
+S6d s6d_bind=1 runbook. Not started. Not an insmod approval.
+Source of the driver behavior: commit 24ba4ae67b1cc143176a55754590d350f9724632
+(the C sources are the same as cfda0c4e14beeaa9c46ed55aa73124a4886b71f2).
+Module to load: /tmp/wd24adv-pr14.ko
+Do not insmod /tmp/wd24adv.ko. That older file stays where it is.
+No mmap tool on this run.
+
+Audit against linux-6.18.57 and the supplied config
+(CONFIG_FB=m, CONFIG_FRAMEBUFFER_CONSOLE=y,
+CONFIG_FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER unavailable,
+CONFIG_FRAMEBUFFER_CONSOLE_LEGACY_ACCELERATION off,
+CONFIG_VT_HW_CONSOLE_BINDING=y).
+
+s6d_bind=1 allows fb_open(info, 0). register_framebuffer is called
+with hw_lock dropped, because fbcon holds console_lock and then takes
+hw_lock in fillrect/imageblit. The armed printk is also outside
+hw_lock. A same-task reentry into those draw ops returns without
+drawing and without locking again. That is the 9ad254f self-deadlock,
+closed in this source and not yet tried with fbcon actually bound.
+
+Expiry calls s6d_stop before the text restore. s6d_stop sets the
+session inactive, drops hw_lock, then takes console_lock for the
+banking end, then drops hw_lock again and calls unregister_framebuffer.
+unregister runs fbcon_fb_unbind, which takes console_lock and, with
+this config, do_unbind_con_driver back to the previous console.
+fb_release(user=0) from that path returns without a second session end.
+The text restore runs only after unregister has returned. A mismatch
+there returns non-zero and leaves in_text clear.
+
+copyarea and fb_setcolreg do not block this trial. fb_scrollmode is
+hardwired to SCROLL_REDRAW when legacy acceleration is off, and this
+fb does not set FBINFO_HWACCEL_COPYAREA, so the noop copyarea is not
+called. Missing fb_setcolreg leaves the DAC alone. Colors on the panel
+are not a pass criterion. Both are usability limits for a later
+console or X client, not teardown blockers.
+
+No code change for this run. The kill pass already exercised release
+then expiry on this module. The new risk is only the fbcon draw during
+register and until unregister. If insmod never returns, the task is in
+the kernel. kill -9 does not interrupt mutex_lock, console_lock, or a
+fault that has not returned, and this sequence has no second shell.
+Stop. Do not type further commands.
+
+Headless pass, all of these:
+  RC=0
+  a dmesg line "Console: switching to colour frame buffer device"
+  a dmesg line "armed + registered fb0" containing s6d_bind=1
+  register result 0, not -19
+  no thrash line
+  "live trial expiry: 0" and mismatches 0
+  one /proc/wd24adv/live read shows in_text 1
+  one /proc/wd24adv/s6d read shows armed 0 and fb_reg 0
+  /proc/fb empty
+  vtcon0 name (S) VGA+ and bind 1
+  no vtcon whose name contains "frame buffer"
+  RM=0 and the shell still answers
+
+Not a pass, even if the lines above succeed: panel colors, readable
+glyphs, or the keyboard. Those are operator observations only.
+
+Headless fail, stop:
+  RC does not return
+  no switching line, or register is not 0
+  any thrash or latched non-zero
+  expiry not 0, or in_text not 1
+  /proc/fb still occupied after expiry
+  a frame buffer vtcon remains after expiry
+  the shell stops answering
+
+Sequence. Repeat the gate, one line at a time:
+  cat /proc/fb
+  cat /sys/class/vtconsole/vtcon0/name
+  cat /sys/class/vtconsole/vtcon0/bind
+Empty /proc/fb. Name (S) VGA+. Bind 1. If another vtcon exists, stop.
+
+  dmesg -c >/dev/null
+  insmod /tmp/wd24adv-pr14.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=1
+  echo RC=$?
+
+pattern=0 skips the bar paint. The only framebuffer paint is fbcon,
+inside insmod, before RC. Wait for RC. Do not type while it is painting.
+A long wait can be that redraw. A wait that never returns is a fail.
+
+After RC=0, one read. If it prints "hw busy", do not loop. Wait for expiry.
+  cat /proc/wd24adv/s6d
+Expect fb_reg 1, bind_param 1, armed 1, when the read is not busy.
+
+Wait for the trial printk. Then:
+  cat /proc/wd24adv/live
+  cat /proc/wd24adv/s6d
+  cat /proc/fb
+  cat /sys/class/vtconsole/vtcon0/name
+  cat /sys/class/vtconsole/vtcon0/bind
+  rmmod wd24adv
+  echo RM=$?
+
+If expiry is not 0, still one rmmod so the module is not left loaded,
+then stop. Do not call that a pass.
+
+Xfbdev is not this run. On this floppy, Xfbdev, startx, and xinit are
+not on PATH and the X11 directories are absent. The design note names
+Xfbdev.tcz from Tiny Core 16.x/x86 as the small server, and rejects
+xorg-server.tcz on a 36 MB machine. A later RAM-only try would need
+those extension files and a loader already on the floppy, copied into
+RAM only. tce-load on this floppy is not established. No CF write, no
+reboot, and no new kernel for that. It waits until this bind trial
+and a separate approval.

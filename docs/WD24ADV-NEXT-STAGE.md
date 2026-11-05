@@ -386,7 +386,13 @@ Gate for `s6d_bind=0`: the live vtcon and `/proc/fb` checks pass. fbcon's consol
 
 ## Registered no-fbcon mmap pass
 
-Same hashes as the Debian build: module `7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36`, tool `93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8`. insmod returned 0. The node was fb0, fbcon did not bind, register returned -19. The tool printed `WD24S6D-MMAP ok stamps 5 tail 1` and its status was 0. `/proc/wd24adv/s6d` showed faults 10, switches 10, thrash 0, latched 0. Trial expiry was 0 with in_text 1. `/proc/fb` was empty after that. rmmod returned 0. The shell answered, and the only vtcon was VGA+. The operator confirmed bars, five blocks, the corner pixel, and the root text console. That is the normal tool path (munmap and close). It is not the `--hold` / SIGKILL path. The next sequence, not started, is `docs/s6d-hold-runbook.txt`. `--hold` takes no device argument and always opens `/dev/fb0`. `kill -9` does not interrupt an uninterruptible kernel wait.
+Same hashes as the Debian build: module `7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36`, tool `93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8`. insmod returned 0. The node was fb0, fbcon did not bind, register returned -19. The tool printed `WD24S6D-MMAP ok stamps 5 tail 1` and its status was 0. `/proc/wd24adv/s6d` showed faults 10, switches 10, thrash 0, latched 0. Trial expiry was 0 with in_text 1. `/proc/fb` was empty after that. rmmod returned 0. The shell answered, and the only vtcon was VGA+. The operator confirmed bars, five blocks, the corner pixel, and the root text console. That is the normal tool path (munmap and close).
+
+## Hold / SIGKILL pass
+
+Same two hashes, staged as `/tmp/wd24adv-pr14.ko` and `/tmp/wd24s6d-mmap-pr14`. The older `/tmp/wd24adv.ko` was not replaced. Preflight was the same kernel, empty `/proc/fb`, only VGA+. insmod 0, fb0, no bind. The tool printed `WD24S6D-MMAP hold` with active 1 busy 1. SIGKILL of that pid returned 0, wait status 137, pid gone. `S6d: end (fb release)` reported faults 10 switches 10 thrash 0. Then active 0, busy 0, stopping 1, framebuffer still registered. Trial expiry 0, mismatches 0, in_text 1, armed 0, fb_reg 0, `/proc/fb` empty, rmmod 0. Shell answered. Only fb, font, and VGA+. `kill -9` was used while the tool was in `pause()` after the hold line. That does not show that `kill -9` can interrupt `mutex_lock`, `console_lock`, or a fault.
+
+No `s6d_bind=1` run and no X run. `Xfbdev`, `startx`, and `xinit` are not on PATH, and the X11 directories are absent. The bounded bind sequence, not started, is `docs/s6d-bind-runbook.txt`. It uses `/tmp/wd24adv-pr14.ko` only. `copyarea` is not on the fbcon scroll path with this config (`fb_scrollmode` is `SCROLL_REDRAW`), and missing `fb_setcolreg` changes panel colors only. Neither blocks the teardown checks. Panel and keyboard stay operator observations.
 
 `test_s6d_fault` is a userspace simulator of the pure plan and a hand-written stop order. It does not load the module. Its OK line says SIMULATOR. The host `make -C modules/wd24adv/tests test` (system gcc) covers `test_vga` restore mismatch (`in_text` stays false) and that simulator. QEMU was not run. The cleanup figures are not kernel execution.
 
@@ -458,6 +464,4 @@ What the panel should show: the 16 bars, plus five 8×8 blocks at pixel (0,0), (
 
 Stop if: `Console: switching` appears, bars vanish into a text console, thrash is non-zero, a register mismatch is logged, the expiry line is non-zero or `in_text` is not 1, the shell stops answering, or the mmap tool prints `bad`.
 
-Not this sitting: `--hold` (prints `WD24S6D-MMAP hold`, mapping stays up; `kill -9` of that pid, or the 60 s alarm `_exit`, then the trial restore) and a repeat whose only difference is letting the alarm fire. Those are separate OKs. Do not background the tool on the first run.
-
-`s6d_bind=1` is not scheduled. Xfbdev is not scheduled.
+The `--hold` / SIGKILL pass is recorded above. The next sequence, not started, is `docs/s6d-bind-runbook.txt`. Xfbdev is not part of that sequence.

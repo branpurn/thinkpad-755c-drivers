@@ -217,6 +217,28 @@ Tool printed `WD24S6D-MMAP ok stamps 5 tail 1` with status 0.
 Trial expiry 0, in_text 1. /proc/fb empty. rmmod 0.
 Shell answered. Only vtcon was VGA+.
 Operator saw bars, five blocks, the corner pixel, and the root text console.
-This is the normal mmap path. The --hold / SIGKILL run was not started.
-Runbook: docs/s6d-hold-runbook.txt. kill -9 does not break an
+This is the normal mmap path. kill -9 does not break an
 uninterruptible kernel wait.
+
+---
+
+## Hold / SIGKILL pass — same module and tool, one run
+
+Staged files, not the older /tmp/wd24adv.ko:
+module /tmp/wd24adv-pr14.ko
+sha256 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36
+tool /tmp/wd24s6d-mmap-pr14
+sha256 93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8
+Preflight: kernel 6.18.57-tc755x, /proc/fb empty, only vtcon0 (S) VGA+ bind 1.
+insmod returned 0. fb0 registered. fbcon did not bind.
+The tool printed WD24S6D-MMAP hold. /proc/wd24adv/s6d then showed active 1 busy 1.
+SIGKILL of that exact pid returned 0. wait status 137. The pid was then absent.
+printk: S6d: end (fb release): faults 10 switches 10 thrash 0.
+Next s6d read: active 0, busy 0, stopping 1, framebuffer still registered.
+Trial expiry 0, mismatches 0, in_text 1. Then armed 0, fb_reg 0.
+/proc/fb empty. rmmod 0. Shell answered.
+Loaded modules after that: fb and font only. Only VGA+ vtcon.
+No s6d_bind=1 run. No X run. Xfbdev, startx, and xinit are absent from
+PATH on this floppy, and the X11 directories are absent.
+The --hold form that was used is one argument and opens /dev/fb0.
+Combining --hold with a device path exits before open.

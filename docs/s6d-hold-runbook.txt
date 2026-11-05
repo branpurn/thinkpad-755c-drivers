@@ -1,13 +1,15 @@
-S6d --hold process-death runbook. Not started. Not an insmod approval.
+S6d --hold process-death runbook. Passed once. Not an approval to repeat it.
 Source commit cfda0c4e14beeaa9c46ed55aa73124a4886b71f2.
 Tool: modules/wd24adv/tests/wd24s6d-mmap.c
 Driver: modules/wd24adv/wd24adv_main.c (s6d_vma_close, s6d_fb_release, s6d_end_locked, s6d_stop, s6d_read, trial_fn, hw_run)
 
-The registered no-fbcon mmap pass already happened with module
-7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36
+The registered no-fbcon mmap pass and the later SIGKILL pass both used
+module 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36
 and tool 93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8.
-This file is only the next cleanup sequence. Do not run it until the
-operator is watching and the preflight below is repeated.
+On the machine those files are /tmp/wd24adv-pr14.ko and
+/tmp/wd24s6d-mmap-pr14. /tmp/wd24adv.ko is the older file and stays.
+The result is in docs/s6d-live-2026-11-05.txt. The commands below are
+the sequence that was used, with those staged paths.
 
 --hold means one argument and only that argument
   wd24s6d-mmap --hold
@@ -83,14 +85,14 @@ Empty /proc/fb. Name (S) VGA+. Bind 1. If vtcon1 exists, stop.
 dmesg must not show a new "Console: switching" line. Then:
 
   dmesg -c >/dev/null
-  insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=120 s6d=1 pattern=1 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
+  insmod /tmp/wd24adv-pr14.ko dryrun=0 live=1 mode=640x480-8 trial=120 s6d=1 pattern=1 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
   echo RC=$?
 
 Stop unless RC=0, the register line says fb0 and register -19, and
 there is no "Console: switching". If the node is not fb0, stop.
 --hold cannot select another device.
 
-  wd24s6d-mmap --hold & echo PID=$!
+  /tmp/wd24s6d-mmap-pr14 --hold & echo PID=$!
 
 The digits after PID= are the only kill argument. Wait for
   WD24S6D-MMAP hold
