@@ -434,6 +434,71 @@ other result: stop and save the files. TIMEOUT: read the idle re-check line.
 IDLE seen: carry on. STILL BUSY / LOCKED: stop; do not rmmod, do not load
 wd90c24fb; save the files and power off.
 
+## S5: on-screen host-data BITBLT, MONO expansion (prepared 2026-11-05 UTC, not run)
+
+Design doc section 7, stage S5. `insmod wd24adv.ko dryrun=0 live=1 mode=640x480-8 s5=1`:
+after the PROVEN 640x480-8 trial mode set and test pattern (15 s trial timer
+queued), inside the same insmod, 8 host-data colour-expansion BITBLTs on the
+visible frame in bank 1, each followed by a full bank-1 readback against the
+model. Same S3/S4 machinery (entry checks, snapshot read twice, ~0.2 s timeout
+latch with the idle re-check / LOCKED path, restore to the same-load
+snapshot), plus the host port 23C4h (6 ports 23C0h-23C5h requested).
+
+| op | what | CNTRL2 | FG/BG | pattern |
+|---|---|---|---|---|
+| 1 | MONO 8x8 (16,112) opaque | 0 | 3C/01 | (r^c)&1 |
+| 2 | MONO 13x9 (40,112) opaque | 0 | 3F/00 | (r+c)%3==0 |
+| 3 | MONO 32x16 (64,112) opaque | 0 | 30/3E | ((5r+3c)>>2)&1 |
+| 4 | MONO 64x64 (112,120) opaque | 0 | 3C/00 | ((r*r+c*c)>>4)&1 |
+| 5-8 | same four, transparent, at x=200/224/248/296 | 8 | 3F/38/3C/3F | same |
+
+Format (wd90c24fb cexp variant 0): CNTRL1 090E, ROP SRC, 4 px per word in
+bits 3:0, bit 3 = leftmost, ceil(w/4) words per row. Each word is written only
+after a 23C2h read of CNTRL1 shows ACT (0800h); ACT clear before all words are
+sent = HOST DATA SHORT (stop, restore). After the last word: idle poll; busy =
+TIMEOUT (no drain). The 23C4h guard allows only the running op's next owed
+word, value-checked. Exact counts: 116 writes to 23C2h, 2408 to 23C4h, no
+23C4h read. BG (idx B) is writable only in host programs. Never written: block 2,
+C, D, F; no abort.
+
+s5=2 (HOSTCOL, CNTRL1 0902, 3 ops, 2336 words, 2*ceil(w/4) words per row,
+low byte = left pixel) is UNPROVEN: built and QEMU-tested, but a separate live
+gate, only after s5=1 is OK.
+
+What to see for ~15 s: the normal pattern with four small checker/stripe/
+ring patches near y=112-184 on solid boxes (opaque, x=16-176) and the same four
+patterns drawn over the bars with no box (transparent, x=200-360).
+
+Build: tc755x tree (kobj-vm86), vermagic `6.18.57-tc755x mod_unload 486`, sha256
+`f2ac6eee0554263133054b69fead93e4af1fe36a306b670efd4f5f5070c3540c`.
+Tests: host test_s5 406/0 (independent engine; faults: host short, host hang,
+reversed bits, swapped colours, stray write, start ignored, readback flip,
+entry refusals); all other host tests unchanged; QEMU qemu-wd24adv-s5.py 46/46
+(exact 23C2h/23C4h lists, ACT before each word, fake_hang=3 SHORT, fake_hang=4
+TIMEOUT/LOCKED pinned); S3 QEMU 34/34, S4 QEMU 35/35.
+
+Exact serial lines (plog.sh each first; send each only after the previous
+returned to the prompt; no retries):
+
+```
+pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
+kill <the Xfbdev PID printed above>
+echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo RM=$?
+dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$?
+S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = f2ac6eee001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s5=1; echo RC=$?; }
+sleep 20; cat /proc/wd24adv/s5 > /tmp/s5run1.txt; cat /proc/wd24adv/live > /tmp/s5live1.txt; grep -E "S5 result|op [0-9]+ |host|DEAD|idle|restore:|writes" /tmp/s5run1.txt; dmesg | grep wd24adv
+rmmod wd24adv; echo RM=$?
+insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?
+( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & )
+i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X
+```
+
+Expected: RC=0, `S5 result: OK`, 8 ops VERIFIED with host words n/n, 2408
+words to 23C4h, restore read 1002, text back at expiry, RM=0, X-UP. Anything
+else: stop and save the files. HOST DATA SHORT: stop, save, do not continue to
+s5=2. TIMEOUT: read the idle re-check line; IDLE seen: carry on. STILL BUSY /
+LOCKED: stop; no rmmod, no wd90c24fb load; save the files and power off.
+
 ## Roll-up visual test (prepared 2026-11-04, run live 2026-11-04)
 
 One sequence, each PROVEN mode as its own load with the 15 s auto-revert

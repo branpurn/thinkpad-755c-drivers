@@ -53,7 +53,7 @@
 #define WD24S3_WIN	0x10000u	/* bank 6, compared in full */
 #define WD24S3_PITCH	640
 #define WD24S3_NOPS	3
-#define WD24S3_NPAR	11
+#define WD24S3_NPAR	12	/* S5 MONO: + BG */
 #define WD24S3_SPINS	200000		/* as wd90c24fb WD_BLT_SPINS, ~0.2 s */
 #define WD24S3_NCRC	6		/* banks 0-5 */
 #define WD24S3_NLOG	2400
@@ -61,6 +61,10 @@
 #define WD24S3_BACKC	0x0d00		/* ACT | PACKED | BACK (S4 only) */
 #define WD24S3_FILL	0x0908		/* ACT | PACKED | SRC_FCOL */
 #define WD24S3_COPY	0x0900		/* ACT | PACKED */
+#define WD24S3_MONO	0x090e		/* ACT | PACKED | SRCF mono host | SRC I/O (S5) */
+#define WD24S3_HCOL	0x0902		/* ACT | PACKED | SRC I/O (S5 HOSTCOL) */
+#define WD24S5_P_HOST	0x23c4		/* BITBLT I/O port (DS 21.12), S5 only */
+#define WD24S5_HLOG	4		/* 23C4h writes logged at each end of an op */
 
 struct wd24s3_par {
 	u8 idx;
@@ -78,6 +82,11 @@ struct wd24s3_op {
 	struct wd24s3_par par[WD24S3_NPAR];
 	u16 rop;		/* ROP word (idx 9) value, for the model */
 	bool back;		/* CNTRL1 BACK: par src/dst are bottom-right */
+	/* S5 host-data ops (0 for S3/S4) */
+	u8 host;		/* 0 none, 1 MONO (colour expanded), 2 HOSTCOL */
+	bool transp;		/* MONO: 0 bits leave the destination */
+	u8 bg;			/* MONO opaque: colour of 0 bits */
+	u8 pat;			/* pattern id, wd24s5_bit / wd24s5_px */
 };
 
 extern const struct wd24s3_op wd24s3_ops[WD24S3_NOPS];
@@ -97,10 +106,27 @@ struct wd24s3_prog {
 	u32 base;			/* bank start, = bank << 12 */
 	u8 bank;			/* PR0A value */
 	unsigned int max_ix, max_data;	/* guard caps on 23C0h / 23C2h writes */
+	const char *param;		/* module parameter: "s3" / "s4" / "s5" */
+	bool host;			/* S5: BG and 23C4h (owed words only) allowed */
+	unsigned int max_host;		/* guard cap on 23C4h writes */
 };
 extern const struct wd24s3_prog wd24s3_prog3, wd24s3_prog4;
 #define WD24S4_NOPS	11
 extern const struct wd24s3_op wd24s4_ops[WD24S4_NOPS];
+/* S5: s5=1 MONO (opaque + transparent), s5=2 HOSTCOL; both bank 1 */
+#define WD24S5_NOPS	8
+#define WD24S5H_NOPS	3
+extern const struct wd24s3_op wd24s5_ops[WD24S5_NOPS], wd24s5h_ops[WD24S5H_NOPS];
+extern const struct wd24s3_prog wd24s3_prog5, wd24s3_prog5h;
+/* host data: words owed after the start (DS 21.14 mono: 4 px in bits 3:0,
+ * msb = leftmost, as wd90c24fb cexp var 0, OBS-FB; DS 21.12 colour: 4 px
+ * per two words, low word first, low byte = left pixel: UNPROVEN); no
+ * word straddles rows; pad pixels 0 */
+u32 wd24s5_words(const struct wd24s3_op *o);
+u32 wd24s5_wpr(const struct wd24s3_op *o);
+u16 wd24s5_word(const struct wd24s3_op *o, u32 n);
+bool wd24s5_bit(const struct wd24s3_op *o, u32 r, u32 c);
+u8 wd24s5_px(const struct wd24s3_op *o, u32 r, u32 c);
 
 struct wd24s3_mem {
 	int (*bank)(void *priv, u8 pr0a);	/* PR0A write + readback; 0 ok */
@@ -118,6 +144,7 @@ enum wd24s3_res {
 	WD24S3_VRAM_BAD,	/* VRAM differs from the model: stopped, restored */
 	WD24S3_TIMEOUT,		/* engine busy: stopped, nothing more written */
 	WD24S3_RESTORE_BAD,
+	WD24S3_HOST_SHORT,	/* S5: engine idle before all host words: stopped, restored */
 };
 
 struct wd24s3 {
@@ -140,6 +167,10 @@ struct wd24s3 {
 	u32 changes[WD24S3_MAXOPS];	/* bytes each op changes (model) */
 	u32 spins[WD24S3_MAXOPS], idle_spins[WD24S3_MAXOPS];
 	u16 c1_after[WD24S3_MAXOPS];
+	u32 hwords[WD24S3_MAXOPS];	/* 23C4h words written per op */
+	bool hgo;			/* a host op is started: words owed */
+	u32 host_n;			/* next word index of the running op */
+	unsigned int whost;
 	bool busy_seen[WD24S3_MAXOPS];
 	u32 ndiff, diff_off;
 	u8 diff_got, diff_want;

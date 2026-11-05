@@ -34,6 +34,7 @@
  *   /proc/wd24adv/s2       - s2=1 only: the S2 write list (dryrun=1) or result
  *   /proc/wd24adv/s3       - s3=1 only: the S3 operation list (dryrun=1) or result
  *   /proc/wd24adv/s4       - s4=1 only: the S4 operation list (dryrun=1) or result
+ *   /proc/wd24adv/s5       - s5=1|2 only: the S5 host-data list (dryrun=1) or result
  *
  * S1 (s1=1 dryrun=0, never with live=1 or mode=): after the same read-only
  * entry check, a read-only probe of the 23C0h register blocks
@@ -142,7 +143,11 @@ static bool s4;
 module_param(s4, bool, 0444);
 MODULE_PARM_DESC(s4, "S4 ON-SCREEN BITBLT fills (all 7 X ROPs) and overlapping fwd/back copies in frame bank 1 after the 640x480-8 trial mode set: dryrun=1 lists, dryrun=0 live=1 mode=640x480-8 runs once");
 
-/* s3=1 or s4=1: the program run by s3_live() */
+static int s5;
+module_param(s5, int, 0444);
+MODULE_PARM_DESC(s5, "S5 ON-SCREEN host-data BITBLT (23C4h) in frame bank 1 after the 640x480-8 trial mode set: 1 = MONO colour expansion (opaque + transparent), 2 = HOSTCOL (UNPROVEN); dryrun=1 lists, dryrun=0 live=1 mode=640x480-8 runs once");
+
+/* s3=1, s4=1 or s5=1|2: the program run by s3_live() */
 static const struct wd24s3_prog *sprog = &wd24s3_prog3;
 
 #define TXT_MAX	(160 * 1024)
@@ -919,7 +924,7 @@ static void s3_plan_text(void)
 
 	APPEND(s3_txt, len, "wd24adv %s plan (dryrun=1: no port was read or written)\n", sprog->stage);
 	APPEND(s3_txt, len, "runs once inside insmod dryrun=0 live=1 mode=640x480-8 %s=1, after the trial mode set + pattern (timer queued)\n",
-	       sprog == &wd24s3_prog4 ? "s4" : "s3");
+	       sprog->param);
 	APPEND(s3_txt, len, "1. 23C0h read twice == %04x, 3C0h/3C1h alias check; snapshot 25 words twice (agree, echo, CNTRL1 ACT=0, cursor enable=0)\n", WD24S2_S);
 	APPEND(s3_txt, len, "2. VRAM (reads; PR0A 00-60h): banks 0-6 except %02xh checksummed; PR0A %02xh: that bank read twice == ; every op must change >= 1 byte\n",
 	       sprog->bank, sprog->bank);
@@ -935,8 +940,19 @@ static void s3_plan_text(void)
 	}
 	APPEND(s3_txt, len, "4. restore every written parameter to the snapshot (W, R); post-pass 24 words == snapshot, ACT=0; other banks' checksums equal; PR0A 00; W 23C0h %04x, R ==\n", WD24S2_S);
 	APPEND(s3_txt, len, "timeout: stop, no further write of any kind (no abort), no VRAM access; the trial expiry restores text\n");
-	APPEND(s3_txt, len, "never written: block 2 (cursor), BG, C, D, F, 23C4h; CNTRL1 only %s\n",
-	       sprog == &wd24s3_prog4 ? "0908/0900/0D00 (packed; 0D00 = backward copy)" : "0908/0900 (forward, packed)");
+	if (sprog->host) {
+		APPEND(s3_txt, len, "host data: after the CNTRL1 start, per word: R 23C2h (sel 1001h) ACT=1 else stop (HOST DATA SHORT, restore), then W 23C4h = the next owed word only; exactly the word count, no drain\n");
+		for (j = 0; j < sprog->nops; j++)
+			APPEND(s3_txt, len, "   op %u: %u words (%u per row x %u), first %04x last %04x\n", j + 1,
+			       wd24s5_words(&sprog->ops[j]), wd24s5_wpr(&sprog->ops[j]), sprog->ops[j].h,
+			       wd24s5_word(&sprog->ops[j], 0),
+			       wd24s5_word(&sprog->ops[j], wd24s5_words(&sprog->ops[j]) - 1));
+		APPEND(s3_txt, len, "never written: block 2 (cursor), C, D, F; CNTRL1 only %04x; 23C4h only owed words of a started op\n",
+		       sprog->ops[0].cntrl1);
+	} else {
+		APPEND(s3_txt, len, "never written: block 2 (cursor), BG, C, D, F, 23C4h; CNTRL1 only %s\n",
+		       sprog == &wd24s3_prog4 ? "0908/0900/0D00 (packed; 0D00 = backward copy)" : "0908/0900 (forward, packed)");
+	}
 	s3_len = len;
 }
 
@@ -969,9 +985,10 @@ static void s3_report(const char *pre)
 		APPEND(s3_txt, len, " %08x", s->crc1[k]);
 	APPEND(s3_txt, len, "\n");
 	for (j = 0; j < sprog->nops; j++)
-		APPEND(s3_txt, len, "  op %u %-38s model changes %u; idle polls %u; busy %s, polls %u; CNTRL1 after %04x%s\n",
+		APPEND(s3_txt, len, "  op %u %-38s model changes %u; idle polls %u; busy %s, polls %u; CNTRL1 after %04x; host words %u/%u%s\n",
 		       j + 1, sprog->ops[j].name, s->changes[j], s->idle_spins[j],
 		       s->busy_seen[j] ? "seen" : "not seen", s->spins[j], s->c1_after[j],
+		       s->hwords[j], wd24s5_words(&sprog->ops[j]),
 		       j < s->done ? " VERIFIED" : "");
 	if (s->ndiff)
 		APPEND(s3_txt, len, "VRAM: %u bytes differ; first %05x read %02x want %02x\n",
@@ -990,9 +1007,9 @@ static void s3_report(const char *pre)
 		       s->idle_checks, s->idle_last_ix, s->idle_last_spins, s->idle_last_c1,
 		       s->idle_seen ? "IDLE seen: video memory unlocked, normal text restore" :
 		       !vram_dead ? "busy, not locked yet" : "STILL BUSY: video memory LOCKED (registers-only restore, rmmod refused): power cycle required");
-	APPEND(s3_txt, len, "23C0h writes %u, 23C2h writes %u (starts %u), PR0A writes %u, 23C4h 0, refusals %u, reads %u (polls %u), restore fails %x\n",
-	       s->wix, s->wdata, s->wgo, s->wbank, s->refused, s->reads, s->polls, s->restore_fail);
-	APPEND(s3_txt, len, "access log (in order; polls: first and last only; W8 03cf 09vv = PR0A):\n");
+	APPEND(s3_txt, len, "23C0h writes %u, 23C2h writes %u (starts %u), PR0A writes %u, 23C4h %u, refusals %u, reads %u (polls %u), restore fails %x\n",
+	       s->wix, s->wdata, s->wgo, s->wbank, s->whost, s->refused, s->reads, s->polls, s->restore_fail);
+	APPEND(s3_txt, len, "access log (in order; polls and 23C4h words: first and last only; W8 03cf 09vv = PR0A):\n");
 	for (k = 0; k < s->nlog; k++)
 		APPEND(s3_txt, len, "  %c%u %04x %04x\n", s->log[k].w ? 'W' : 'R',
 		       s->log[k].width, s->log[k].port, s->log[k].val);
@@ -1079,6 +1096,12 @@ static int s3_alloc(void)
 	return (s3st && s3_txt && s3_mem) ? 0 : -ENOMEM;
 }
 
+/* 23C0h-23C3h; S5 also the BITBLT I/O port 23C4h-23C5h */
+static unsigned int s3_nports(void)
+{
+	return sprog->host ? 6 : 4;
+}
+
 /* caller holds hw_lock; the trial mode is set and its timer queued */
 static void s3_live(const struct wd24_mode *m)
 {
@@ -1092,8 +1115,8 @@ static void s3_live(const struct wd24_mode *m)
 	    !m || strcmp(m->name, "640x480-8") || !vmem)
 		pre = "not in the 640x480-8 trial state";
 #endif
-	if (!pre && !request_region(WD24S1_P_INDEX, 4, "wd24adv s3"))
-		pre = "ports 23C0-23C3 busy";
+	if (!pre && !request_region(WD24S1_P_INDEX, s3_nports(), "wd24adv s3"))
+		pre = sprog->host ? "ports 23C0-23C5 busy" : "ports 23C0-23C3 busy";
 	if (pre) {
 		s3_report(pre);
 		pr_err("%s: not run: %s\n", sprog->stage, pre);
@@ -1116,12 +1139,12 @@ static void s3_live(const struct wd24_mode *m)
 		vram_gate("after the S3 timeout");
 	}
 	s3_region = false;
-	release_region(WD24S1_P_INDEX, 4);
+	release_region(WD24S1_P_INDEX, s3_nports());
 	s3_report(NULL);
 	pr_info("%s: %s%s%s; ops verified %u; 23C2h writes %u (starts %u), PR0A writes %u; details: /proc/wd24adv/%s\n",
 		sprog->stage, wd24s3_res_name(s3st->res), s3st->why ? ": " : "",
 		s3st->why ? s3st->why : "", s3st->done, s3st->wdata, s3st->wgo, s3st->wbank,
-		sprog == &wd24s3_prog4 ? "s4" : "s3");
+		sprog->param);
 }
 
 #ifdef WD24S1_QEMU_FAKE
@@ -1179,7 +1202,7 @@ static int __init wd24adv_init(void)
 {
 	const struct wd24_mode *m = NULL;
 	int fails, err;
-	bool sx = s3 || s4;	/* the S3 machinery runs either program */
+	bool sx = s3 || s4 || s5;	/* the S3 machinery runs each program */
 
 	if (allow_routing || allow_crt) {
 		pr_err("allow_routing/allow_crt refused: wd24adv has no panel/CRT routing\n");
@@ -1207,15 +1230,21 @@ static int __init wd24adv_init(void)
 		return -EINVAL;
 	}
 	if (sx && (s1 || s2)) {
-		pr_err("s3=1 / s4=1 are separate stages: s1=1 / s2=1 refused with them\n");
+		pr_err("s3=1 / s4=1 / s5 are separate stages: s1=1 / s2=1 refused with them\n");
 		return -EINVAL;
 	}
-	if (s3 && s4) {
-		pr_err("s3=1 and s4=1 are separate stages: not both\n");
+	if (s5 < 0 || s5 > 2) {
+		pr_err("s5 must be 1 (MONO) or 2 (HOSTCOL)\n");
+		return -EINVAL;
+	}
+	if ((s3 + s4 + !!s5) > 1) {
+		pr_err("s3=1, s4=1 and s5 are separate stages: only one\n");
 		return -EINVAL;
 	}
 	if (s4)
 		sprog = &wd24s3_prog4;
+	if (s5)
+		sprog = s5 == 2 ? &wd24s3_prog5h : &wd24s3_prog5;
 #ifdef WD24S1_QEMU_FAKE
 	if (sx && !dryrun && (live || *mode)) {
 		pr_err("QEMU fake build: s3=1 runs on the model only, without live=1\n");
@@ -1223,7 +1252,7 @@ static int __init wd24adv_init(void)
 	}
 #else
 	if (sx && !dryrun && (!live || strcmp(mode, "640x480-8"))) {
-		pr_err("%s=1 with dryrun=0 needs live=1 mode=640x480-8\n", s4 ? "s4" : "s3");
+		pr_err("%s=%d with dryrun=0 needs live=1 mode=640x480-8\n", sprog->param, s5 ? s5 : 1);
 		return -EINVAL;
 	}
 #endif
@@ -1380,7 +1409,7 @@ static int __init wd24adv_init(void)
 	    !proc_create_data("selftest", 0444, pdir, &self_ops, NULL) ||
 	    (s1 && !proc_create_data("s1", 0444, pdir, &s1_ops, NULL)) ||
 	    (s2 && !proc_create_data("s2", 0444, pdir, &s2_ops, NULL)) ||
-	    (sx && !proc_create_data(s4 ? "s4" : "s3", 0444, pdir, &s3_ops, NULL)) ||
+	    (sx && !proc_create_data(sprog->param, 0444, pdir, &s3_ops, NULL)) ||
 	    (live && (!proc_create_data("live", 0444, pdir, &live_ops, NULL) ||
 		      !proc_create_data("control", 0200, pdir, &control_ops, NULL)))) {
 		if (live && !hw_dead) {
@@ -1407,7 +1436,7 @@ static int __init wd24adv_init(void)
 	if (sx && !live) {
 		pr_info("loaded, %s %s; see /proc/wd24adv/%s\n", sprog->stage,
 			dryrun ? "plan only (dry-run, no port access)" : "QEMU fake run done",
-			s4 ? "s4" : "s3");
+			sprog->param);
 		return 0;
 	}
 	if (!live) {

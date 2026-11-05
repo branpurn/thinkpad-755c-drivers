@@ -429,6 +429,9 @@ General rules for all stages:
 | **S10** offscreen pool | Pixmap migration and (if Q2) a glyph cache | Pool correctness, VT-switch loss handling, eviction | Pool disabled → S9 behaviour |
 | **S11** default | Owner-chosen boot option (e.g. cmdline `wd24adv`). wd90c24fb remains the default and the fallback | Boot path, fallback when wd24adv refuses to load | Remove the cmdline flag |
 
+Status 2026-11-05 UTC: S5 s5=1 (MONO) built and box-tested, not run; s5=2 (HOSTCOL) UNPROVEN, separate gate. See WD24ADV-LIVE-TEST.md S5.
+
+
 Moving from wait-after-every-op to wait-before-program (§3.4) is a separate
 mini-gate between S8 and S9.
 
