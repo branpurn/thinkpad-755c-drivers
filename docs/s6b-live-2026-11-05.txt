@@ -1,0 +1,19 @@
+S6b live run, 2026-11-05 ~04:50-05:10 UTC (owner approval, watching at the screen)
+Module: sha256 c8137d98ebf73280e7889867088d4bb1ed64de15a2a4cf6b990daa42c5d4529a; tool 398ce9447a1644e78db770d64f07311d1dbfd98d8269af5e5400b7ea35618ba6
+Copy: box -> grok-bot-server -> Pop -> send1.sh (XMODEM 38400), shas matched on every hop and on the 755C.
+Lines: one per call, plog each, no overlap, no retries.
+  L1 X pids (Xfbdev 1192); L2 kill 1192; L3 text=1 + rmmod wd90c24fb RM=0; L4 Q=0;
+  L5 G=c8137d98398ce944001 RC=0 (live load 46/224, mode 93/263, mismatches 0, S6b armed major 254);
+  L6 run: S6B-RESULT FAIL open: No such device, T=0;
+  L7 hold/kill -9: not sent (session never opened);
+  L8 expiry read; L9 rmmod wd24adv RM=0; L10 wd90c24fb RC=0; L11 startx;
+  L12 X-UP (Xfbdev 1282); L13 wd24probe3 baseline.
+
+RESULT: NOT TESTED (open refused, no S6b register write). The 60 s trial had already
+expired before the run line reached the 755C: L5 took ~86 s and L6 ~91 s to type over
+the slow serial path, so the trial expired (dmesg: "live trial expiry: 0 (port data
+writes 896, index writes 336, mismatches 0)") and ended the armed session first.
+Text restore was clean. Fix for the rerun: a longer trial (e.g. trial=300) or start
+the tool in the same line as insmod.
+Baseline wd24probe3 (under X): RC=19 result=ok restore_fail=0x00 wrote_sr06=0,
+  SR06=0f SR11=5d GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 idx 11/09/01: unchanged.
