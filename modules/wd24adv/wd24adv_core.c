@@ -105,6 +105,9 @@ int wd24_guard(const struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 old, u8 val
 				return (c->saved && c->s6_lock_open &&
 					val == WD24_PR20_UNLOCK(c->bios.pr20)) ? 0 : -EPERM;
 			}
+			/* fix_sr06: S6 "L" idiom — write 0x0F once when nibble already 0x0F */
+			if (c->fix_sr06 && val == 0x0f && (old & 0x0f) == 0x0f)
+				return 0;
 			if (val == ((old & 0xef) | 0x48))
 				return 0;
 			return (c->saved && val == c->bios.pr20) ? 0 : -EPERM;
@@ -385,7 +388,9 @@ int wd24_check_panel(struct wd24_ctx *c)
  *    CR11=AE SR06=0F) or 05/85 (wd24probe3, read while wd90c24fb was live);
  *    later plans: exactly what the previous wd24adv plan left (c->exp_*);
  *  - SR06 reads 0F and the 3C4 index width test says "locked" (wd24probe3:
- *    "3C4test pre=01").  The task's literal "GR0F=05, CR29=85" is the
+ *    "3C4test pre=01").  Opt-in fix_sr06=1: if width unlocked but SR06 data
+ *    is 0x0F, write 0x0F once (S6 L relock) and re-check; else refuse.
+ *    The task's literal "GR0F=05, CR29=85" is the
  *    wd90c24fb-live state; after wd90c24fb's unload relock the BIOS values
  *    are expected, so both pairs are accepted at load only;
  *  - load also requires AR10 b0 = 0 (text mode: vgastate save_vga_text
@@ -443,9 +448,30 @@ int wd24_entry_check(struct wd24_ctx *c, enum wd24_phase ph)
 		ENTRY_FAIL(WD24_SR, WD24_SR_PR20, sr06, load ? 0x0f : c->exp_sr06 & 0x0f,
 			   "SR06 does not read the locked value", strict);
 	unl = c->be->seq_unlocked ? c->be->seq_unlocked(c) : 0;
-	if (unl != 0)
-		ENTRY_FAIL(WD24_SR, WD24_SR_PR20, (u8)unl, 0,
-			   "3C4 index width test: SR06 latch not locked (val 1 = unlocked, FF = no answer)", strict);
+	if (unl != 0) {
+		/* Floppy/POST may leave width unlocked while SR06 bits 3:0 still
+		 * read 0x0F (same as after unlock to 4Fh). Opt-in fix_sr06 writes
+		 * 0x0F once (S6 "L" relock) and re-checks; otherwise refuse. */
+		if (load && c->fix_sr06 && sr06 == 0x0f && unl == 1) {
+			int ferr;
+
+			wd24_note(c, "fix_sr06: unlocked width + SR06=0F; write 0F once (S6 L)");
+			c->tag = "fix_sr06 relock";
+			ferr = wd24_write(c, WD24_SR, WD24_SR_PR20, 0x0f);
+			if (ferr) {
+				ENTRY_FAIL(WD24_SR, WD24_SR_PR20, (u8)unl, 0,
+					   "fix_sr06: SR06=0F write/verify failed", true);
+			}
+			unl = c->be->seq_unlocked ? c->be->seq_unlocked(c) : -1;
+			if (unl != 0)
+				ENTRY_FAIL(WD24_SR, WD24_SR_PR20, (u8)unl, 0,
+					   "fix_sr06: still unlocked after SR06=0F", true);
+			wd24_note(c, "fix_sr06: width locked after relock");
+		} else {
+			ENTRY_FAIL(WD24_SR, WD24_SR_PR20, (u8)unl, 0,
+				   "3C4 index width test: SR06 latch not locked (val 1 = unlocked, FF = no answer)", strict);
+		}
+	}
 	if (load && (wd24_read(c, WD24_AR, 0x10) & 0x01))
 		ENTRY_FAIL(WD24_AR, 0x10, c->reg[WD24_AR][0x10], 0, "AR10 b0 = 1: graphics mode, not the text console", true);
 #undef ENTRY_FAIL

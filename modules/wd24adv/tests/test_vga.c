@@ -149,6 +149,33 @@ int main(void)
 	m.sr[6] = 0x48; snap = m;	/* latch left unlocked */
 	err = RUN(wd24_plan_load(&c));
 	T(err == -ENODEV && m.data_writes == 0, "SR06 latch unlocked at entry: refused, 0 data writes");
+
+	/* 4b. floppy-like: SR06 data 0x0F but width unlocked (unlock value 4Fh).
+	 * Without fix_sr06: refuse, 0 data writes. With fix_sr06: write 0x0F once,
+	 * width locks, load proceeds. Wrong nibble + fix_sr06 still refuses. */
+	setup(VM_WD24, 330);
+	m.sr[6] = 0x4f; snap = m;
+	err = RUN(wd24_plan_load(&c));
+	T(err == -ENODEV && m.data_writes == 0 && vm_cmp(&m, &snap, "4f-nofix") == 0,
+	  "SR06=4F unlocked, fix_sr06=0: refused, 0 data writes, identical");
+
+	setup(VM_WD24, 331);
+	m.sr[6] = 0x4f; snap = m;
+	c.fix_sr06 = true;
+	err = RUN(wd24_plan_load(&c));
+	T(err == 0 && c.nmismatch == 0 && c.nrefused == 0, "SR06=4F + fix_sr06: load ok");
+	T(m.violations == 0, "SR06=4F + fix_sr06: no forbidden register");
+	T((m.sr[6] & 0x58) != 0x48, "SR06=4F + fix_sr06: latch locked after load");
+	T((m.sr[6] & 0x0f) == 0x0f, "SR06=4F + fix_sr06: SR06 nibble still 0F");
+	if (err)
+		dump("fix_sr06 load");
+
+	setup(VM_WD24, 332);
+	m.sr[6] = 0x48; snap = m;	/* reads as 0x08 — not the 0x0F gate */
+	c.fix_sr06 = true;
+	err = RUN(wd24_plan_load(&c));
+	T(err == -ENODEV && m.data_writes == 0 && vm_cmp(&m, &snap, "48-fix") == 0,
+	  "SR06=48 + fix_sr06: still refused (data != 0x0F), 0 writes");
 	setup(VM_WD24, 34);
 	m.ar[0x10] = 0x41; snap = m;	/* graphics mode */
 	err = RUN(wd24_plan_load(&c));

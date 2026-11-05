@@ -191,6 +191,7 @@ struct wd24_ctx {
 	const struct wd24_backend *be;
 	const struct wd24_io *io;	/* port backend only */
 	bool allow_clock;	/* PR68/PR69 data writes (no mode uses them) */
+	bool fix_sr06;	/* load: if unlocked width + SR06==0x0F, write 0x0F once */
 	/* state */
 	bool saved;		/* lock values in bios are valid (guard) */
 	unsigned int have;	/* WD24_HAVE_* */

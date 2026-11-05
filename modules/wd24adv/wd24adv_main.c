@@ -125,6 +125,10 @@ static bool allow_clock;
 module_param(allow_clock, bool, 0444);
 MODULE_PARM_DESC(allow_clock, "permit PR68 b4:3 / PR69 clock writes; no table mode needs them (default 0)");
 
+static bool fix_sr06;
+module_param(fix_sr06, bool, 0444);
+MODULE_PARM_DESC(fix_sr06, "load: if 3C4 width unlocked and SR06 data==0x0F, write SR06=0x0F once (S6 L relock) then re-check; else refuse as usual (default 0)");
+
 static unsigned int trial = 15;
 module_param(trial, uint, 0444);
 MODULE_PARM_DESC(trial, "live: revert a mode to text after N s unless confirmed (5..600, default 15; 0 refused)");
@@ -452,8 +456,8 @@ static void build_plan(void)
 	int err;
 
 	APPEND(plan_txt, len, "wd24adv dry-run plan (no hardware register was written)\n");
-	APPEND(plan_txt, len, "allow_clock=%d; [tag] = the wd90c24fb code the write mirrors\n",
-	       allow_clock);
+	APPEND(plan_txt, len, "allow_clock=%d fix_sr06=%d; [tag] = the wd90c24fb code the write mirrors\n",
+	       allow_clock, fix_sr06);
 	model_header(&len);
 
 	for (i = 0; i < wd24_nmodes; i++) {
@@ -462,6 +466,7 @@ static void build_plan(void)
 		wd24_ctx_init(ctx, &wd24_dryrun_backend);
 		wd24_model_boot(ctx);
 		ctx->allow_clock = allow_clock;
+		ctx->fix_sr06 = fix_sr06;
 		err = wd24_plan_load(ctx);
 		if (i == 0) {
 			APPEND(plan_txt, len, "\n== load (writes=%u) ==\n", ctx->nwrites);
@@ -796,6 +801,7 @@ static int s1_live(void)
 	wd24_ctx_init(hw, &wd24_port_backend);
 	hw_io = (struct wd24_io){ k_inb, k_outb, s1_memr, s1_memw, NULL };
 	hw->io = &hw_io;
+	hw->fix_sr06 = fix_sr06;
 	wd24s1_init(s1st, &wd24s1_kernel_io);
 	s1st->strict_echo = s1_echo;
 
@@ -934,6 +940,7 @@ static int s2_live(void)
 	wd24_ctx_init(hw, &wd24_port_backend);
 	hw_io = (struct wd24_io){ k_inb, k_outb, s1_memr, s1_memw, NULL };
 	hw->io = &hw_io;
+	hw->fix_sr06 = fix_sr06;
 	wd24s2_init(s2st, &wd24s2_kernel_io);
 
 	mutex_lock(&hw_lock);
@@ -2124,6 +2131,7 @@ static int live_start(void)
 	hw->io = &hw_io;
 	hw->planes = hw_planes;
 	hw->allow_clock = allow_clock;
+	hw->fix_sr06 = fix_sr06;
 	mutex_lock(&hw_lock);
 	err = hw_run(OP_LOAD, NULL);
 	mutex_unlock(&hw_lock);

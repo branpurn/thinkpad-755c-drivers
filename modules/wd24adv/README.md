@@ -62,6 +62,7 @@ Built by `make oot` / `make wd24adv`. There is still **no `ext/*.ext`**, so no
 | `allow_routing` | 0 | Removed. Any value other than 0 is refused. |
 | `allow_crt` | 0 | Removed. Any value other than 0 is refused. |
 | `allow_clock` | 0 | Permits the PR68 b4:3 / PR69 clock block. No table mode needs it: with the boot clock it is a no-op and is skipped; a differing clock is refused while 0. |
+| `fix_sr06` | 0 | Load only: if 3C4 index width is unlocked and SR06 data reads 0x0F, write SR06=0x0F once (S6 L relock) and re-check width; otherwise refuse as usual. For S6d floppy / fresh-BIOS latch left unlocked. |
 | `s1` | 0 | The S1 read-only 23C0h probe. Dry-run: `/proc/wd24adv/s1` shows the plan only. With `dryrun=0` (and **without** `live=1` / `mode=`): runs once at load in text mode with no fb driver, after the wd24adv entry check; result in `/proc/wd24adv/s1` and dmesg. insmod returns 0 either way (the result is held); no port region is kept, so rmmod touches nothing. |
 | `s1_echo` | 1 | S1: require the 23C2h b15:12 index echo (DS 17.1, UNPROVEN). 0 only records it. Needs `s1=1`. |
 | `s6b` | 0 | S6b: /dev/wd24s6b (chrdev; ioctls `'W'` 0x37 SETWIN, 0x38 COPY, 0x39 INFO in `wd24adv_ioctl.h`). dryrun=1: one model session, no device. dryrun=0 needs `live=1 mode=640x480-8`; the device arms after the mode set and the session ends at close/exit/kill -9, text, mode, trial expiry or rmmod. Refused with s1-s6. |

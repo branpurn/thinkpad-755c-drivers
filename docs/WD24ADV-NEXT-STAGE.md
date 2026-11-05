@@ -227,8 +227,13 @@ entry” and S6 “already unlocked → ENTRY”.
 Prior S6/S6b/S6c lives started from **locked** text (after wd90c24fb unload or
 prior wd24adv relock). S6d floppy never had that path — latch left unlocked.
 
-**Next (when Brandon watches; code change first on box):**
-1. Implement opt-in `fix_sr06=1`: if unlocked && SR06==0x0F → write 0x0F once,
-   verify locked; else refuse. Host test + rebuild + XMODEM.
-2. Text prove: `insmod /tmp/wd24adv.ko dryrun=0 live=1 trial=15 fix_sr06=1`
-3. Visual: `insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0 fix_sr06=1`
+**`fix_sr06` implemented on box (no XMODEM while Brandon away):**
+- Param: `fix_sr06=1` — if load entry sees width unlocked and SR06 data==0x0F,
+  write SR06=0x0F once (S6 L), verify width locked; else refuse as before.
+- Host `test_vga`: 70/0 (incl. 4F refuse without fix, load with fix, 48+fix refuse).
+- Built vs kobj-vm86; sha256 `63dc2654e6ecc10dc996f09b258474cf4738ae38ef23bf7b12924140bb6b1595`
+  (`modules/wd24adv/wd24adv.ko`, also `out-s6d-exports/xfer/wd24adv-s6d.ko`).
+
+**When Brandon returns (XMODEM new .ko first, then):**
+1. Text prove: `insmod /tmp/wd24adv.ko dryrun=0 live=1 trial=15 fix_sr06=1`
+2. Visual: `insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0 fix_sr06=1`

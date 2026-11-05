@@ -59,3 +59,8 @@ No CF writes.
         insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0 fix_sr06=1
    Alternate without code change: boot path that relocks (e.g. brief
    wd90c24fb text=1+rmmod on a tree that has it) — not on this S6d floppy.
+
+--- fix_sr06 implemented on box 2026-11-05 ~12:04 America/New_York ---
+No XMODEM / no 755C insmod (Brandon away).
+ko sha256 63dc2654e6ecc10dc996f09b258474cf4738ae38ef23bf7b12924140bb6b1595
+Host test_vga 70/0. Retry lines when he returns: see WD24ADV-NEXT-STAGE.md.
