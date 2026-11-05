@@ -175,3 +175,30 @@ read-only font-plane compare.
 | Docs + ksyms-keep + S6d bank tests; kernel rebuilt (exports OK); **tc755-s6d.img staged** (FAT free 3584; recovery core intact) | Pop-GNOME burn of `tc755-s6d.img`; then S6d live on 755C (CF boot OFF) |
 | Later: S6d fbdev code once KDIR has exports | Any S6d live run; any Xfbdev on 755C |
 | S7 ioctl surface design (after S6d) | Live ioctl / accel runs |
+
+## Live progress 2026-11-05 (S6d floppy 6.18.57-tc755x) — America/New_York
+
+1. **modutils.tcz** mounted on 755C (`/tmp/tcloop/modutils`); `insmod`/`rmmod` available via that PATH.
+2. **s6d_export_probe.ko** insmod → three exports resolve live:
+   - `vmf_insert_pfn=c01a2a30`
+   - `zap_vma_ptes=c01a25a0`
+   - `unmap_mapping_range=c01a2690`
+   - probe returned `-ENODEV` (INS_RC=19) as designed; `rmmod` clean; `lsmod` empty after.
+3. **S6d fbdev code built** on box against `kobj-vm86` / `out-s6d-exports` Module.symvers
+   (`vermagic 6.18.57-tc755x`, depends `fb`, softdep `pre: fb`).
+   - Host: `test_s6d_bank` 15/15, `test_s6d_thrash` 54/54.
+   - Artifact: `modules/wd24adv/wd24adv.ko` sha256 `0948f0caefec353396abb5faae6fbbd26218ec122fc735af2842a0de608a130b`
+     (also staged `out-s6d-exports/xfer/wd24adv-s6d.ko`).
+4. **STOP before load** — `s6d=1` calls `register_framebuffer` and **binds fbcon (visual)**.
+   Do not insmod with `s6d=1` unless Brandon is watching the panel.
+
+### READY FOR LIVE / ready for visual — exact next command
+
+After `fb.ko` is loaded (wd90c24fb stack / graphics deps) and Brandon is watching:
+
+```
+insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0
+```
+
+(`pattern=0` avoids colour-bar path; S6d arm registers fbdev after the mode set.)
+Stop on thrash latch, register mismatch, trial restore fail, or any unexpected panel/routing change.
