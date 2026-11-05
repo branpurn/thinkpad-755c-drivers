@@ -1,0 +1,22 @@
+S6d LIVE visual attempt — 2026-11-05 America/New_York (S6d floppy 6.18.57-tc755x)
+CF boot OFF; TEAC; Pop serial; Brandon watching then stepped away (t433u/t434u).
+
+Command (once):
+  dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0; echo RC=$?
+
+Result:
+  RC=19 (-ENODEV)
+  insmod: can't insert '/tmp/wd24adv.ko': No such device
+  port data writes 0, index writes 12, mismatches 0
+  entry check: SR06 read 01 expected 00 — SR06 latch not locked (val 1 = unlocked)
+  live: load failed (-19); nothing written
+  S6d fbdev prepared message printed, but arm never reached (no mode set / no register_framebuffer)
+
+Pre: font + fb loaded; /proc/fb empty; wd24adv not loaded
+Post: same — font + fb only; /proc/fb still 0; wd24adv not in lsmod
+Prompt: root@box:~# (idle)
+
+Panel: Brandon said looked OK / bet nothing happened — consistent with refuse-before-write.
+
+No trial restore needed (module never loaded). No further visual/s6d steps (t434u STOP).
+No CF writes.

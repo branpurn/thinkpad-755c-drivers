@@ -208,3 +208,10 @@ insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0
 
 (`pattern=0` avoids colour-bar path; S6d arm registers fbdev after the mode set.)
 Stop on thrash latch, register mismatch, trial restore fail, or any unexpected panel/routing change.
+
+### Live attempt 2026-11-05 ~11:57 America/New_York — **FAILED RC=19**
+
+Exact command run once with Brandon watching. Refused at entry check:
+`SR06 read 01 expected 00` (latch unlocked). Nothing written; no fbcon bind;
+`wd24adv` never stayed loaded. STOP pending Brandon (t434u); do not retry visual
+until SR06-lock precondition understood on this floppy boot.
