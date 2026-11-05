@@ -2,12 +2,44 @@
 # One shot. Trial clock starts at insmod. No -ac. X uses -noreset
 # so the last client does not start a second server generation.
 xpid=
+cpid=
+finishing=
+finish() {
+	if [ -n "$finishing" ]; then
+		return
+	fi
+	finishing=1
+	if [ -n "$cpid" ]; then
+		st=$(state "$cpid")
+		if [ -n "$st" ] && [ "$st" != "Z" ]; then
+			kill -TERM "$cpid" 2>/dev/null
+			echo "CTERM=$?"
+			sleep 2
+		fi
+		reap_hard "$cpid"
+		cpid=
+	fi
+	if [ -n "$xpid" ]; then
+		st=$(state "$xpid")
+		if [ -n "$st" ] && [ "$st" != "Z" ]; then
+			kill -TERM "$xpid" 2>/dev/null
+			echo "TERM=$?"
+			sleep 10
+		fi
+		reap_hard "$xpid"
+		xpid=
+	fi
+	rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
+	if grep -q '^wd24adv ' /proc/modules 2>/dev/null; then
+		rmmod wd24adv
+		echo "RM=$?"
+	fi
+	rm -rf /tmp/wd24-xfbdev /tmp/xfb-prefix
+	rm -f /tmp/busybox-wd24 /tmp/wd24x-client /tmp/wd24x-run.sh
+}
 fail() {
 	echo "WD24X-RUN stop $1"
-	if [ -n "$xpid" ]; then
-		kill -TERM "$xpid" 2>/dev/null
-		sleep 2
-	fi
+	finish
 	exit 1
 }
 state() {
@@ -88,24 +120,17 @@ echo "CPID=$cpid"
 sleep 20
 st=$(state "$cpid")
 if [ -n "$st" ] && [ "$st" != "Z" ]; then
-	kill -TERM "$cpid"
-	echo "CTERM=$?"
-	sleep 2
-	reap_hard "$cpid" || fail "client hung"
 	fail "client timeout"
 fi
 wait "$cpid"
-echo "CL=$?"
+cl=$?
+echo "CL=$cl"
 cat /tmp/wd24x-client.out
 cat /proc/wd24adv/s6d
-if ! grep -q "rects 5 match 5" /tmp/wd24x-client.out; then
+cpid=
+if [ "$cl" != "0" ] || ! grep -q "rects 5 match 5" /tmp/wd24x-client.out; then
 	fail "client"
 fi
 
-kill -TERM "$xpid"
-echo "TERM=$?"
-sleep 10
-reap_hard "$xpid" || exit 1
-xpid=
-rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
-echo "WD24X-RUN client done; wait for trial expiry, then one cat of /proc/wd24adv/live"
+finish
+echo "WD24X-RUN done"

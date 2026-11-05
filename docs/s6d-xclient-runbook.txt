@@ -1,4 +1,14 @@
-Next client trial. Not started. One script, not a reset stress test.
+The client trial has passed once. See the live note. That pass used
+script 10ee2f199d743c5650432d153940f6cd02aa793b19d8c1e4bf9c05e9071842f4.
+It is not a request to run the client again.
+
+A later script revision, not the one that ran, reaps X and rmmods on
+a nonzero client status as well as on success. Its hash is
+b2a58de5da26710ff43862672c2ea66a7c0467499c5cfbd8bea1e78926edd37d.
+Do not start it unless a later note says to.
+
+Next client trial text below is the record of what the pass ran, plus
+the reason the next proof is not another GetImage.
 Script: docs/s6d-xclient-run.sh
 Client source: modules/wd24adv/tests/wd24x-client.c
 Raw client: /opt/cursor/artifacts/wd24x-client
