@@ -98,6 +98,26 @@ change.
    without a new plan.
 5. Xfbdev only after the controlled live paints are OK (separate approval).
 
+### Kernel rebuild (box, 2026-11-05) — exports kept, **not installed**
+
+Rebuilt on the box after Brandon Proceed (pt414u). No 755C disk/boot writes.
+
+| Tree | Vermagic | KDIR / image | Three symbols in Module.symvers + `__ksymtab_*` |
+|---|---|---|---|
+| **Live-matching tc755x** | `6.18.57-tc755x` | `/workspace/755c-research/kobj-vm86` (bzImage 1249792 B, sha256 `a37c48e97515b24fda0d34ecd2620512963db24df17d972c47be4c803a413512`) | Yes. Whitelist file: `/workspace/755c-pcmcia/tc755x/build/ksyms-keep.list` (synced from this repo’s `config/ksyms-keep.txt`) |
+| Git-tracked tc755 | `6.18.57-tc755` | `build/kernel-obj`, `out/bzImage` (1069568 B) | Yes |
+
+Link probe (box only, do not load on 755C until the new bzImage is installed):
+`/workspace/755c-research/s6d-export-probe/s6d_export_probe.ko` — modpost resolves
+`vmf_insert_pfn`, `zap_vma_ptes`, `unmap_mapping_range`; init returns `-ENODEV`.
+
+Staged copies + README: `/workspace/755c-research/out-s6d-exports/`.
+
+**Later Brandon OK required to:** copy `bzImage-6.18.57-tc755x` onto the 755C boot
+medium, install matching modules if needed, reboot into it, then any S6d live run.
+Until then OOT modules built against the new Module.symvers must not be insmod’d on
+the old running kernel (unknown symbol).
+
 ### Box work started with this commit
 
 - `config/ksyms-keep.txt` — three symbols listed (kernel not rebuilt here).
@@ -118,6 +138,6 @@ read-only font-plane compare.
 
 | Ready on box (no 755C) | Needs Brandon OK |
 |---|---|
-| Docs + ksyms-keep list + S6d bank host tests | `make kernel` install/flash on 755C |
+| Docs + ksyms-keep list + S6d bank host tests; **kernel rebuilt on box** (tc755x kobj-vm86 + tc755) with three exports verified | Install/flash new bzImage on 755C + reboot; then S6d live |
 | Later: S6d fbdev code once KDIR has exports | Any S6d live run; any Xfbdev on 755C |
 | S7 ioctl surface design (after S6d) | Live ioctl / accel runs |
