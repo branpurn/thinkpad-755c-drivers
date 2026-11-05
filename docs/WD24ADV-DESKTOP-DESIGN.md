@@ -260,6 +260,12 @@ Design for wd24adv:
    - it is single-bank at first (PR0A only). The PR0A/PR0B dual-window
      read/write split is proven first as stage S6 (Q6); this mmap path is
      parked as S6b.
+
+   **2026-11 note (S6b as built):** the fault handler above is not
+   buildable for the tc755x kernel (vmf_insert_pfn, zap_vma_ptes and
+   unmap_mapping_range are not exported). S6b instead maps the 64 KiB
+   window once and banks explicitly with two halves (PR0B / PR0A via PR1
+   b3) plus a kernel PR31 b7 copy; see WD24ADV-NEXT-STAGE.md.
    - So the fb software renderer draws straight into VRAM. The cost of an
      op is its own pixels plus about one fault per 64 KiB bank crossed
      (at pitch 640 a bank is about 102 lines).

@@ -38,3 +38,30 @@ Results: OK = b7 held and effective while locked; B7 NOT HELD LOCKED
 RESTORE FAIL if L1, U2 or L do not read back.
 Decision: OK -> build S6b (banked mmap + dual-window copyarea, SR06 locked
 in steady state). NOT HELD -> option B or C+D.
+
+## Status: S6c run live OK -> S6b built (box only, not run live)
+`s6b=1` with `dryrun=0 live=1 mode=640x480-8`: /dev/wd24s6b (chrdev, no
+fbdev: CONFIG_FRAMEBUFFER_CONSOLE=y would bind fbcon). One exclusive open =
+one session.
+
+Export blocker: the tc755x kernel does not export vmf_insert_pfn,
+zap_vma_ptes or unmap_mapping_range, so a fault-banked mmap cannot move
+banks under a live mapping. S6b therefore maps A0000-AFFFF ONCE
+(vm_iomap_memory, pgprot_framebuffer = UC- on the 486) and banks
+explicitly: A0000 half = PR0B (w0), A8000 half = PR0A+8000 (w1), PR1 b3 on,
+SR06 locked, PR31 b7 off (all proven S6). SETWIN moves the halves (disjoint,
+w1 >= 8, <= 78h). No fault path, so no livelock: a cross-bank memmove points
+w0 at the source and w1 at the destination.
+
+COPY ioctl (kernel memmove in VRAM): PR1 back to BIOS (b3 off, the S6c
+state) -> unlock -> PR31 |= 80 -> relock -> 4 KiB chunks read PR0A / write
+PR0B (backward when dst > src) -> unlock, check b7 still set, PR31 base ->
+relock -> PR1 b3 on, windows back. Exactly 2 SR06 unlocks per COPY. Any
+readback failure -> best-effort restore -> session DEAD (device refuses
+more). Teardown: close, munmap, exit and kill -9 all end in release() ->
+end() (registers back to entry); text / mode / trial expiry / rmmod end the
+session first. A stale user mapping after text restore only touches the
+plane window (harmless); the vma pins the module (rmmod refused).
+
+X: Xfbdev cannot drive an explicit-bank device, so X stays on wd90c24fb.
+S6b is the proof of the banking + copy primitives for a later wd24adv fb.
