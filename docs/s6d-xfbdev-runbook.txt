@@ -4,7 +4,13 @@ sha256 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36
 Do not insmod /tmp/wd24adv.ko. That older file stays.
 Payload: /opt/cursor/artifacts/wd24-xfbdev-i486.tgz
 sha256 af429004d7d279f84d6ebdf2b62f589b81471dd791f6d0949d3d6c67a106c224
-Extracts to /tmp/wd24-xfbdev/. It is static. It does not
+size 1055373 bytes. That file was checked on the target.
+Extractor: /opt/cursor/artifacts/busybox-wd24
+sha256 52b264655f25e902098eb797ba72f424cbe3ec0c37caceeaf5f0984835682236
+size 140756 bytes. Raw executable. Not an archive. XMODEM it to
+/tmp/busybox-wd24 and do not rename it. Do not copy it to /bin.
+This userland has no gzip, tar, gunzip, or zcat, including BusyBox
+applets. The extractor is the only tar. It is static. It does not
 replace a system library. After the X child has been reaped, remove
 that tree, /tmp/.X1-lock, and /tmp/.X11-unix/X1. Leave
 /tmp/.X11-unix itself and any other socket. No CF write, no reboot,
@@ -152,14 +158,59 @@ is still the process you are trying to stop cleanly.
 
 Empty /proc/fb. Name (S) VGA+. Bind 1. If another vtcon exists, stop.
 
-  cd /tmp
-  gzip -dc < /tmp/wd24-xfbdev-i486.tgz | tar -xf -
-  sha256sum /tmp/wd24-xfbdev/Xfbdev
+  sha256sum /tmp/busybox-wd24
+  sha256sum /tmp/wd24-xfbdev-i486.tgz
 
-The Xfbdev line must be
+One pathname per command. Do not use sha256sum -c. The checker that
+already printed hashes is this form. -c is a different program and is
+not the check. The first field must be
+52b264655f25e902098eb797ba72f424cbe3ec0c37caceeaf5f0984835682236
+for the extractor and
+af429004d7d279f84d6ebdf2b62f589b81471dd791f6d0949d3d6c67a106c224
+for the archive. If either differs, stop.
+
+  chmod 755 /tmp/busybox-wd24
+  /tmp/busybox-wd24 tar -C /tmp -xzof /tmp/wd24-xfbdev-i486.tgz
+  echo EX=$?
+
+The file name must stay busybox-wd24. This binary takes the applet
+from the next argument only when its own name starts with busybox.
+-x extracts. -z is the gzip reader built into this tar. -o leaves
+the files owned by root instead of uid 1000 from the archive. -f is
+the archive. -C /tmp writes /tmp/wd24-xfbdev/. Run this as root.
+EX must be 0. There is no gzip or tar command on PATH to use instead.
+
+Then one sha256sum per file. The first field must match. Stop on the
+first mismatch. Do not use sha256sum -c.
+
+  sha256sum /tmp/wd24-xfbdev/Xfbdev
+  sha256sum /tmp/wd24-xfbdev/fonts/misc/6x13.pcf.gz
+  sha256sum /tmp/wd24-xfbdev/fonts/misc/fonts.dir
+  sha256sum /tmp/wd24-xfbdev/fonts/misc/fonts.alias
+  sha256sum /tmp/wd24-xfbdev/fonts/cursor/cursor.pcf.gz
+  sha256sum /tmp/wd24-xfbdev/fonts/cursor/fonts.dir
+  sha256sum /tmp/wd24-xfbdev/FONT-COPYRIGHT
+  sha256sum /tmp/wd24-xfbdev/BUILD.txt
+
+Xfbdev
 6450171476a8e6aa91883744947423db123c74a042d697f9263b686dcb2f9f13
-and it must match SHA256SUMS in that tree. If it does not, stop.
-Do not chmod a system directory. The binary is already executable.
+fonts/misc/6x13.pcf.gz
+08a0eb134120be2afb31580a7daf70e0c8001f1b21fce5ed5ff5db9bd6a190bf
+fonts/misc/fonts.dir
+801479c9b892cf0dea1eb5510e96ca99d050dbb91cc019f5450ce79c34d3d8d3
+fonts/misc/fonts.alias
+87ce32d33e945005652c708abe8bf6fd49bf08e3f3e06ad2e664fcdef941e45d
+fonts/cursor/cursor.pcf.gz
+b6e69b0d11ace7213f2dd04384bfa09bc44cbc3433cc51b9a68b3312c738b82d
+fonts/cursor/fonts.dir
+d5a73b01a7855dbd8af46309c102e16dc534ab1d89c486bd475f7928e6a88609
+FONT-COPYRIGHT
+b693c9b9b08cccd233559920d6b7d71af50608538d562f0cd8a4ebfb55c168c8
+BUILD.txt
+b71ab767a3b4d623c76ddf8406a6de22a70fa7e878fa3f11c758e87a005a387c
+
+Xfbdev must be mode 755. The other seven files must be mode 644.
+Do not chmod a system directory.
 
   dmesg -c >/dev/null
   insmod /tmp/wd24adv-pr14.ko dryrun=0 live=1 mode=640x480-8 trial=180 s6d=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
@@ -253,6 +304,7 @@ Then:
   rmmod wd24adv
   echo RM=$?
   rm -rf /tmp/wd24-xfbdev
+  rm -f /tmp/busybox-wd24
 
 If expiry is not 0, still one rmmod. Remove the lock and the X1 socket
 only if `wait` already reaped the child. Remove the payload tree only
