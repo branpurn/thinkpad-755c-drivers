@@ -1,67 +1,123 @@
-# wd24adv next stage after S6 v2 (design, not built)
+# wd24adv next stage after S6b live OK
 
-Proven live (S6 v2): PR1 b3 split window; PR31 b7 read-PR0A / write-PR0B over
-the whole window with SR06 unlocked; relock to 0F reads back. Sources: data
-book and 86Box only.
+## Proven (live)
 
-## Design hole (blocks building)
-Any persistent use (banked mmap fbdev or accel copyarea) needs PR31 b7 to stay
-set while the driver runs. S6 v2 restored PR31 to 5d *before* relocking, so it
-is unproven whether PR31 b7 (a) survives SR06 relock and (b) still steers
-reads/writes while locked. 86Box gates only access to SR07+, not their
-effect, which suggests yes, but that is not live evidence.
+| Stage | Result | Notes |
+|---|---|---|
+| S1–S5 | OK | Engine FILL/COPY/MONO/HOSTCOL proven |
+| S6 / S6c | OK | PR1 b3 split; PR31 b7 effective with SR06 locked |
+| **S6b** | **OK 18/18** (2026-11-05, commit `6be7a42`, trial=300) | `/dev/wd24s6b` chrdev: once-mapped A0000–AFFFF, explicit SETWIN, kernel PR31 b7 COPY. kill -9 restore clean; expiry mismatches 0; X-UP after. Baseline L13 skipped (`/tmp/wd24probe3.ko` missing on 755C). |
 
-## Options
-A. S6c probe (recommended first): same guard/model as S6 v2; E2 baseline,
-   unlock, set PR31 b7, relock, verify SR06=0f + locked, run the D2 copy test
-   while LOCKED, unlock, restore 5d, relock. Answers (a)+(b) in one short run.
-B. Per-operation unlock: keep PR31 b7 only inside a narrow unlock window per
-   blit. Works with proven behaviour, but holds SR06 unlocked during each
-   accel op; needs IRQ-off/serialised sections. Safe but slower.
-C. Single-window banked mmap (S6b-lite): fbdev mmap with fault-driven PR0A
-   bank switching only; no PR31, no SR06 unlock. Buildable now; no dual-window
-   speedup.
-D. Accel without split: copyarea via PR1 b3 split (A0000->PR0B, A8000->PR0A)
-   with CPU copy across halves; no SR06 unlock needed. Buildable now.
+S6b is a **chrdev**, not fbdev: tc755x does not export `vmf_insert_pfn`,
+`zap_vma_ptes`, or `unmap_mapping_range` to modules (`CONFIG_TRIM_UNUSED_KSYMS=y`;
+symbols exist in vmlinux / System.map but are trimmed from Module.symvers).
+`CONFIG_FRAMEBUFFER_CONSOLE=y` would also bind fbcon on `register_framebuffer`
+(DEFERRED_TAKEOVER needs `FB=y`, which the floppy budget rejects).
 
-Recommendation: run A (one live run, new approval), then build S6b
-(banked mmap + dual-window copyarea) if b7 persists locked, else C+D.
+## Standing blockers (unchanged by S6b OK)
 
-## Status: option A built as S6c (box only, not run live)
-`s6=1 s6c=1` with `dryrun=0 live=1 mode=640x480-8`. Same entry, E2, save,
-prefill, P1/P2/D1/V1, U, P3 as S6 v2, then:
-L1 relock SR06 with PR31 b7 set (must read 0f + index width locked, PR31
-locked read logged) -> D2 copy test LOCKED -> U2 re-unlock, read PR31 (b7
-held or cleared) -> P4 PR31 = 5d -> L relock -> V2 -> regions back.
-Results: OK = b7 held and effective while locked; B7 NOT HELD LOCKED
-(why: "relock cleared PR31 b7" or "kept but no effect while locked");
-RESTORE FAIL if L1, U2 or L do not read back.
-Decision: OK -> build S6b (banked mmap + dual-window copyarea, SR06 locked
-in steady state). NOT HELD -> option B or C+D.
+1. **Export trim** — fault-banked mmap cannot move banks under a live VMA until
+   the three symbols are kept for OOT modules (see below).
+2. **fbcon** — any `register_framebuffer` binds fbcon with the current config.
+   Acceptable for an X desktop path (wd90c24fb already does); not acceptable
+   for text-only proof stages that need vgacon alone → those stay chrdev.
+3. **Fault livelock** — one x86 instruction that touches two different 64 KiB
+   banks under single-bank mapping restart-faults forever (DESKTOP-DESIGN
+   §3.3 / parked S6b note). S6b avoided it by mapping both window halves at
+   once with explicit SETWIN.
 
-## Status: S6c run live OK -> S6b built (box only, not run live)
-`s6b=1` with `dryrun=0 live=1 mode=640x480-8`: /dev/wd24s6b (chrdev, no
-fbdev: CONFIG_FRAMEBUFFER_CONSOLE=y would bind fbcon). One exclusive open =
-one session.
+RAM-shadow (wd90c24fb-style full-frame / timer upload) stays rejected.
 
-Export blocker: the tc755x kernel does not export vmf_insert_pfn,
-zap_vma_ptes or unmap_mapping_range, so a fault-banked mmap cannot move
-banks under a live mapping. S6b therefore maps A0000-AFFFF ONCE
-(vm_iomap_memory, pgprot_framebuffer = UC- on the 486) and banks
-explicitly: A0000 half = PR0B (w0), A8000 half = PR0A+8000 (w1), PR1 b3 on,
-SR06 locked, PR31 b7 off (all proven S6). SETWIN moves the halves (disjoint,
-w1 >= 8, <= 78h). No fault path, so no livelock: a cross-bank memmove points
-w0 at the source and w1 at the destination.
+## Options toward X on wd24adv
 
-COPY ioctl (kernel memmove in VRAM): PR1 back to BIOS (b3 off, the S6c
-state) -> unlock -> PR31 |= 80 -> relock -> 4 KiB chunks read PR0A / write
-PR0B (backward when dst > src) -> unlock, check b7 still set, PR31 base ->
-relock -> PR1 b3 on, windows back. Exactly 2 SR06 unlocks per COPY. Any
-readback failure -> best-effort restore -> session DEAD (device refuses
-more). Teardown: close, munmap, exit and kill -9 all end in release() ->
-end() (registers back to entry); text / mode / trial expiry / rmmod end the
-session first. A stale user mapping after text restore only touches the
-plane window (harmless); the vma pins the module (rmmod refused).
+| | Path | Buildable now? | Proves | Risks |
+|---|---|---|---|---|
+| **A** | Keep the three symbols via `config/ksyms-keep.txt`, rebuild tc755x kernel, then **S6d**: real fbdev + fault-banked mmap (S6b dual-window under the hood), unaccelerated Xfbdev, then S7 ioctl accel | Export list + host tests yes; module needs new KDIR; **install/flash needs Brandon OK** | Design §3.3 / §6 item 1; stock Xfbdev on wd24adv | Kernel rebuild; livelock on spanning ops; fbcon bind during graphics |
+| B | fbdev that reuses S6b once-mapped 64 KiB + SETWIN (no fault path) | Kernel side yes | Banking under fbdev node | **Xfbdev cannot drive explicit-bank devices** without X-side SETWIN before every draw; not stock TinyX |
+| C | Kernel CAPS/SUBMIT ioctl (FILL/COPY/MONO/HOSTCOL, engine S3–S5) + TinyX `wd24accel` without full linear mmap | Yes (headers + validator + host tests); no new exports | Accel desktop path | Screen pixmap still needs a CPU path (mmap or damage+HOSTCOL); alone is not stock Xfbdev |
+| D | Other | — | — | No better path found; damage+HOSTCOL-only is a shadow detour |
 
-X: Xfbdev cannot drive an explicit-bank device, so X stays on wd90c24fb.
-S6b is the proof of the banking + copy primitives for a later wd24adv fb.
+## Recommendation: **A → S6d** (real-driver path)
+
+Prefer the design’s fault-banked fbdev + later ioctl accel. S6b already proved
+the banking and COPY primitives; the missing piece for stock Xfbdev is exports
+plus an fbdev wrapper with a thrash latch for the livelock hole.
+
+**Not B** — Xfbdev will not call SETWIN. **Not C alone** — needed for S7, but
+does not give a linear mmap for unaccelerated Xfbdev; do it *after* S6d maps.
+**No RAM-shadow.**
+
+### What A proves (S6d)
+
+- `register_framebuffer` for proven 640x480-8; `fb_mmap` exposes the frame
+  (and later 1 MB) as a VMA.
+- Fault handler: `wait_idle` → SETWIN-equivalent dual window covering the
+  faulting 64 KiB → `vmf_insert_pfn` × 16 for A0000 → zap the previous
+  window’s PTEs (`zap_vma_ptes` / `unmap_mapping_range`).
+- Thrash latch: if faults alternate between two windows faster than a bound
+  (same-instruction livelock symptom), mark session degraded / refuse further
+  faults and log — stop rule, not silent hang.
+- Last close / kill -9 / trial expiry → `restore_all` (registers + text), same
+  discipline as S6b.
+- Hand-started Xfbdev (not boot autostart) draws without wd90c24fb.
+
+### Export patch proposal (this tree — no mm/ source edit)
+
+Symbols are already `EXPORT_SYMBOL*` in upstream `mm/memory.c`. Trim drops
+them. Add to `config/ksyms-keep.txt`:
+
+```
+unmap_mapping_range
+vmf_insert_pfn
+zap_vma_ptes
+```
+
+Then on the box: `make kernel` (TRIM_KSYMS=1 uses the whitelist via
+`scripts/build-kernel.sh`). Confirm the three appear in
+`build/kernel-obj/Module.symvers`. **Do not install or flash the new bzImage
+on the 755C without Brandon’s OK.** Out-of-tree wd24adv then builds against
+that KDIR.
+
+fbcon: leave `CONFIG_FRAMEBUFFER_CONSOLE=y` / `CONFIG_FB=m` as today.
+DEFERRED_TAKEOVER is not available (`depends on FB=y`). S6d accepts fbcon
+bind during graphics (wd90c24fb pattern); proof-only text stages keep using
+chrdev. Optional live sysfs vtcon unbind is a stop-rule tool, not a config
+change.
+
+### Live stop rules sketch (S6d — not run until approved)
+
+1. Box: host bank tests green; QEMU fault path + thrash latch; module loads
+   against new KDIR; PII/scan/push-checked clean.
+2. Brandon OK for **kernel install** (new bzImage + modules) and separately
+   for **S6d live**.
+3. Live: trial mode, short arm; controlled single-bank paints first; then a
+   deliberate spanning write to confirm thrash latch fires cleanly (no hang);
+   restore_all on close / kill -9; vgacon usable; wd90c24fb reload OK.
+4. Stop on: thrash latch in normal paint, register mismatch, trial restore
+   fail, panel/routing oddity, or any unexpected value — report, no retry
+   without a new plan.
+5. Xfbdev only after the controlled live paints are OK (separate approval).
+
+### Box work started with this commit
+
+- `config/ksyms-keep.txt` — three symbols listed (kernel not rebuilt here).
+- `modules/wd24adv/wd24adv_s6d_bank.h` + `tests/test_s6d_bank.c` — window
+  placement and livelock-span math (no kernel link).
+- Docs: this file; DESKTOP-DESIGN status touch.
+
+## TTY repeating-glyph artifact (no live probe)
+
+Likely **vgacon font-plane / text=1** residue from mode set and plane save
+around trials, not S6b banking left behind: S6b restore readbacks were clean
+and kill -9 ended in `release` → `end()`. Repeating glyph rows match plane-2
+font or character-map wrap (see earlier S3 plane-wrap notes in LIVE-TEST),
+which text=1 / vgacon are sensitive to. Confirm only if Brandon asks for a
+read-only font-plane compare.
+
+## Ready vs needs Brandon OK
+
+| Ready on box (no 755C) | Needs Brandon OK |
+|---|---|
+| Docs + ksyms-keep list + S6d bank host tests | `make kernel` install/flash on 755C |
+| Later: S6d fbdev code once KDIR has exports | Any S6d live run; any Xfbdev on 755C |
+| S7 ioctl surface design (after S6d) | Live ioctl / accel runs |

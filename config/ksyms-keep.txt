@@ -1,12 +1,19 @@
 # Exported symbols kept in the core kernel for OUT-OF-TREE modules when
 # TRIM_KSYMS=1 (CONFIG_TRIM_UNUSED_KSYMS). In-tree =m users are found
-# automatically. Regenerate with: make ksyms-keep  (scans modules/*/*.ko)
+# automatically. Regenerate with: make ksyms-keep  (scans modules/*/*.ko).
+# After regenerate, re-add any S6d keepers not yet referenced by a .ko:
+#   unmap_mapping_range  vmf_insert_pfn  zap_vma_ptes
+# (needed for fault-banked fbdev; see docs/WD24ADV-NEXT-STAGE.md).
+__platform_driver_register
+__put_user_4
+__udelay
+_copy_from_user
+_printk
 cancel_delayed_work_sync
 cancel_work_sync
 console_blank_hook
 console_lock
 console_unlock
-_copy_from_user
 delayed_work_timer_fn
 fb_alloc_cmap
 fb_dealloc_cmap
@@ -29,10 +36,7 @@ param_ops_int
 param_ops_uint
 platform_device_register_full
 platform_device_unregister
-__platform_driver_register
 platform_driver_unregister
-_printk
-__put_user_4
 queue_delayed_work_on
 queue_work_on
 register_framebuffer
@@ -48,7 +52,9 @@ sys_fillrect
 sys_imageblit
 system_percpu_wq
 timer_init_key
-__udelay
+unmap_mapping_range
 unregister_framebuffer
 vfree
 vmalloc_user_noprof
+vmf_insert_pfn
+zap_vma_ptes
