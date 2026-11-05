@@ -632,7 +632,7 @@ relock with PR31 b7 set", "re-unlock failed"), any SR06 readback other than
 BUSY, LOCKED, garbled screen not back to text at expiry, or no prompt: stop;
 no rmmod, no reload; power off.
 
-### S6b (prepared 2026-11-05 UTC; live attempts same day: trial expired / trial=300 refused by 5..120 clamp; X restored; re-staged after TRIAL_MAX=600): dual-window mmap + PR31 b7 copy
+### S6b (run 2026-11-05 America/New_York: OK 18/18; trial=300 after TRIAL_MAX=600; X-UP; baseline skipped — wd24probe3.ko missing): dual-window mmap + PR31 b7 copy
 
 `s6b=1` with `dryrun=0 live=1 mode=640x480-8 trial=300`; then the user tool
 `wd24s6b-test` opens /dev/wd24s6b. See WD24ADV-NEXT-STAGE.md for the design.

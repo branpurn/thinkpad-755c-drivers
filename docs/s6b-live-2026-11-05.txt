@@ -31,3 +31,25 @@ L10-L12: wd90c24fb RC=0, startx, X-UP (Xfbdev 536). Owner: X back, no bars.
 L13: wd24probe3.ko missing on /tmp after the earlier reboot (RC=254); not
 re-sent; stop. Clamp 5..120 is the root cause; raise TRIAL_MAX and rerun
 with trial=300 + combined arm/run (no live re-run in this change).
+
+---
+
+## Attempt 3 (2026-11-05 ~09:00 America/New_York): OK — S6B-RESULT 18/18
+
+Build: commit 9af1994, TRIAL_MAX=600, trial=300, combined arm+run line.
+Module sha256 f73f8e1c…, tool sha256 de6a9b34…; G=f73f8e1cde6a9b34001 GATE=OK.
+
+L1-L4: Xfbdev 536 killed; text+rmmod RM=0; Q=0.
+L5: G=f73f8e1cde6a9b34001 GATE=OK.
+L6: RC=0; S6B copy err 0 x4; S6B-RESULT OK 18/18 steps; state 1 copies 5
+setwin 97 writes 378; T=0.
+L7: S6B-HOLD setwin 0; kill -9 -> release 0 state OFF;
+restore: PR1 c5 PR0A 00 PR0B 00 SR06 0f locked, PR31 b7 clear, 0 bad.
+L8: sleep 300; trial expiry mismatches 0; dmesg ends
+`live trial expiry: 0 (port data writes 896, index writes 336, mismatches 0)`.
+L9-L12: rmmod RM=0; wd90c24fb RC=0; startx; X-UP (Xfbdev 625).
+L13: /tmp/wd24probe3.ko missing (RC=254); same as attempt 2; not re-sent.
+Owner: watching; X restored.
+
+Proven live: s6b=1 arm, /dev/wd24s6b mmap+COPY path, kill -9 teardown,
+trial=300 expiry to text with SR06 locked / PR31 b7 clear.
