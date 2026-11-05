@@ -1,0 +1,5 @@
+#!/bin/sh
+# git pre-push hook (install: cp scripts/pre-push.hook .git/hooks/pre-push):
+# a failed scan blocks every push, including a manual `git push`.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+sh scripts/scan-public.sh || { echo "pre-push: BLOCKED (scan-public.sh failed)" >&2; exit 1; }
