@@ -1,0 +1,22 @@
+S6c live run, 2026-11-05 04:07-04:17 UTC (owner approval, watching at the screen)
+Module: sha256 96a6b5273454187db8002c2db55d0ee318363b5f57d82cbfc713a583583af479 (commit 32bb82c)
+Copy: box -> grok-bot-server -> Pop ~/wd24adv-s6c.ko -> send1.sh (logger SIGSTOP/SIGCONT),
+  XMODEM 38400, remote sha256 matched.
+Lines: one per call, plog each, no overlap, no retries.
+  L1 X pids (Xfbdev 1130); L2 kill 1130; L3 text=1 + rmmod wd90c24fb RM=0; L4 Q=0;
+  L5 G=96a6b527001 RC=0; L6 result read; L7 rmmod wd24adv RM=0; L8 wd90c24fb RC=0;
+  L9 startx; L10 X-UP (Xfbdev 1192); L11 wd24probe3 baseline.
+
+RESULT: OK (register writes 33). PR31 b7 IS HELD across the SR06 relock and
+STILL SPLITS reads (PR0A) / writes (PR0B) while SR06 is locked.
+  E: PR0A 00 PR0B 00 PR1 c5 GR06 05 SR06 0f locked PR31(locked) 00; E2 PR31 5d
+  P1 70, P2 cd, D1 0/0 bad, V1 split yes, P3 dd
+  L1 held: SR06 0f locked, PR31 (locked read) 00; D2 runs LOCKED
+  D2 rw: read X+1000 0 bad; after write, read still X 0 bad; copied X+1000 -> Y+2000
+  U2 re-unlock: PR31 dd (b7 held); P4 5d; relock 0f locked
+  V2 0/0/0 bad; regions restored: 0 bytes differ
+  live load/mode/trial expiry: mismatches 0
+Baseline wd24probe3 (under X): RC=19 result=ok restore_fail=0x00 wrote_sr06=0,
+  SR06=0f SR11=5d GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 idx 11/09/01: unchanged.
+Next: S6b (banked mmap + dual-window copyarea with SR06 locked in steady state;
+  unlock only to set/clear PR31 b7).

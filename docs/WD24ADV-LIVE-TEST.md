@@ -566,7 +566,7 @@ Design doc section 7, stage S6 (the RAM-shadow S6 is parked). One load:
 PROVEN 640x480-8 trial mode set, under hw_lock + console_lock, the program in
 `wd24adv_s6.c` runs once:
 
-### S6c (prepared 2026-11-05, not run): PR31 b7 held across SR06 relock
+### S6c (run 2026-11-05: OK, b7 held and effective while locked, writes 33, X-UP, baseline ok; docs/s6c-live-2026-11-05.txt): PR31 b7 held across SR06 relock
 
 Question: does PR31 b7 (a) survive the SR06 relock and (b) still steer reads
 to PR0A / writes to PR0B while SR06 is locked? S6 v2 proved b7 only while
