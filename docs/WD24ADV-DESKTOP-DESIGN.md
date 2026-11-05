@@ -440,7 +440,7 @@ General rules for all stages:
 | **S10** offscreen pool | Pixmap migration and (if Q2) a glyph cache | Pool correctness, VT-switch loss handling, eviction | Pool disabled → S9 behaviour |
 | **S11** default | Owner-chosen boot option (e.g. cmdline `wd24adv`). wd90c24fb remains the default and the fallback | Boot path, fallback when wd24adv refuses to load | Remove the cmdline flag |
 
-Status 2026-11-05: S6 + S6c live OK; S6b chrdev live OK 18/18 (`6be7a42`). S6d fbdev **built** (exports live-proven on tc755x; thrash latch + fault mmap); XMODEM’d — **STOP before load** (fbcon visual). See WD24ADV-NEXT-STAGE.md. RAM-shadow stays rejected. Earlier: S5 MONO/HOSTCOL live OK. See WD24ADV-LIVE-TEST.md.
+Status 2026-11-05: S6 + S6c live OK; S6b chrdev live OK 18/18 (`6be7a42`). S6d fbdev **built + XMODEM’d**; `font`+`fb` loaded non-visual on S6d floppy; **STOP before s6d=1** (fbcon visual). READY: `insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0`. See WD24ADV-NEXT-STAGE.md. RAM-shadow stays rejected. Earlier: S5 MONO/HOSTCOL live OK. See WD24ADV-LIVE-TEST.md.
 
 
 Moving from wait-after-every-op to wait-before-program (§3.4) is a separate

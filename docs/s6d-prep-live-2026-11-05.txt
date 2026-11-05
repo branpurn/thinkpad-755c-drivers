@@ -1,0 +1,11 @@
+S6d prep live log — 2026-11-05 America/New_York (S6d floppy 6.18.57-tc755x)
+CF boot OFF; TEAC floppy; serial COM1 via Pop send1/ps/plog.
+
+1. modutils.tcz mounted (/dev/loop0 -> /tmp/tcloop/modutils); insmod on PATH.
+2. s6d_export_probe.ko: three exports resolve; rmmod clean; INS_RC=19 (-ENODEV).
+3. Built wd24adv S6d on box vs kobj-vm86; host bank 15/15 thrash 54/54.
+4. XMODEM wd24adv.ko -> /tmp/wd24adv.ko sha256 0948f0caefec353396abb5faae6fbbd26218ec122fc735af2842a0de608a130b
+5. Floppy lacked fb.ko; XMODEM font.ko + fb.ko from kobj-vm86 (sha above in NEXT-STAGE).
+6. Non-visual: insmod font.ko FONT=0; insmod fb.ko FB=0; lsmod: fb, font. No panel change.
+7. STOP — ready for visual. Next (Brandon watching):
+   insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0

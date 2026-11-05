@@ -189,12 +189,18 @@ read-only font-plane compare.
    - Host: `test_s6d_bank` 15/15, `test_s6d_thrash` 54/54.
    - Artifact: `modules/wd24adv/wd24adv.ko` sha256 `0948f0caefec353396abb5faae6fbbd26218ec122fc735af2842a0de608a130b`
      (also staged `out-s6d-exports/xfer/wd24adv-s6d.ko`).
-4. **STOP before load** — `s6d=1` calls `register_framebuffer` and **binds fbcon (visual)**.
+4. **XMODEM** `wd24adv.ko` → `/tmp/wd24adv.ko` (sha256 `0948f0ca…` verified remote).
+5. S6d floppy had **no** `fb.ko` in its module tree. Staged from `kobj-vm86` and XMODEM’d:
+   - `/tmp/font.ko` sha256 `437eeb117d3a96d462658fcc8a9804c7362e566ca186059714f4cac72bbc804b`
+   - `/tmp/fb.ko` sha256 `da3d41f02c3200f8d8363456706b852f0d55cc9c22b3ab1d6b5eb88b6bca5b00`
+6. **Non-visual** `insmod /tmp/font.ko` then `insmod /tmp/fb.ko` — FONT=0 FB=0; `lsmod` shows
+   `fb` (used by 0) and `font` (used by fb). No `register_framebuffer`; panel unchanged.
+7. **STOP before load** — `s6d=1` calls `register_framebuffer` and **binds fbcon (visual)**.
    Do not insmod with `s6d=1` unless Brandon is watching the panel.
 
 ### READY FOR LIVE / ready for visual — exact next command
 
-After `fb.ko` is loaded (wd90c24fb stack / graphics deps) and Brandon is watching:
+Brandon watching the panel; `font`+`fb` already loaded; serial idle at `root@box:~#`:
 
 ```
 insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0
