@@ -359,9 +359,15 @@ The last 64 KiB window is only partly inside the 307200-byte frame (11 pages, no
 
 ## Build and host results
 
-This is not a full kernel reproduction. `modules_prepare` was run on stock linux-6.18.57 (kernel.org tarball sha256 `5bd9acdc82ec5efc3790ae840e5aaa40dfde7efff261cf6dde902dc570acf98c`) plus the packaged atkbd patch. `olddefconfig` kept `LOCALVERSION=-tc755x`, `CONFIG_MODVERSIONS` off, `CONFIG_TRIM_UNUSED_KSYMS`, `CONFIG_FB=m`, and no deferred fbcon takeover. Generated `UTS_RELEASE` is `6.18.57-tc755x`, matching the packaged header. Generated `autoconf.h` does **not** match the packaged header: this machine's compiler is gcc 14.2.0 (Ubuntu 14.2.0-4ubuntu2~24.04.1), not Debian 14.2.0-19, and the linker is 2.42, not 2.44. The whitelist string in autoconf is the extracted list for this prepare, not the original absolute path baked into the packaged header. `Module.symvers` was copied from the package, not produced by linking vmlinux here. The three fault symbols are in that file with CRC 0.
+Not a full kernel reproduction. No vmlinux and no bzImage were linked here. `modules_prepare` plus the packaged `Module.symvers` (copied, not regenerated) produced the out-of-tree module.
 
-`wd24adv.ko` vermagic `6.18.57-tc755x mod_unload 486`, ELF 80386, sha256 `30c13d41598c4306a12b9fb294b23ebd1e559c5f4c4707dae4e7fbf88fb994fd`. `wd24s6d-mmap` is a static i486 musl PIE built with gcc 11.2.1 20211120, sha256 `93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8`. Neither file is committed. They were not loaded and not run.
+Source: stock linux-6.18.57 from kernel.org, sha256 `5bd9acdc82ec5efc3790ae840e5aaa40dfde7efff261cf6dde902dc570acf98c`, plus the packaged atkbd patch. Toolchain, isolated Debian trixie chroot, not the Ubuntu host compiler: `gcc (Debian 14.2.0-19) 14.2.0`, `GNU ld (GNU Binutils for Debian) 2.44` (binutils 2.44-3), rustc 1.85.1 with LLVM 19.1.7. `SOURCE_DATE_EPOCH=1767225600`, `KBUILD_BUILD_USER=tc32`, `KBUILD_BUILD_HOST=tc32`, `KBUILD_BUILD_TIMESTAMP=@1767225600`. An earlier Ubuntu gcc 14.2 / ld 2.42 prepare was discarded and is not the delivered module.
+
+`olddefconfig` reported no change besides the whitelist path, which was set to an absolute path of the extracted keep-list. Shipped config file has the relative placeholder `ksyms-keep.list`. Packaged `autoconf.h` has the original build machine's absolute keep-list path. This prepare's `autoconf.h` matches the packaged header on every `#define` except `CONFIG_UNUSED_KSYMS_WHITELIST`. `CONFIG_GCC_VERSION` is 140200 on both. `CONFIG_RUST` is not set. `asm-offsets.h`, `bounds.h`, `rq-offsets.h`, `utsrelease.h` (`6.18.57-tc755x`), and `compile.h` match the packaged generated headers byte for byte. `cpufeaturemasks.h` differs only by section order; the mask values match. The module does not reference the whitelist macro. Export trim for this `.ko` is the copied `Module.symvers` (CRC 0). All 54 undefined symbols resolve there.
+
+`wd24adv.ko` vermagic `6.18.57-tc755x mod_unload 486`, ELF 80386, sha256 `7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36`. `wd24s6d-mmap` is a static i486 musl PIE (no dynamic interpreter) built with gcc 11.2.1 20211120, sha256 `93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8`. Neither file is committed. They were not loaded and not run.
+
+Unresolved: this does not prove the running 755C kernel image is the one that emitted the supplied `Module.symvers`. Load still depends on that. The whitelist path string differs; it does not by itself change this module's exports or the structure offsets that matched.
 
 `test_s6d_fault` is a userspace simulator of the pure plan and a hand-written stop order. It does not load the module. Its OK line says SIMULATOR. The host `make -C modules/wd24adv/tests test` (system gcc) covers `test_vga` restore mismatch (`in_text` stays false) and that simulator. QEMU was not run. The cleanup figures are not kernel execution.
 
@@ -369,7 +375,7 @@ This is not a full kernel reproduction. `modules_prepare` was run on stock linux
 
 Owner watching. One line, then wait for a real prompt. No `/proc/wd24adv/*`. No second command until `RC=` or `RM=` is printed. Hardware, CF, MBR stay untouched.
 
-The module and the i486 `wd24s6d-mmap` from this run are transfer artifacts, not files in the repo. Check sha256 before use: module `30c13d41598c4306a12b9fb294b23ebd1e559c5f4c4707dae4e7fbf88fb994fd`, tool `93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8`. This is still not approval to insmod.
+The module and the i486 `wd24s6d-mmap` from the Debian chroot build are transfer artifacts, not files in the repo. Check sha256 before use: module `7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36`, tool `93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8`. `modinfo` must show `vermagic: 6.18.57-tc755x mod_unload 486`. This is still not approval to insmod. The alarm on the tool does not interrupt an uninterruptible kernel lock.
 
 Gate, before insmod. One command at a time. The module cannot do the vtcon check itself.
 
