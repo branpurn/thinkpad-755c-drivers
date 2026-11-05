@@ -26,8 +26,13 @@ Nothing was unloaded or loaded. State at stop: wd24adv still loaded (trial
 expired, text restored, mismatches 0), wd90c24fb NOT loaded, X NOT running.
 Per the rules (interrupted call: check commands.log, never re-send) no
 further lines were sent: L7-L10 and the wd24probe3 baseline are NOT done.
-X status: <not restored, pending owner decision>
-Baseline wd24probe3: <not run>
+X status: restored (owner approval, second session). Sent strictly one line
+  per call: L7 rmmod wd24adv -> RM=0; L8 insmod wd90c24fb.ko -> RC=0;
+  L9 background startx; L10 wait loop -> Xfbdev pid 1130, X-UP.
+Baseline wd24probe3 (under X): RC=19 (expected, probe-only module),
+  result=ok restore_fail=0x00 seq_state=2 wrote_sr06=0;
+  SR06=0f, SR11=5d, GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0, idx 11/09/01
+  restored. Matches the pre-S6 baseline: no lasting state change.
 
 == commands.log ==
 2026-11-04 22:47:06 EST  S6 v2: send-file wd24adv-s6v2.ko -> /tmp/wd24adv.ko (approval t387s1239)
