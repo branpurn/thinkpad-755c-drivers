@@ -434,7 +434,7 @@ other result: stop and save the files. TIMEOUT: read the idle re-check line.
 IDLE seen: carry on. STILL BUSY / LOCKED: stop; do not rmmod, do not load
 wd90c24fb; save the files and power off.
 
-## S5: on-screen host-data BITBLT, MONO expansion (prepared 2026-11-05 UTC, not run)
+## S5: on-screen host-data BITBLT, MONO expansion (s5=1 run 2026-11-05 UTC: OK 8/8; X restart not done, see docs/s5-live-2026-11-05.txt)
 
 Design doc section 7, stage S5. `insmod wd24adv.ko dryrun=0 live=1 mode=640x480-8 s5=1`:
 after the PROVEN 640x480-8 trial mode set and test pattern (15 s trial timer

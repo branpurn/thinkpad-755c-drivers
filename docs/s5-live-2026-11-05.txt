@@ -1,0 +1,121 @@
+S5 live run (s5=1 MONO only) - ThinkPad 755C, 2026-11-05 02:17-02:27 UTC (2026-11-04 21:17-21:27 EST)
+Module: wd24adv.ko @62b99f2, sha256 f2ac6eee0554263133054b69fead93e4af1fe36a306b670efd4f5f5070c3540c
+Sequence: docs/WD24ADV-LIVE-TEST.md "S5" section, L1-L10, one at a time. s5=2 (HOSTCOL) not approved, not run.
+
+RESULT
+- Copy: send-file.sh at 38400, remote sha256 f2ac6eee... match (first attempt aborted
+  before touching the tty: no sx on that tools path; second, with built sx, OK).
+- L1-L4 as expected (Xfbdev killed, wd90c24fb text=1 + rmmod RM=0, Q=0).
+- L5: G=f2ac6eee001, RC=0.  dmesg: "S5 MONO: OK; ops verified 8".
+- L6: all 8 ops VERIFIED (full bank-1 readback == model), host words n/n for each,
+  idle polls 0, CNTRL1 after 010e; 23C2h writes 116 (starts 8), 23C4h 2408,
+  refusals 0, restore wrote 1002 read 1002 (equal), trial expiry mismatches 0.
+- L7 RM=0; L8 wd90c24fb RC=0.
+- L9/L10: PROCEDURE FAULT. The operator agent sent L9 and L10 overlapped (rule:
+  never overlap serial lines). The characters interleaved, both lines were syntax
+  errors, nothing ran. Stopped per the rules: no retry. X NOT started; baseline
+  probe (wd24probe3) NOT run. 755C left at the text console with wd90c24fb loaded.
+
+Owner observation (photo of the S5 frame): "Looks legit".
+Photo vs expected (photo scale ~1.02 photo px per panel px; panel x0 ~ photo 218):
+  op1 8x8 opaque @16: small solid square, ok      op5 8x8 transp @200: ok
+  op2 13x9 opaque @40: small hatched patch, ok    op6 13x9 transp @224: ok
+  op3 32x16 opaque @64: striped box, ok           op7 32x16 transp @248: stripes on bar, ok
+  op4 64x64 opaque @(112,120): ring pattern on a solid box, ok
+  op8 64x64 transp @(296,120): same rings over the bars, bars visible between, ok
+  Positions, sizes and the opaque/transparent difference all match; no mismatch
+  visible at photo resolution (pixel exactness is from the readback).
+
+COMMANDS (operator log on the serial host)
+2026-11-04 21:17:06 EST  S5 copy prep: read-only state check
+2026-11-04 21:17:06 EST  slow: echo Q1; uptime; cut -d" " -f1,3 /proc/modules | tr "\n" " "; echo; cat /proc/fb; pidof Xfbdev; sha256sum /tmp/*.ko | cut -c1-8; echo Q2 CR
+2026-11-04 21:17:47 EST  copy: send wd24adv.ko 62b99f2 (sha f2ac6eee) to 755C /tmp/wd24adv.ko (replaces 7b33b083); no load
+2026-11-04 21:17:47 EST  host: SIGSTOP logger 64434; send-file.sh /tmp/wd24adv-62b99f2.ko -> /tmp/wd24adv.ko (38400)
+2026-11-04 21:17:48 EST  host: SIGCONT logger 64434
+2026-11-04 21:18:06 EST  host: (first send-file aborted before tty use: no sx in tc32/tools path) SIGSTOP logger 64434; tc32-gfx/tools/send-file.sh /tmp/wd24adv-62b99f2.ko -> /tmp/wd24adv.ko (38400)
+2026-11-04 21:19:01 EST  host: SIGCONT logger 64434
+2026-11-04 21:19:10 EST  S5 L1: read-only X check
+2026-11-04 21:19:10 EST  slow: pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt" CR
+2026-11-04 21:19:29 EST  S5 L2: kill 868
+2026-11-04 21:19:29 EST  slow: kill 868 CR
+2026-11-04 21:19:42 EST  S5 L3: text=1, rmmod wd90c24fb
+2026-11-04 21:19:42 EST  slow: echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo RM=$? CR
+2026-11-04 21:20:10 EST  S5 L4: quiet console
+2026-11-04 21:20:10 EST  slow: dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$? CR
+2026-11-04 21:20:33 EST  S5 L5: gate f2ac6eee001 then insmod wd24adv.ko dryrun=0 live=1 mode=640x480-8 s5=1 (once)
+2026-11-04 21:20:34 EST  slow: S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = f2ac6eee001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s5=1; echo RC=$?; } CR
+2026-11-04 21:22:07 EST  S5 L6: save + read results
+2026-11-04 21:22:07 EST  slow: sleep 20; cat /proc/wd24adv/s5 > /tmp/s5run1.txt; cat /proc/wd24adv/live > /tmp/s5live1.txt; grep -E "S5 result|op [0-9]+ |host|DEAD|idle|restore:|writes" /tmp/s5run1.txt; dmesg | grep wd24adv CR
+2026-11-04 21:23:43 EST  S5 L7: rmmod wd24adv
+2026-11-04 21:23:43 EST  slow: rmmod wd24adv; echo RM=$? CR
+2026-11-04 21:24:00 EST  S5 L8: insmod wd90c24fb
+2026-11-04 21:24:00 EST  slow: insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$? CR
+2026-11-04 21:24:32 EST  S5 L9: startx
+2026-11-04 21:24:33 EST  slow: ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & ) CR
+2026-11-04 21:24:33 EST  S5 L10: wait X
+2026-11-04 21:24:34 EST  slow: i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X CR
+2026-11-04 21:26:28 EST  S5 STOP: L9 and L10 were sent overlapped by the operator agent (rule break); both lines garbled, syntax errors, nothing ran. X not started. No further serial lines. State: wd90c24fb loaded RC=0, text console.
+
+SERIAL (from the copy-prep check on)
+<6>wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+user@host:~# echo Q1; uptime; cut -d" " -f1,3 /proc/modules | tr "\n" " "; echo; 
+cat /proc/fb; pidof Xfbdev; sha256sum /tmp/*.ko | cut -c1-8; echo Q2
+Q1
+ 22:16:51 up  5:59,  load average: 0.04, 0.06, 0.08
+wd90c24fb 2 evdev 0 mousedev 1 psmouse 0 syscopyarea 1 sysfillrect 1 vgastate 1 sysimgblt 1 fb_sys_fops 1 fb 70 font 1 serial_cs 0 pata_pcmcia 1 pcmcia 2 firmware_class 1 i82365 0 pcmcia_rsrc 1 pcmcia_core 3 
+0 WD90C24
+868
+7b33b083
+eb0a36e2
+Q2
+user@host:~# pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
+868
+  858 root       580 S    {startx} /bin/sh /usr/local/bin/startx
+  868 root      1664 S    Xfbdev :0 -mouse /dev/input/mice -2button
+  870 root      2128 S    jwm
+  871 root      1924 S    rxvt -fn fixed -geometry 80x24+8+8
+  906 root       580 R    grep -E startx|Xfbdev|jwm|rxvt
+user@host:~# kill 868
+user@host:~# echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c
+24fb; echo RM=$?
+RM=0
+user@host:~# dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$?
+Q=0
+user@host:~# S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|
+vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null
+; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = f2ac6eee001 ] && { dmesg -c >/dev/null; in
+smod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s5=1; echo RC=$?; }
+G=f2ac6eee001
+RC=0
+user@host:~# sleep 20; cat /proc/wd24adv/s5 > /tmp/s5run1.txt; cat /proc/wd24adv/
+live > /tmp/s5live1.txt; grep -E "S5 result|op [0-9]+ |host|DEAD|idle|restore:|w
+rites" /tmp/s5run1.txt; dmesg | grep wd24adv
+  op 1 MONO 8x8 (16,112) opaque 3C/01         model changes 64; idle polls 0; busy seen, polls 0; CNTRL1 after 010e; host words 16/16 VERIFIED
+  op 2 MONO 13x9 (40,112) opaque 3F/00        model changes 117; idle polls 0; busy seen, polls 0; CNTRL1 after 010e; host words 36/36 VERIFIED
+  op 3 MONO 32x16 (64,112) opaque 30/3E       model changes 512; idle polls 0; busy seen, polls 0; CNTRL1 after 010e; host words 128/128 VERIFIED
+  op 4 MONO 64x64 (112,120) opaque 3C/00      model changes 4096; idle polls 0; busy seen, polls 0; CNTRL1 after 010e; host words 1024/1024 VERIFIED
+  op 5 MONO 8x8 (200,112) transp 3F           model changes 32; idle polls 0; busy seen, polls 0; CNTRL1 after 010e; host words 16/16 VERIFIED
+  op 6 MONO 13x9 (224,112) transp 38          model changes 39; idle polls 0; busy seen, polls 0; CNTRL1 after 010e; host words 36/36 VERIFIED
+  op 7 MONO 32x16 (248,112) transp 3C         model changes 256; idle polls 0; busy seen, polls 0; CNTRL1 after 010e; host words 128/128 VERIFIED
+  op 8 MONO 64x64 (296,120) transp 3F         model changes 1920; idle polls 0; busy seen, polls 0; CNTRL1 after 010e; host words 1024/1024 VERIFIED
+restore: wrote 1002, read 1002 (equal)
+23C0h writes 200, 23C2h writes 116 (starts 8), PR0A writes 15, 23C4h 2408, refusals 0, reads 2819 (polls 2424), restore fails 0
+<6>wd24adv: live load: 0 (port data writes 46, index writes 224, mismatches 0)
+<6>wd24adv: LIVE: text state saved (4 planes, DAC, VGA + ext regs); trial 15 s; control: /proc/wd24adv/control
+<6>wd24adv: live mode 640x480-8: 0 (port data writes 93, index writes 263, mismatches 0)
+<6>wd24adv: 640x480-8 set: write "confirm" to /proc/wd24adv/control within 15 s or it reverts to text
+<6>wd24adv: S5 MONO: OK; ops verified 8; 23C2h writes 116 (starts 8), PR0A writes 15; details: /proc/wd24adv/s5
+<6>wd24adv: live trial expiry: 0 (port data writes 896, index writes 336, mismatches 0)
+user@host:~# rmmod wd24adv; echo RM=$?
+RM=0
+user@host:~# insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; ech
+o RC=$?
+RC=0
+user@host:~# ( PATH=i/=u0s;r /wlhoiclael /!s bpiind:o/fu sXrf/bldoecva l>//bdienv
+://nuuslrl/ s&b&i n[: /$uis r-/lbti n6:0/ s]b;i nd:o/ bsilne;e pH O1M;E =i/=r$o(
+o(ti;+ 1e)x)p;o rdto nPeA;T Hs lHeOeMpE ;5 ;(  psildeoefp  X5f;b deexve c& &s te
+acrhtox  X)- U<P/ d|e|v /encuhlol  N>O/-tXm
+/bin/sh: syntax error: unexpected "(" (expecting ")")
+user@host:~# p/xautostart.log 2>&1 & )
+/bin/sh: syntax error: unexpected ")"
+user@host:~# 
