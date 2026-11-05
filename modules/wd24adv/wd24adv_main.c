@@ -228,6 +228,23 @@ static bool hw_nested(void)
 	return hw_task == current;
 }
 
+/* Same-task reentry (printk into fbcon while this task holds hw_lock)
+ * must not draw and must not lock again. The mutex is not recursive.
+ * A nested draw used to run whenever the outer section was not itself
+ * a draw; that touched the aperture mid-critical-section. */
+static bool s6d_registering;
+static bool wd24_exiting;
+static struct task_struct *s6d_ender;
+
+static void s6d_yield_ender(void)
+{
+	while (s6d_ender && s6d_ender != current) {
+		hw_rel();
+		schedule_timeout_uninterruptible(1);
+		hw_acq();
+	}
+}
+
 static struct wd24_ctx *hw;
 static u8 *hw_planes;
 static void __iomem *vmem;
@@ -597,6 +614,7 @@ static int hw_run(enum hw_op op, const struct wd24_mode *m)
 	size_t len = 0;
 	int err;
 
+	s6d_yield_ender();
 	if (op != OP_LOAD) {
 		s6b_stop(op_name[op]);	/* S6b/S6d end before any mode change */
 		s6d_stop(op_name[op]);
@@ -674,6 +692,15 @@ static int hw_mode(const struct wd24_mode *m)
 static void trial_fn(struct work_struct *w)
 {
 	hw_acq();
+	/* register_framebuffer may have dropped hw_lock. Do not tear the
+	 * session down under it; run this expiry once registration returns. */
+	if (s6d_registering && !READ_ONCE(wd24_exiting)) {
+		hw_rel();
+		queue_delayed_work_on(WORK_CPU_UNBOUND, system_percpu_wq,
+				      &trial_work, HZ);
+		return;
+	}
+	s6d_yield_ender();
 	if (hw && hw->trial_pending) {
 		vram_gate("trial expiry: plane restore");	/* sets no_vram if locked */
 		hw_run(OP_EXPIRE, NULL);
@@ -1798,9 +1825,14 @@ static void s6d_end_locked(const char *why)
 	u32 nf, ns, nt;
 	int err;
 
+	/* Caller holds hw_lock. A fault holds console_lock, then hw_lock.
+	 * Taking console_lock here while still holding hw_lock deadlocks
+	 * that fault. Drop hw first. s6d_ender keeps another hw_run from
+	 * restoring text until wd24s6b_end has finished. */
+	s6d_yield_ender();
 	if (!s6d_st || !s6d_st->active)
 		return;
-	/* Draw ops must see inactive before any printk on this task. */
+	s6d_ender = current;
 	nf = s6d_st->nfault;
 	ns = s6d_st->nswitch;
 	nt = s6d_st->nthrash;
@@ -1808,14 +1840,34 @@ static void s6d_end_locked(const char *why)
 	s6d_st->mapped_base = ~0u;
 	s6d_vma = NULL;
 	wd24s6d_thrash_reset(&s6d_st->thrash);
-	S6B_HW_BEGIN();
+	hw_rel();
+#ifndef WD24S1_QEMU_FAKE
+	console_lock();
+#endif
+	hw_acq();
+#ifndef WD24S1_QEMU_FAKE
+	if (hw) {
+		hw->be->begin(hw);
+		hw->tag = "S6d: end session";
+	}
+#endif
 	err = wd24s6b_end(s6d_b);
-	S6B_HW_END();
+#ifndef WD24S1_QEMU_FAKE
+	if (hw)
+		hw->be->end(hw);
+	console_unlock();
+#endif
+	/* Drop hw before printk. A fault may hold console_lock and be
+	 * waiting for hw_lock; printing while holding hw_lock deadlocks it.
+	 * s6d_ender stays set so another hw_run does not restore text yet. */
+	hw_rel();
 	if (err)
 		pr_err("S6d: end (%s): %d\n", why, err);
 	else
 		pr_info("S6d: end (%s): faults %u switches %u thrash %u\n",
 			why, nf, ns, nt);
+	s6d_ender = NULL;
+	hw_acq();
 }
 
 static void s6d_stop(const char *why)
@@ -1853,7 +1905,9 @@ static vm_fault_t s6d_fault(struct vm_fault *vmf)
 	off = (vmf->address - vma->vm_start) + (vma->vm_pgoff << PAGE_SHIFT);
 	if (off >= WD24S6D_MMAP_LEN)
 		return VM_FAULT_SIGBUS;
-	/* console_lock then hw_lock, same order as fbcon/vgacon. */
+	/* console_lock then hw_lock, same order as fbcon. Both sleeps are
+	 * uninterruptible: a userspace alarm or SIGKILL cannot pull the
+	 * task out of this fault. */
 #ifndef WD24S1_QEMU_FAKE
 	console_lock();
 #endif
@@ -1937,6 +1991,7 @@ static int s6d_fb_open(struct fb_info *info, int user)
 	if (!user)
 		return s6d_bind ? 0 : -EBUSY;
 	hw_acq();
+	s6d_yield_ender();
 	if (s6d_st && s6d_st->stopping)
 		err = -ENODEV;
 	else if (s6d_busy)
@@ -1950,9 +2005,26 @@ static int s6d_fb_open(struct fb_info *info, int user)
 		err = -ENODEV;
 #endif
 	else if (!s6d_st->active) {
-		S6B_HW_BEGIN();
+		/* console_lock, then hw_lock. A fault already holds console. */
+		s6d_ender = current;
+		hw_rel();
+#ifndef WD24S1_QEMU_FAKE
+		console_lock();
+#endif
+		hw_acq();
+#ifndef WD24S1_QEMU_FAKE
+		if (hw) {
+			hw->be->begin(hw);
+			hw->tag = "S6d: fb open";
+		}
+#endif
 		err = wd24s6b_begin(s6d_b, s6b_io ? s6b_io : &s6_live_io);
-		S6B_HW_END();
+#ifndef WD24S1_QEMU_FAKE
+		if (hw)
+			hw->be->end(hw);
+		console_unlock();
+#endif
+		s6d_ender = NULL;
 		if (err) {
 			s6d_b->state = WD24S6B_OFF;
 		} else {
@@ -1978,6 +2050,7 @@ static int s6d_fb_release(struct fb_info *info, int user)
 	if (!user)
 		return 0;
 	hw_acq();
+	s6d_yield_ender();
 	/* munmap already ran on process exit; this also covers close()
 	 * while a VMA still exists. */
 	s6d_drop_maps();
@@ -1993,14 +2066,16 @@ static int s6d_fb_release(struct fb_info *info, int user)
  * from inside the draw (that recurses). */
 static bool s6d_draw_enter(bool *took)
 {
-	if (s6d_in_draw && hw_nested())
+	/* Any same-task reentry already holds hw_lock. Drawing here would
+	 * run inside that critical section; locking again would sleep forever. */
+	if (hw_nested())
 		return false;
-	*took = !hw_nested();
-	if (*took)
-		hw_acq();
+	*took = true;
+	hw_acq();
+	/* Do not yield here. fbcon calls this with console_lock held, and
+	 * the end path is waiting for that lock. */
 	if (!s6d_st || !s6d_st->active || s6d_st->stopping || !vmem) {
-		if (*took)
-			hw_rel();
+		hw_rel();
 		return false;
 	}
 	s6d_in_draw++;
@@ -2252,10 +2327,23 @@ static void s6d_arm(const struct wd24_mode *m)
 			s6d_thrash_bound);
 		return;
 	}
-	/* fb_open(0) runs inside register. Do not hold hw_lock across it. */
-	hw_rel();
-	err = register_framebuffer(s6d_info);
-	hw_acq();
+	if (!s6d_bind) {
+		/* fb_open(0) returns -EBUSY without taking hw_lock, and
+		 * fbcon_startup fails before any draw. Holding hw_lock
+		 * keeps the trial worker out of the session. The module
+		 * cannot see whether fbcon's console driver is already
+		 * registered (filp_open/kernel_read are not exported);
+		 * that check is a shell step before insmod. */
+		err = register_framebuffer(s6d_info);
+	} else {
+		/* fbcon draw takes hw_lock under console_lock. Cannot hold
+		 * hw_lock across register or that draw sleeps forever. */
+		s6d_registering = true;
+		hw_rel();
+		err = register_framebuffer(s6d_info);
+		hw_acq();
+		s6d_registering = false;
+	}
 	if (!s6d_armed || (s6d_st && s6d_st->stopping)) {
 		if (s6d_info && s6d_info->node >= 0) {
 			s6d_st->fb_reg = true;
@@ -2737,6 +2825,9 @@ static void __exit wd24adv_exit(void)
 		if (pdir)
 			proc_remove(pdir);
 		pdir = NULL;
+		WRITE_ONCE(wd24_exiting, true);
+		cancel_delayed_work_sync(&trial_work);
+		/* trial_fn may have queued one more delay as it exited. */
 		cancel_delayed_work_sync(&trial_work);
 		hw_acq();
 		/* not reached while pinned; defensive: registers only if locked */

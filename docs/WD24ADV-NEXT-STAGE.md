@@ -345,39 +345,45 @@ This is not a PASS of restore, mmap, or a quiet fbdev. It is evidence the node w
 
 `s6d_fbcon=0` is unchanged: no `register_framebuffer`.
 
-`s6d_fbcon=1 s6d_bind=0` (new) still registers. `fb_open(info, 0)` returns `-EBUSY`. On a boot with `/proc/fb` empty, fbcon's console driver is not registered yet, `fbcon_startup` returns NULL, and `do_take_over_console` does not bind. `register_framebuffer` then returns `-ENODEV` with `info->node >= 0`; that pair is the success case. Any other result unregisters and ends the session (fail closed), including a 0 return. If dmesg shows `Console: switching`, the bind was not refused: stop.
+`s6d_fbcon=1 s6d_bind=0` still registers. `fb_open(info, 0)` returns `-EBUSY`. Checked on the linux-6.18.57 sources: `con2fb_map_boot[]` starts at 0, so fb0 is selected and takeover is attempted; `fbcon_startup` returns NULL; `do_register_con_driver` returns `-ENODEV` and does not add the driver; `do_fbcon_takeover` clears `con2fb_map` and `info_idx`. `do_register_framebuffer` has already published the node (refcount 1) and `do_fb_registered` has stored `fbcon_registered_fb[node]`. `-ENODEV` with `node >= 0` is the success case. A later `unregister_framebuffer` runs `fbcon_fb_unregistered` and `put_fb_info` (no `fb_destroy`, so the struct lives until `framebuffer_release`). Any other result unregisters when the node was linked. The module cannot read vtcon names: `filp_open` and `kernel_read` are not in the trimmed export list (`kernel_read_file_from_path_initns` rejects non-regular files, and sysfs is not a regular file). If fbcon's console driver is already registered, `do_register_con_driver` returns `-EBUSY`, bind still runs, 6.18.57 `fbcon_init` returns on the failed open, and `update_screen` then uses a NULL `fbcon_par`. That oops happens inside `register_framebuffer`, before this driver can roll it back. The shell must confirm no vtcon name contains "frame buffer" before insmod. If dmesg shows `Console: switching`, the bind was not refused: stop.
 
-`s6d_bind=1` still allows the open. The armed printk is now outside `hw_lock`, and fill/blit nest if printk hits them on the same task, so the 9ad254f self-deadlock is closed. It is still the path that paints the console. It is not the next live.
+`s6d_bind=1` still allows the open. The armed printk is outside `hw_lock`. A same-task reentry into fill/blit (printk while `hw_lock` is held) returns without drawing and without locking again, so the 9ad254f self-deadlock is closed and the aperture is not touched mid-section. It is still the path that paints the console. It is not the next live.
+
+Fault and session-end both take `console_lock` before `hw_lock`. End drops `hw_lock` before it takes `console_lock`, and `s6d_ender` keeps another `hw_run` from restoring text until `wd24s6b_end` finishes. `unmap_mapping_range` (6.18.57) takes `i_mmap_lock_read` and zaps; it does not take `mmap_lock`. The fault path already holds `mmap_lock` for read, so unmap is called only after `hw_lock` is dropped and not from inside the fault. `cancel_delayed_work_sync` runs before `hw_lock` on unload. A trial that fires while registration has dropped the lock is deferred one second instead of stopping the session under `register_framebuffer`.
+
+`wd24s6d-mmap`'s alarm and `kill -9` are not delivered while the task is inside `mutex_lock`, `console_lock`, or a fault that has not returned. Those sleeps are uninterruptible. The alarm does not recover a lock deadlock.
 
 Stop order when a node exists: refuse new faults, `unmap_mapping_range`, end the dual-window session, `unregister_framebuffer`, then the existing text restore. A readback mismatch in that restore returns `-EIO` and leaves `in_text` false (`test_vga`). rmmod still finishes after logging that; a non-zero text/expiry line means the text state was not confirmed.
 
 The last 64 KiB window is only partly inside the 307200-byte frame (11 pages, not 16). The fault plan maps and zaps that prefix only. A full-window zap would miss `range_in_vma` and leave stale PTEs.
 
-## Host results (this workspace)
+## Build and host results
 
-No kernel tree and no `Module.symvers` here. `scripts/build-oot.sh` will not build a `.ko`. No module artifact was produced. `wd24s6d-mmap` was compiled with the host cc as a link check; it is not an i486 binary and it was not run.
+This is not a full kernel reproduction. `modules_prepare` was run on stock linux-6.18.57 (kernel.org tarball sha256 `5bd9acdc82ec5efc3790ae840e5aaa40dfde7efff261cf6dde902dc570acf98c`) plus the packaged atkbd patch. `olddefconfig` kept `LOCALVERSION=-tc755x`, `CONFIG_MODVERSIONS` off, `CONFIG_TRIM_UNUSED_KSYMS`, `CONFIG_FB=m`, and no deferred fbcon takeover. Generated `UTS_RELEASE` is `6.18.57-tc755x`, matching the packaged header. Generated `autoconf.h` does **not** match the packaged header: this machine's compiler is gcc 14.2.0 (Ubuntu 14.2.0-4ubuntu2~24.04.1), not Debian 14.2.0-19, and the linker is 2.42, not 2.44. The whitelist string in autoconf is the extracted list for this prepare, not the original absolute path baked into the packaged header. `Module.symvers` was copied from the package, not produced by linking vmlinux here. The three fault symbols are in that file with CRC 0.
 
-`make -C modules/wd24adv/tests test`:
+`wd24adv.ko` vermagic `6.18.57-tc755x mod_unload 486`, ELF 80386, sha256 `30c13d41598c4306a12b9fb294b23ebd1e559c5f4c4707dae4e7fbf88fb994fd`. `wd24s6d-mmap` is a static i486 musl PIE built with gcc 11.2.1 20211120, sha256 `93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8`. Neither file is committed. They were not loaded and not run.
 
-- existing suite, including `test_vga` 70/0 with the restore-mismatch `in_text` checks
-- `test_s6d_bank` 15/15, `test_s6d_thrash` 54/54
-- `test_s6d_fault` 2025/0: probe faults 6 / switches 6, tool read-back totals faults 10 / switches 10 / thrash 0, a latched fault does not move the window, cleanup order for expiry, death (fd close), munmap-only, unload, and `-EIO` leaving `in_text` clear
-
-QEMU was not run (no qemu binary in this environment). The cleanup figures are the contract test of that order, not a loaded module.
+`test_s6d_fault` is a userspace simulator of the pure plan and a hand-written stop order. It does not load the module. Its OK line says SIMULATOR. The host `make -C modules/wd24adv/tests test` (system gcc) covers `test_vga` restore mismatch (`in_text` stays false) and that simulator. QEMU was not run. The cleanup figures are not kernel execution.
 
 ## Next live candidate — do not run without a separate OK
 
 Owner watching. One line, then wait for a real prompt. No `/proc/wd24adv/*`. No second command until `RC=` or `RM=` is printed. Hardware, CF, MBR stay untouched.
 
-Build the module on the machine that has the 6.18.57-tc755x tree (not this workspace). Record the new sha256. Cross-build `tests/wd24s6d-mmap.c` for the 486 userspace there. This repo does not contain that binary.
+The module and the i486 `wd24s6d-mmap` from this run are transfer artifacts, not files in the repo. Check sha256 before use: module `30c13d41598c4306a12b9fb294b23ebd1e559c5f4c4707dae4e7fbf88fb994fd`, tool `93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8`. This is still not approval to insmod.
 
-Gate, before insmod:
+Gate, before insmod. One command at a time. The module cannot do the vtcon check itself.
 
 ```
 cat /proc/fb
 ```
 
 Empty. If not, stop.
+
+```
+cat /sys/class/vtconsole/vtcon0/name
+```
+
+Then the same for `vtcon1` if that file exists. None of the names may contain `frame buffer`. If one does, fbcon's console driver is already registered and `s6d_bind=0` can oops inside `register_framebuffer`. Stop.
 
 ```
 dmesg | grep -F 'Console: switching'

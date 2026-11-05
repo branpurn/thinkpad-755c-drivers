@@ -4,10 +4,13 @@
  * from a boot script. It touches one bank at a time (separate volatile
  * accesses), checks the bytes, then munmaps and closes.
  *
- * SIGALRM calls _exit(2): the kernel drops the VMA and the fd. The default
- * alarm is 20 s, covering a stuck fault. --hold keeps the mapping after a
- * good read-back (alarm then 60 s) so kill -9 can land while it is mapped.
- * A normal return munmaps, then closes.
+ * SIGALRM calls _exit(2) only if the signal is delivered. Delivery waits
+ * until the task is back in userspace or in an interruptible sleep.
+ * mutex_lock, console_lock, and a fault stuck in the kernel are
+ * uninterruptible: the alarm does not fire, and kill -9 does not break
+ * that sleep either. The alarm is not a recovery path for a lock deadlock.
+ * The default alarm is 20 s. --hold keeps the mapping after a good
+ * read-back (alarm then 60 s). A normal return munmaps, then closes.
  *
  * It does not read /proc. After WD24S6D-MMAP, read /proc/wd24adv/s6d once.
  * Default mode: 10 faults and 10 window switches, thrash 0.

@@ -1,5 +1,8 @@
-/* Host contract for the S6d fault plan and the stop/cleanup order.
- * No kernel, no ports. The live mmap tool uses the same touch list. */
+/* SIMULATOR ONLY. This file does not link the kernel module, does not
+ * call register_framebuffer, and does not execute a fault handler.
+ * It checks the pure plan in wd24adv_s6d_fault.h and a hand-written
+ * model of the stop order. A passing run is not a kernel test.
+ * The live mmap tool uses the same touch list. */
 #include <stdio.h>
 #include <string.h>
 #include "../wd24adv_s6d_fault.h"
@@ -379,6 +382,6 @@ int main(void)
 		printf("test_s6d_fault: %d/%d FAILED\n", fails, checks);
 		return 1;
 	}
-	printf("test_s6d_fault: %d checks OK\n", checks);
+	printf("test_s6d_fault: SIMULATOR %d checks OK (not a kernel run)\n", checks);
 	return 0;
 }
