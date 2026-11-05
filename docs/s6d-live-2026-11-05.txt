@@ -262,3 +262,34 @@ solid white above and solid black below, then the root text console.
 The bars are the observation. This note does not assign a cause.
 Colors, whether glyphs were readable, and the keyboard were not checked.
 Runbook that was used: docs/s6d-bind-runbook.txt.
+
+---
+
+## First X start — failed in XKB, one run, not repeated
+
+Same module 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36.
+Extractor, archive, and all eight extracted files matched.
+insmod 0. dmesg: registered fb0 WITHOUT fbcon bind, register -19.
+X pid 340 exited 1 by itself. No signal was sent. A later wait
+returned 127 because that child was already gone.
+x.log, in order that matters:
+can't get colormap: Invalid argument
+then the built-in extensions, including XKEYBOARD
+XKB: Failed to compile keymap
+Keyboard initialization failed. This could be a missing or incorrect setup of xkeyboard-config.
+Fatal server error: Failed to activate core devices.
+Can't deallocate console 3 Resource busy
+No framebuffer id line was in that log. LogMessage uses verbosity 1
+and the default stderr verbosity is 0, so that line is not copied to
+the redirected stderr. The fb was opened: "S6d: session ON (fb open)",
+then "S6d: end (fb release): faults 5 switches 5 thrash 0".
+The colormap ioctl is not what stopped the server. The log continues
+after it. The deallocate line is LinuxFini after the fatal error.
+Trial expiry 0, mismatches 0, in_text 1, armed 0, fb_reg 0.
+/proc/fb empty. VGA+ bind 1. rmmod 0. The shell answered.
+The operator photograph showed a pale field, vertical stripes at the
+top, dark marks along the bottom, then a blue field, then the text
+cursor stopped briefly and resumed. That is not the diagnosis.
+The string "Errors from xkbcomp are not fatal to the X server" is an
+argument passed to xkbcomp. It is not a server policy. This start had
+no xkbcomp, so the compile failed and core-device init called FatalError.

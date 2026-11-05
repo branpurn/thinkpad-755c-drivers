@@ -87,13 +87,31 @@ emulation. This run passes neither `-mouse` nor `-keybd`. An older
 root image used `Xfbdev :0 -mouse /dev/input/mice -2button`. That is
 not this command. Mouse and keyboard stay unproven.
 
-The id line is printed in fbdevInitialize, before mmap, the font open,
-VT_ACTIVATE, and KD_GRAPHICS. It is not readiness. Readiness is all of:
-the process still has a /proc/<PID>/stat line, the state letter after
-the command's closing parenthesis is not Z, the log contains
-"Framebuffer device id: wd24s6d", and the log does not contain
-"Fatal server error". Alive with no fatal still does not prove
-KD_GRAPHICS or any pixel. A stuck VT wait can look like that.
+LogMessage uses verbosity 1. The default stderr verbosity is 0, so
+the framebuffer id line is not written to the redirected stderr.
+Do not require it. The first live start opened the fb anyway:
+dmesg said "S6d: session ON (fb open)", FBIOGETCMAP returned
+"can't get colormap: Invalid argument", and the end line was
+faults 5 switches 5 thrash 0. That colormap line is not fatal.
+The process then died in XKB, before a client and before a
+protocol check.
+
+Core devices are not optional. InitKeyboardDeviceStruct calls
+XkbCompileKeymap. That forks /tmp/xfb-prefix/bin/xkbcomp and reads
+/tmp/xfb-prefix/share/X11/xkb/rules/evdev. If the compile does not
+exit 0, xkbInit prints "XKB: Failed to compile keymap" and
+devices.c calls FatalError("Failed to activate core devices.").
+The string "Errors from xkbcomp are not fatal to the X server" is
+an argument this server passes to xkbcomp. xkbcomp prints it after
+warnings. It is not a server policy. The first live start had no
+xkbcomp, exited 1 by itself, and did not receive a signal.
+
+Readiness for the next start is all of: /proc/<PID>/stat exists,
+the state letter is not Z, the log has no "Failed to compile keymap",
+no "Failed to activate core devices", and no "Fatal server error",
+and dmesg has "S6d: session ON (fb open)". Alive with no fatal still
+does not prove a pixel or the keyboard. "can't get colormap" may
+appear and is not a stop by itself.
 
 SIGTERM is caught. GiveUp sets DE_TERMINATE and returns. The server
 then leaves its loop and AbortDDX runs. AbortDDX calls LinuxDisable
@@ -115,8 +133,10 @@ Headless pass, all of them:
   /proc/fb shows one node before X
   no frame-buffer vtcon
   after the readiness wait, /proc/<PID>/stat exists and the state is not Z
-  x.log contains "Framebuffer device id: wd24s6d"
-  x.log does not contain "Fatal server error"
+  dmesg has "S6d: session ON (fb open)"
+  x.log has no "Failed to compile keymap"
+  x.log has no "Failed to activate core devices"
+  x.log has no "Fatal server error"
   no thrash line, latched stays 0
   `wait` has reaped the child before any socket is removed
   after that: S6d end (fb release)
@@ -126,16 +146,16 @@ Headless pass, all of them:
   RM=0 and the shell answers
 
 Not a pass: panel colors, readable glyphs, the keyboard, the mouse,
-or a root-window photo. The id line alone is not a pass. Alive with
-no fatal is not KD_GRAPHICS and is not a pixel. xkbcomp is not in
-this payload. The server source says an xkbcomp failure is not fatal
-to the server. It also does not make the keyboard proven.
+or a root-window photo. The keymap compile under qemu is not a
+framebuffer proof. Alive with no fatal is not a pixel.
 
-Headless fail, stop. Do not raise the thrash bound. Do not retry.
+Headless fail, stop. Do not raise the thrash bound. Do not retry
+the same missing-xkbcomp command.
   RC does not return, or is not 0
   no WITHOUT fbcon bind line
+  x.log contains "Failed to compile keymap"
+  x.log contains "Failed to activate core devices"
   x.log contains "Fatal server error"
-  the readiness wait ends with no id line
   any thrash line, or latched is not 0
   the child is still alive after SIGKILL and the 5 s sleep
   expiry is not 0, or in_text is not 1
@@ -212,6 +232,28 @@ b71ab767a3b4d623c76ddf8406a6de22a70fa7e878fa3f11c758e87a005a387c
 Xfbdev must be mode 755. The other seven files must be mode 644.
 Do not chmod a system directory.
 
+The X server looks for xkbcomp and the rules at the paths compiled
+into it. Extract this second archive before insmod. If
+/tmp/busybox-wd24 is missing, put the same extractor back first.
+Its hash is unchanged.
+
+  sha256sum /tmp/wd24-xkb.tgz
+
+The first field must be
+5d2203659fffd031f85715e3ce29a7be987c04bc231e36574e6fb748147e9cb2
+If it differs, stop.
+
+  /tmp/busybox-wd24 tar -C /tmp -xzof /tmp/wd24-xkb.tgz
+  echo XK=$?
+  sha256sum /tmp/xfb-prefix/bin/xkbcomp
+  sha256sum /tmp/xfb-prefix/share/X11/xkb/rules/evdev
+
+XK must be 0. xkbcomp must be mode 755 and
+5ebf28e8823a5165efb0a2a0b997d2218ebbaa24ddb5abd76160643a939a5f62
+rules/evdev must be
+43a2ee6f57dd6a3217b4bba6dc2126bd8b27ea3ac5532e880b0be5d6ea30c668
+One pathname each. No sha256sum -c. Do not move these files.
+
   dmesg -c >/dev/null
   insmod /tmp/wd24adv-pr14.ko dryrun=0 live=1 mode=640x480-8 trial=180 s6d=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
   echo RC=$?
@@ -234,12 +276,15 @@ No -mouse and no -keybd. Do not start a client.
   cat /proc/<PID>/stat
 
 The state letter is the field after the closing parenthesis.
-Ready means the file exists, that letter is not Z, the log has
-"Framebuffer device id: wd24s6d", and the log has no
-"Fatal server error".
+Ready means the file exists, that letter is not Z, dmesg has
+"S6d: session ON (fb open)", and the log has none of
+"Failed to compile keymap", "Failed to activate core devices",
+or "Fatal server error". A line "can't get colormap" is not a
+stop. A line "Errors from xkbcomp are not fatal to the X server"
+is the compiler trailer. It is not the pass and it is not the fail.
 
-If the id line is absent, the log has no "Fatal server error", and the
-state is not Z, do this once and not again:
+If the fatal strings are absent, the state is not Z, and the
+session-ON line is absent, do this once and not again:
 
   sleep 15
   cat /tmp/wd24-xfbdev/x.log
@@ -303,7 +348,7 @@ Then:
   cat /sys/class/vtconsole/vtcon0/bind
   rmmod wd24adv
   echo RM=$?
-  rm -rf /tmp/wd24-xfbdev
+  rm -rf /tmp/wd24-xfbdev /tmp/xfb-prefix
   rm -f /tmp/busybox-wd24
 
 If expiry is not 0, still one rmmod. Remove the lock and the X1 socket
