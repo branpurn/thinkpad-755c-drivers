@@ -1,5 +1,5 @@
 S5 s5=2 (HOSTCOL) live run, 2026-11-05 UTC (2026-11-04 21:4x-22:0x EST)
-Approval: Brandon, card t378s1179 "I'm at the screen watching, run s5=2" (this run only).
+Approval: the owner, card t378s1179 "I'm at the screen watching, run s5=2" (this run only).
 Module: wd24adv.ko sha256 1c7b21b099dee110bcb8a913d495abeea722cc993257ed0b049bb4127c1885f1
 (commit 3059401), sent with tc32-gfx send-file.sh, logger paused; remote sha matched.
 Lines: docs/WD24ADV-LIVE-TEST.md "S5 s5=2" L1-L10, one per call, each after the prompt
@@ -18,7 +18,7 @@ L7 RM=0, L8 RC=0, L10 X-UP (Xfbdev 1002).
 Baseline wd24probe3: RC=19, result=ok restore_fail=0x00 (same as S4 and S5 s5=1).
 Doc nit: the L6 grep pattern "S5 result" does not match "S5 HOSTCOL: OK"; dmesg shows it.
 
-PHOTO (Brandon: "Probably what you wanted") vs expected frame:
+PHOTO (the owner: "Probably what you wanted") vs expected frame:
   x=400 8x8 diagonal stripes (38h+((r+c)&7))    seen: small striped patch    match
   x=424 32x16 xor checker (30h+((r^c)&15))       seen: checker patch          match
   x=472 64x64 (4r+c)&FFh                          seen: dark sheared parallelogram

@@ -545,7 +545,7 @@ kill <the Xfbdev PID printed above>
 echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo RM=$?
 dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$?
 S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 1c7b21b0001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s5=2; echo RC=$?; }
-sleep 20; cat /proc/wd24adv/s5 > /tmp/s5run2.txt; cat /proc/wd24adv/live > /tmp/s5live2.txt; grep -E "S5 result|op [0-9]+ |host|probe|class|DEAD|idle|restore:|writes" /tmp/s5run2.txt; dmesg | grep wd24adv
+sleep 20; cat /proc/wd24adv/s5 > /tmp/s5run2.txt; cat /proc/wd24adv/live > /tmp/s5live2.txt; grep -E "S5 HOSTCOL|result|op [0-9]+ |host|probe|class|DEAD|idle|restore:|writes" /tmp/s5run2.txt; dmesg | grep wd24adv
 rmmod wd24adv; echo RM=$?
 insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?
 ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & )

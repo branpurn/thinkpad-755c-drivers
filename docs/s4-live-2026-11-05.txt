@@ -9,7 +9,7 @@ RESULT
 - Baseline wd24probe3: RC=19, 3CC=E3 GR0F=05 GR0E=01 CR11=8C CR29=85 CR34=A0 PR18=C7 PR19=54 SR06=0F, result=ok. Matches.
 
 OWNER OBSERVATION
-Brandon photographed the S4 frame on the panel: "Not sure what intent was but this is the visual".
+The owner photographed the S4 frame on the panel: "Not sure what intent was but this is the visual".
 
 PHOTO vs MODEL (photo scale ~1.34 photo px per screen px)
 - Fills row y=112-127: seven 64x16 blocks at x=16,96,176,256,336,416,496 present, spaced as modelled.
