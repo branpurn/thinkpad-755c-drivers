@@ -111,13 +111,14 @@ def bit(pat, r, c):
 def px(pat, r, c):
     if pat == 0: return 0x38 + ((r + c) & 7)
     if pat == 1: return 0x30 + ((r ^ c) & 0xf)
+    if pat == 4: return 0x40 + r * 4 + c
     return (r * 4 + c) & 0xff
 
 
 MONO = [(16, 112, 8, 8, 0, 0x3c, 0x01, 0), (40, 112, 13, 9, 0, 0x3f, 0, 1), (64, 112, 32, 16, 0, 0x30, 0x3e, 2),
         (112, 120, 64, 64, 0, 0x3c, 0, 3), (200, 112, 8, 8, 1, 0x3f, 0, 0), (224, 112, 13, 9, 1, 0x38, 0, 1),
         (248, 112, 32, 16, 1, 0x3c, 0, 2), (296, 120, 64, 64, 1, 0x3f, 0, 3)]
-HCOL = [(400, 112, 8, 8, 0), (424, 112, 32, 16, 1), (472, 120, 64, 64, 2)]
+HCOL = [(560, 112, 4, 2, 4), (400, 112, 8, 8, 0), (424, 112, 32, 16, 1), (472, 120, 64, 64, 2)]
 REST = [0x1000, 0x210b, 0x3004, 0x410b, 0x5004, 0x61e4, 0x713c, 0x8280, 0x9300, 0xa000, 0xb0a5, 0xe0ff]
 
 
@@ -233,7 +234,7 @@ def main():
         g.run("true", 30)
         g.run("dmesg -n 1; dmesg -c >/dev/null")
 
-        for v, name, nops in ((1, "S5 MONO", 8), (2, "S5 HOSTCOL", 3)):
+        for v, name, nops in ((1, "S5 MONO", 8), (2, "S5 HOSTCOL", 4)):
             out, acc = step(g, f"insmod /wd24/wd24adv.ko s5={v}; echo RC=$?; dmesg -c")
             check(f"s5={v} (dry-run) loads, zero port accesses", "RC=0" in out and len(acc) == 0, f"{len(acc)}")
             pl, _ = g.run("cat /proc/wd24adv/s5")
@@ -263,7 +264,7 @@ def main():
         if loaded(g):
             g.run("rmmod wd24adv")
 
-        for v, name, nops in ((1, "S5 MONO", 8), (2, "S5 HOSTCOL", 3)):
+        for v, name, nops in ((1, "S5 MONO", 8), (2, "S5 HOSTCOL", 4)):
             out, acc = step(g, f"insmod /wd24/wd24adv-qemufake.ko dryrun=0 s5={v}; echo RC=$?; dmesg -c", 300)
             res, _ = g.run("cat /proc/wd24adv/s5")
             seqlog.append(f"\n# TEST-ONLY wd24adv-qemufake.ko: insmod dryrun=0 s5={v}\n" + out + "\n" + res)
@@ -296,6 +297,36 @@ def main():
             check(f"fake s5={v}: ZERO VGA data writes", len(vga_data_writes(acc)) == 0)
             out, acc = step(g, "rmmod wd24adv_qemufake; echo RC=$?")
             check(f"fake s5={v}: rmmod clean, zero accesses", "RC=0" in out and len(acc) == 0)
+
+        # HOSTCOL probe: engine takes 1 px/word -> 4 alternative words, HCOL_ALT, restored, rmmod OK
+        hrest = [v for v in REST if v not in (0xa000, 0xb0a5)]
+        out, acc = step(g, "insmod /wd24/wd24adv-qemufake.ko dryrun=0 s5=2 fake_hang=5; echo RC=$?; dmesg -c")
+        res, _ = g.run("cat /proc/wd24adv/s5")
+        seqlog.append("\n# fake_hang=5\n" + out + "\n" + res)
+        ext = [x for x in acc if x[1] in EXT]
+        check("fake_hang=5: HOSTCOL 1 PX/WORD, restored", "RC=0" in out and "HOSTCOL 1 PX/WORD" in res
+              and "(equal)" in res, next((l for l in res.splitlines() if "result" in l), "").strip())
+        w4 = [x[3] for x in ext if x[0] == "W" and x[1] == 0x23c4]
+        check("fake_hang=5: 4 words then 4 alternative words", w4 == [0x4140, 0x4342, 0x4544, 0x4746,
+              0x4444, 0x4545, 0x4646, 0x4747], " ".join(f"{v:04x}" for v in w4))
+        check("fake_hang=5: report shows 4 alternative words", "probe alternative words: 4" in res)
+        w2 = [x[3] for x in ext if x[0] == "W" and x[1] == 0x23c2]
+        check("fake_hang=5: restore list after the stop", w2[-len(hrest):] == hrest)
+        check("fake_hang=5: ZERO VGA data writes", len(vga_data_writes(acc)) == 0)
+        out, acc = step(g, "rmmod wd24adv_qemufake; echo RC=$?")
+        check("fake_hang=5: rmmod OK", "RC=0" in out and not loaded(g))
+
+        # HOSTCOL bytes swapped: VRAM BAD at the probe with the class named, restored
+        out, acc = step(g, "insmod /wd24/wd24adv-qemufake.ko dryrun=0 s5=2 fake_swap=1; echo RC=$?; dmesg -c")
+        res, _ = g.run("cat /proc/wd24adv/s5")
+        seqlog.append("\n# fake_swap=1\n" + out + "\n" + res)
+        ext = [x for x in acc if x[1] in EXT]
+        check("fake_swap=1: VRAM BAD, class bytes swapped, restored", "RC=0" in out and "VRAM" in res and
+              "bytes swapped" in res and "(equal)" in res,
+              next((l for l in res.splitlines() if "result" in l), "").strip())
+        check("fake_swap=1: only the probe's 4 words", len([x for x in ext if x[0] == "W" and x[1] == 0x23c4]) == 4)
+        out, acc = step(g, "rmmod wd24adv_qemufake; echo RC=$?")
+        check("fake_swap=1: rmmod OK", "RC=0" in out and not loaded(g))
 
         # engine idle before all words: HOST DATA SHORT, restored, rmmod OK
         out, acc = step(g, "insmod /wd24/wd24adv-qemufake.ko dryrun=0 s5=1 fake_hang=3; echo RC=$?; dmesg -c")

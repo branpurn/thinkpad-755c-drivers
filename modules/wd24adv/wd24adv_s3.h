@@ -65,6 +65,11 @@
 #define WD24S3_HCOL	0x0902		/* ACT | PACKED | SRC I/O (S5 HOSTCOL) */
 #define WD24S5_P_HOST	0x23c4		/* BITBLT I/O port (DS 21.12), S5 only */
 #define WD24S5_HLOG	4		/* 23C4h writes logged at each end of an op */
+/* HOSTCOL probe op (pat 4): if the engine is still busy after the 2 px/word
+ * count, the 1 px/word hypothesis is fed (pre-planned words, value px|px<<8,
+ * at most w*h words in all, each after an ACT read) instead of holding:
+ * idle then = HCOL_ALT (stopped, restored, not dead). */
+#define WD24S5_PAT_PROBE 4
 
 struct wd24s3_par {
 	u8 idx;
@@ -115,7 +120,7 @@ extern const struct wd24s3_prog wd24s3_prog3, wd24s3_prog4;
 extern const struct wd24s3_op wd24s4_ops[WD24S4_NOPS];
 /* S5: s5=1 MONO (opaque + transparent), s5=2 HOSTCOL; both bank 1 */
 #define WD24S5_NOPS	8
-#define WD24S5H_NOPS	3
+#define WD24S5H_NOPS	4
 extern const struct wd24s3_op wd24s5_ops[WD24S5_NOPS], wd24s5h_ops[WD24S5H_NOPS];
 extern const struct wd24s3_prog wd24s3_prog5, wd24s3_prog5h;
 /* host data: words owed after the start (DS 21.14 mono: 4 px in bits 3:0,
@@ -125,6 +130,8 @@ extern const struct wd24s3_prog wd24s3_prog5, wd24s3_prog5h;
 u32 wd24s5_words(const struct wd24s3_op *o);
 u32 wd24s5_wpr(const struct wd24s3_op *o);
 u16 wd24s5_word(const struct wd24s3_op *o, u32 n);
+u16 wd24s5_aword(const struct wd24s3_op *o, u32 n);
+const char *wd24s5_hclass(const struct wd24s3_op *o, const u8 *got, const u8 *pre, u32 base);
 bool wd24s5_bit(const struct wd24s3_op *o, u32 r, u32 c);
 u8 wd24s5_px(const struct wd24s3_op *o, u32 r, u32 c);
 
@@ -145,6 +152,7 @@ enum wd24s3_res {
 	WD24S3_TIMEOUT,		/* engine busy: stopped, nothing more written */
 	WD24S3_RESTORE_BAD,
 	WD24S3_HOST_SHORT,	/* S5: engine idle before all host words: stopped, restored */
+	WD24S5_HCOL_ALT,	/* S5 probe: engine took 1 px per word: stopped, restored */
 };
 
 struct wd24s3 {
@@ -171,6 +179,9 @@ struct wd24s3 {
 	bool hgo;			/* a host op is started: words owed */
 	u32 host_n;			/* next word index of the running op */
 	unsigned int whost;
+	bool halt;			/* probe: feeding the 1 px/word words */
+	u32 alt_words;			/* words fed under the alternative */
+	const char *hclass;		/* HOSTCOL readback class on VRAM_BAD */
 	bool busy_seen[WD24S3_MAXOPS];
 	u32 ndiff, diff_off;
 	u8 diff_got, diff_want;

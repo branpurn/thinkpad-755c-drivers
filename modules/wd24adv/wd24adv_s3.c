@@ -100,6 +100,7 @@ const struct wd24s3_op wd24s5_ops[WD24S5_NOPS] = {
 };
 
 const struct wd24s3_op wd24s5h_ops[WD24S5H_NOPS] = {
+	HCOL("HOSTCOL probe 4x2 (560,112)", 560, 112, 4, 2, WD24S5_PAT_PROBE),
 	HCOL("HOSTCOL 8x8 (400,112)", 400, 112, 8, 8, 0),
 	HCOL("HOSTCOL 32x16 (424,112)", 424, 112, 32, 16, 1),
 	HCOL("HOSTCOL 64x64 (472,120)", 472, 120, 64, 64, 2),
@@ -120,6 +121,7 @@ u8 wd24s5_px(const struct wd24s3_op *o, u32 r, u32 c)
 	switch (o->pat) {
 	case 0: return (u8)(0x38 + ((r + c) & 7));
 	case 1: return (u8)(0x30 + ((r ^ c) & 0xf));
+	case WD24S5_PAT_PROBE: return (u8)(0x40 + r * 4 + c);
 	default: return (u8)(r * 4 + c);
 	}
 }
@@ -129,6 +131,46 @@ u32 wd24s5_wpr(const struct wd24s3_op *o)
 	u32 g = (o->w + 3u) / 4u;
 
 	return o->host == 1 ? g : o->host == 2 ? 2 * g : 0;
+}
+
+/* 1 px/word alternative (probe only): word n = pixel n row-major, both bytes */
+u16 wd24s5_aword(const struct wd24s3_op *o, u32 n)
+{
+	u8 p;
+
+	if (o->host != 2 || o->pat != WD24S5_PAT_PROBE || !o->w || n >= (u32)o->w * o->h)
+		return 0;
+	p = wd24s5_px(o, n / o->w, n % o->w);
+	return (u16)(p | p << 8);
+}
+
+/* HOSTCOL rect after a readback mismatch: which packing it looks like */
+const char *wd24s5_hclass(const struct wd24s3_op *o, const u8 *got, const u8 *pre, u32 base)
+{
+	u32 r, c, d, ok = 0, sw = 0, hi = 0, un = 0, n = 0;
+
+	if (o->host != 2)
+		return NULL;
+	for (r = 0; r < o->h; r++)
+		for (c = 0; c < o->w; c++) {
+			d = o->dst + r * WD24S3_PITCH + c - base;
+			if (d >= WD24S3_WIN)
+				return "rect outside the window";
+			n++;
+			ok += got[d] == wd24s5_px(o, r, c);
+			sw += got[d] == wd24s5_px(o, r, c ^ 1);
+			hi += got[d] == wd24s5_px(o, r, c | 1);
+			un += got[d] == pre[d];
+		}
+	if (ok == n)
+		return "rect as modelled (difference outside it)";
+	if (sw == n)
+		return "bytes swapped: high byte = left pixel";
+	if (un == n)
+		return "rect unchanged: nothing drawn";
+	if (hi == n)
+		return "high byte only: each word drawn as 2 copies";
+	return "other packing";
 }
 
 u32 wd24s5_words(const struct wd24s3_op *o)
@@ -267,6 +309,11 @@ int wd24s3_guard_out(const struct wd24s3 *s, u16 port, u16 val)
 		    s->whost >= s->prog->max_host)
 			return -EPERM;
 		o = &s->prog->ops[s->op];
+		if (s->halt)	/* probe alternative: pre-planned words only */
+			return o->pat == WD24S5_PAT_PROBE &&
+			       s->host_n >= wd24s5_words(o) &&
+			       s->host_n < (u32)o->w * o->h &&
+			       val == wd24s5_aword(o, s->host_n) ? 0 : -EPERM;
 		if (!o->host || s->host_n >= wd24s5_words(o) ||
 		    val != wd24s5_word(o, s->host_n))
 			return -EPERM;
@@ -328,6 +375,7 @@ const char *wd24s3_res_name(enum wd24s3_res r)
 	case WD24S3_VRAM_BAD: return "VRAM MISMATCH (stopped, restored)";
 	case WD24S3_TIMEOUT: return "TIMEOUT (engine busy: stopped, nothing more written)";
 	case WD24S3_RESTORE_BAD: return "RESTORE MISMATCH";
+	case WD24S5_HCOL_ALT: return "HOSTCOL 1 PX/WORD (probe took the alternative: stopped, restored)";
 	case WD24S3_HOST_SHORT: return "HOST DATA SHORT (engine idle before all words: stopped, restored)";
 	default: return "not run";
 	}
@@ -629,6 +677,35 @@ static const char *one(struct wd24s3 *s, int j, enum wd24s3_res *res)
 			}
 		}
 		s->hgo = false;
+		if (o->pat == WD24S5_PAT_PROBE &&
+		    wait_idle(s, &s->spins[j], &s->busy_seen[j], &s->c1_after[j])) {
+			u32 na = (u32)o->w * o->h;
+
+			s->halt = true;
+			s->hgo = true;
+			for (n = nw; n < na; n++) {
+				v = s->io->rd16(s->io->priv, WD24S1_P_DATA);
+				s->reads++;
+				s->polls++;
+				logacc(s, false, 16, WD24S1_P_DATA, v);
+				if (!(v & WD24S1_ACT))
+					break;	/* idle part way: not 1 px/word either */
+				if (out16(s, WD24S5_P_HOST, wd24s5_aword(o, n))) {
+					s->hgo = s->halt = false;
+					*res = WD24S3_TIMEOUT;
+					return "guard refused a probe alternative word";
+				}
+				s->alt_words++;
+			}
+			s->hgo = s->halt = false;
+			if (wait_idle(s, &s->spins[j], &s->busy_seen[j], &s->c1_after[j])) {
+				*res = WD24S3_TIMEOUT;
+				return "probe: engine still busy after the 1 px/word words";
+			}
+			*res = n == na ? WD24S5_HCOL_ALT : WD24S3_HOST_SHORT;
+			return n == na ? "probe: engine wanted 1 px per word" :
+					 "probe: engine went idle part way through the alternative";
+		}
 	}
 	if (wait_idle(s, &s->spins[j], &s->busy_seen[j], &s->c1_after[j])) {
 		*res = WD24S3_TIMEOUT;
@@ -646,6 +723,7 @@ static const char *one(struct wd24s3 *s, int j, enum wd24s3_res *res)
 			}
 		}
 	if (s->ndiff) {
+		s->hclass = wd24s5_hclass(o, s->buf, s->pre, s->prog->base);
 		*res = WD24S3_VRAM_BAD;
 		return "the stage bank differs from the model";
 	}
@@ -779,6 +857,9 @@ static unsigned int fake_busy;
 static int fake_hang;
 module_param(fake_hang, int, 0444);
 static bool fake_started;
+/* 5: the HOSTCOL engine takes 1 px per word (low byte); fake_swap=1: high byte = left pixel */
+static bool fake_swap;
+module_param(fake_swap, bool, 0444);
 /* S5 (3: idle after half the host words; 4: never idle after the words) */
 static bool fake_hmono;
 static u32 fake_hn, fake_hwpr, fake_hleft;
@@ -806,9 +887,13 @@ static void fake_host(u16 v)
 			fake_px(r, 4 * k + q, b ? (u8)fake_reg[0xa] : (u8)fake_reg[0xb],
 				!b && (fake_reg[1] & 8));
 		}
+	} else if (fake_hang == 5) {
+		u32 w = fake_reg[6] & 0xfff;
+
+		fake_px((fake_hn - 1) / w, (fake_hn - 1) % w, (u8)v, false);
 	} else {
-		fake_px(r, 2 * k, (u8)v, false);
-		fake_px(r, 2 * k + 1, (u8)(v >> 8), false);
+		fake_px(r, 2 * k, fake_swap ? (u8)(v >> 8) : (u8)v, false);
+		fake_px(r, 2 * k + 1, fake_swap ? (u8)v : (u8)(v >> 8), false);
 	}
 	if (--fake_hleft == 0)
 		fake_busy = fake_hang == 4 && !fake_started ? UINT_MAX : fake_hang == 3 ? 0 : 3;
@@ -829,7 +914,7 @@ static void fake_blt(u16 c1)
 		fake_hmono = (c1 & 0xc) == 0xc;
 		fake_hn = 0;
 		fake_hwpr = (w + 3) / 4 * (fake_hmono ? 1 : 2);
-		fake_hleft = fake_hwpr * h;
+		fake_hleft = fake_hang == 5 ? w * h : fake_hwpr * h;
 		fake_busy = UINT_MAX;
 		if (fake_hang == 3)
 			fake_hleft /= 2;	/* goes idle half way: HOST_SHORT */

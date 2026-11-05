@@ -461,7 +461,7 @@ word, value-checked. Exact counts: 116 writes to 23C2h, 2408 to 23C4h, no
 23C4h read. BG (idx B) is writable only in host programs. Never written: block 2,
 C, D, F; no abort.
 
-s5=2 (HOSTCOL, CNTRL1 0902, 3 ops, 2336 words, 2*ceil(w/4) words per row,
+s5=2 (HOSTCOL; now hardened with a probe op, see the s5=2 section below; CNTRL1 0902, 2336 words, 2*ceil(w/4) words per row,
 low byte = left pixel) is UNPROVEN: built and QEMU-tested, but a separate live
 gate, only after s5=1 is OK.
 
@@ -498,6 +498,66 @@ words to 23C4h, restore read 1002, text back at expiry, RM=0, X-UP. Anything
 else: stop and save the files. HOST DATA SHORT: stop, save, do not continue to
 s5=2. TIMEOUT: read the idle re-check line; IDLE seen: carry on. STILL BUSY /
 LOCKED: stop; no rmmod, no wd90c24fb load; save the files and power off.
+
+## S5 s5=2: on-screen host-data BITBLT, HOSTCOL (prepared 2026-11-05, NOT run, needs its own approval)
+
+Design doc section 7, stage S5 second half. Same load, machinery and safety
+model as s5=1 above (`insmod wd24adv.ko dryrun=0 live=1 mode=640x480-8 s5=2`),
+CNTRL1 0902 (host source, colour, ROP SRC), 2*ceil(w/4) words per row, low
+byte = left pixel: UNPROVEN.
+
+| op | what | pixels |
+|---|---|---|
+| 1 | PROBE 4x2 at (560,112), 4 words 4140 4342 4544 4746 | 40h + 4r + c |
+| 2 | HOSTCOL 8x8 at (400,112) | 38h + ((r+c)&7) |
+| 3 | HOSTCOL 32x16 at (424,112) | 30h + ((r^c)&15) |
+| 4 | HOSTCOL 64x64 at (472,120) | (4r+c)&FFh |
+
+Hardening (the word count is the live risk: an engine wanting more words
+would stall into LOCKED): op 1 is a 4x2 probe. If ACT is still 1 after its 4
+words, the module feeds the planned 1 px/word words (pixel n in both bytes:
+4444 4545 4646 4747), each only after an ACT=1 read; the guard allows them
+only during that feed. Idle at the end = `HOSTCOL 1 PX/WORD` (stop, restore,
+not dead); idle part way = HOST DATA SHORT; still busy = TIMEOUT. On a VRAM
+mismatch the report names the packing seen (`HOSTCOL readback class`: as
+modelled / bytes swapped / unchanged / high byte only / other). Exact counts:
+2340 words (+ up to 4 probe words), no 23C4h read; BG (idx B) never written.
+
+What to see for ~15 s: the normal pattern with three colour patches on the
+bars at x=400-536, y=112-184 (diagonal stripes, a xor checker, a gradient),
+and a tiny 4x2 dot at (560,112).
+
+Build: tc755x tree (kobj-vm86), vermagic `6.18.57-tc755x mod_unload 486`, sha256
+`1c7b21b099dee110bcb8a913d495abeea722cc993257ed0b049bb4127c1885f1`.
+Tests: host test_s5 455/0 (adds probe 1 px/word -> HCOL_ALT, 1 px/word never
+idle -> TIMEOUT after 8 words, idle one early -> SHORT, classes swapped/high
+byte only, guard refuses probe words outside the feed); all other host tests
+unchanged; QEMU qemu-wd24adv-s5.py 55/55 (exact lists with the probe,
+fake_hang=5 HCOL_ALT restored + rmmod, fake_swap=1 VRAM BAD "bytes swapped"
+restored + rmmod); S3 QEMU 34/34, S4 QEMU 35/35.
+
+Exact serial lines (plog.sh each first; send each only after the previous
+returned to the prompt; never overlap; no retries):
+
+```
+pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
+kill <the Xfbdev PID printed above>
+echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo RM=$?
+dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$?
+S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 1c7b21b0001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s5=2; echo RC=$?; }
+sleep 20; cat /proc/wd24adv/s5 > /tmp/s5run2.txt; cat /proc/wd24adv/live > /tmp/s5live2.txt; grep -E "S5 result|op [0-9]+ |host|probe|class|DEAD|idle|restore:|writes" /tmp/s5run2.txt; dmesg | grep wd24adv
+rmmod wd24adv; echo RM=$?
+insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?
+( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & )
+i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X
+```
+
+Expected: RC=0, `S5 HOSTCOL result: OK`, 4 ops VERIFIED, probe alternative
+words 0, restore read 1002, text back at expiry, RM=0, X-UP. HOSTCOL 1
+PX/WORD, HOST DATA SHORT or VRAM BAD: stop after L6, save the files, carry on
+with L7-L10 (restored, not dead); the format is then redesigned on the box.
+TIMEOUT: read the idle re-check line; IDLE seen: carry on. STILL BUSY / LOCKED:
+stop; no rmmod, no wd90c24fb load; save the files and power off.
 
 ## Roll-up visual test (prepared 2026-11-04, run live 2026-11-04)
 

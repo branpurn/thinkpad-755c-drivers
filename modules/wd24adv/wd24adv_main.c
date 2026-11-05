@@ -947,6 +947,8 @@ static void s3_plan_text(void)
 			       wd24s5_words(&sprog->ops[j]), wd24s5_wpr(&sprog->ops[j]), sprog->ops[j].h,
 			       wd24s5_word(&sprog->ops[j], 0),
 			       wd24s5_word(&sprog->ops[j], wd24s5_words(&sprog->ops[j]) - 1));
+		if (sprog->ops[0].pat == WD24S5_PAT_PROBE)
+			APPEND(s3_txt, len, "probe (op 1): if still busy after its words, feed the 1 px/word words (pixel n, both bytes) up to w*h, each after ACT=1; idle = HOSTCOL 1 PX/WORD (stop, restore); busy = TIMEOUT\n");
 		APPEND(s3_txt, len, "never written: block 2 (cursor), C, D, F; CNTRL1 only %04x; 23C4h only owed words of a started op\n",
 		       sprog->ops[0].cntrl1);
 	} else {
@@ -993,6 +995,10 @@ static void s3_report(const char *pre)
 	if (s->ndiff)
 		APPEND(s3_txt, len, "VRAM: %u bytes differ; first %05x read %02x want %02x\n",
 		       s->ndiff, s->diff_off, s->diff_got, s->diff_want);
+	if (s->hclass)
+		APPEND(s3_txt, len, "HOSTCOL readback class: %s\n", s->hclass);
+	if (sprog->ops[0].pat == WD24S5_PAT_PROBE || s->alt_words)
+		APPEND(s3_txt, len, "probe alternative words: %u\n", s->alt_words);
 	APPEND(s3_txt, len, "post-pass (%u):", s->npost);
 	for (k = 0; k < s->npost; k++)
 		APPEND(s3_txt, len, " %04x", s->post[k]);

@@ -44,6 +44,8 @@ static struct {
 	int hhang;		/* host op n never idle after its words */
 	int revbits;		/* engine reads MONO bits lsb = leftmost */
 	int swapcol;		/* engine reads HOSTCOL high byte = left */
+	int px1;		/* HOSTCOL: 1 px per word (low byte); 2 = never idle; 3 = idle 1 word early */
+	int hiboth;		/* HOSTCOL: both pixels of a word = high byte */
 	u32 hleft, hn, hwpr;
 	int hmono, nhost, hidle, hbad_after;
 	int norestore_k;
@@ -93,7 +95,7 @@ static void blt(u16 c1)
 		m.hmono = (c1 & 0xc) == 0xc;
 		m.hn = 0;
 		m.hwpr = ((m.reg[6] & 0xfff) + 3) / 4 * (m.hmono ? 1 : 2);
-		m.hleft = m.hwpr * h;
+		m.hleft = m.px1 && !m.hmono ? (m.reg[6] & 0xfff) * h - (m.px1 == 3) : m.hwpr * h;
 		if (m.hshort == m.nstart)
 			m.hleft /= 2;
 		m.busy = -1;
@@ -139,6 +141,13 @@ static void host(u16 v)
 
 			hpx(r, 4 * k + q, b ? (u8)m.reg[0xa] : (u8)m.reg[0xb], !b && (m.reg[1] & 8));
 		}
+	} else if (m.px1) {
+		u32 w = m.reg[6] & 0xfff;
+
+		hpx((m.hn - 1) / w, (m.hn - 1) % w, (u8)v, 0);
+	} else if (m.hiboth) {
+		hpx(r, 2 * k, (u8)(v >> 8), 0);
+		hpx(r, 2 * k + 1, (u8)(v >> 8), 0);
 	} else {
 		hpx(r, 2 * k, (u8)(m.swapcol ? v >> 8 : v), 0);
 		hpx(r, 2 * k + 1, (u8)(m.swapcol ? v : v >> 8), 0);
@@ -148,7 +157,7 @@ static void host(u16 v)
 	if (m.hleft == 1 && m.stray && m.nstart == 1)
 		m.vram[0x4b000 + m.stray - 1] ^= 0xff;
 	if (--m.hleft == 0)
-		m.busy = m.hhang == m.nstart ? -1 : (m.hshort == m.nstart ? 0 : m.busy_n);
+		m.busy = m.hhang == m.nstart || m.px1 == 2 ? -1 : (m.hshort == m.nstart || m.px1 == 3 ? 0 : m.busy_n);
 }
 
 static u16 t_inw(void *p, u16 port)
@@ -513,6 +522,53 @@ int main(void)
 	r = run();
 	CHECK(r && s.res == WD24S3_VRAM_BAD && s.done == 0, "swapped HOSTCOL bytes: VRAM_BAD at op 1 (%d)", s.res);
 	restored("swapcol");
+	CHECK(s.hclass && !strcmp(s.hclass, "bytes swapped: high byte = left pixel"), "swapcol: class %s", s.hclass ? s.hclass : "-");
+	CHECK(wd24s5_ops[0].pat != WD24S5_PAT_PROBE && wd24s5h_ops[0].pat == WD24S5_PAT_PROBE &&
+	      wd24s5h_ops[0].w == 4 && wd24s5h_ops[0].h == 2 && wd24s5_words(&wd24s5h_ops[0]) == 4,
+	      "probe: HOSTCOL op 1 is 4x2, 4 words; MONO has no probe");
+	CHECK(wd24s5_aword(&wd24s5h_ops[0], 4) == 0x4444 && wd24s5_aword(&wd24s5h_ops[0], 7) == 0x4747 &&
+	      wd24s5_aword(&wd24s5h_ops[0], 8) == 0 && wd24s5_aword(&wd24s5h_ops[1], 4) == 0,
+	      "probe: alternative words px|px<<8, probe only, bounded");
+	CHECK(wd24s5_word(&wd24s5h_ops[0], 0) == 0x4140 && wd24s5_word(&wd24s5h_ops[0], 3) == 0x4746,
+	      "probe: words 4140 4342 4544 4746");
+
+	/* both bytes = high byte: class */
+	reset();
+	pattern();
+	m.hiboth = 1;
+	r = run();
+	CHECK(r && s.res == WD24S3_VRAM_BAD && s.done == 0 && s.hclass &&
+	      !strcmp(s.hclass, "high byte only: each word drawn as 2 copies"), "hiboth: VRAM_BAD, class %s", s.hclass ? s.hclass : "-");
+	restored("hiboth");
+
+	/* engine wants 1 px per word: probe feeds 4 more, HCOL_ALT, not dead */
+	reset();
+	pattern();
+	m.px1 = 1;
+	r = run();
+	CHECK(r && s.res == WD24S5_HCOL_ALT && !s.dead && s.done == 0, "px1: HCOL_ALT at the probe (%d)", s.res);
+	CHECK(s.alt_words == 4 && s.hwords[0] == 8 && m.nhost == 8 && m.hidle == 0, "px1: 4 + 4 words, none to an idle engine (%u %u %d)", s.alt_words, s.hwords[0], m.nhost);
+	CHECK(m.nstart == 1, "px1: no op after the probe");
+	restored("px1");
+
+	/* 1 px per word, never idle: TIMEOUT after the 8th word, nothing after */
+	reset();
+	pattern();
+	m.px1 = 2;
+	r = run();
+	CHECK(r == -ETIMEDOUT && s.res == WD24S3_TIMEOUT && s.dead && m.nhost == 8, "px1 hang: TIMEOUT after 8 words (%d, %d)", s.res, m.nhost);
+	CHECK(m.writes_after_timeout == 0, "px1 hang: no write after");
+
+	/* engine idle one word before w*h: HOST_SHORT, no word to the idle engine */
+	reset();
+	pattern();
+	m.px1 = 3;
+	r = run();
+	CHECK(r && s.res == WD24S3_HOST_SHORT && !s.dead && m.hidle == 0 && m.nhost == 7, "px1 early: HOST_SHORT, 7 words (%d, %d)", s.res, m.nhost);
+	restored("px1 early");
+
+	/* guard: alternative words refused outside the probe feed */
+	CHECK(wd24s3_guard_out(&s, 0x23c4, 0x4444) != 0, "guard: 23C4h 4444 refused when idle");
 
 	/* engine ignores the start: idle at the first word -> HOST_SHORT, 0 words */
 	cur = &wd24s3_prog5;
