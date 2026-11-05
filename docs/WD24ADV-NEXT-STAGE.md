@@ -98,6 +98,27 @@ change.
    without a new plan.
 5. Xfbdev only after the controlled live paints are OK (separate approval).
 
+### Floppy image (box, 2026-11-05) — **mkfloppy FAILED (size)**
+
+Brandon OK to build floppy (pt417u); burn on Pop-GNOME only (pt418u). Box did
+**not** burn media or touch the 755C.
+
+Attempt: copy S6d-export `bzImage-6.18.57-tc755x` (1249792 B) → `out/bzImage`,
+run `scripts/mkfloppy.sh`. **mcopy Disk full** — short **49664** bytes vs prior
+FAT free 130560 (delta vs old 1069568 vmlinuz = +180224). `core.xz` not
+stripped (needs separate OK). Partial broken img discarded; `out/tc755.img`
+restored to last-good (old vmlinuz). `out/bzImage` remains the S6d-export
+kernel for a later retry.
+
+Stage for Pop-GNOME (no bootable new img yet):
+`/workspace/755c-research/out-s6d-exports/floppy/` — bzImage, Module.symvers,
+SIZE-FAILURE.txt, SERIAL-MATRIX.txt, README, SHA256SUMS.
+
+Serial without CF boot (verified): COM1 9600 syslinux + getty autologin,
+busybox `rx` + sha256sum/dmesg/mknod in core.xz; insmod via XMODEM’d
+`modutils.tcz` / second floppy / read-only CF *data* tce — not CF boot.
+Blocked solely on fitting the 1.25 MiB vmlinuz onto the 1.44 MB FAT.
+
 ### Kernel rebuild (box, 2026-11-05) — exports kept, **not installed**
 
 Rebuilt on the box after Brandon Proceed (pt414u). No 755C disk/boot writes.
@@ -138,6 +159,6 @@ read-only font-plane compare.
 
 | Ready on box (no 755C) | Needs Brandon OK |
 |---|---|
-| Docs + ksyms-keep list + S6d bank host tests; **kernel rebuilt on box** (tc755x kobj-vm86 + tc755) with three exports verified | Install/flash new bzImage on 755C + reboot; then S6d live |
+| Docs + ksyms-keep + S6d bank tests; kernel rebuilt (exports OK); **mkfloppy Disk full (−49664 B)** — no S6d-export tc755.img yet | Free ≥49664 B on floppy (core shrink OK) or alternate medium; Pop burns; then S6d live |
 | Later: S6d fbdev code once KDIR has exports | Any S6d live run; any Xfbdev on 755C |
 | S7 ioctl surface design (after S6d) | Live ioctl / accel runs |
