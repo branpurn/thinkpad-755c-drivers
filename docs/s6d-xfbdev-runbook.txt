@@ -5,8 +5,10 @@ Do not insmod /tmp/wd24adv.ko. That older file stays.
 Payload: /opt/cursor/artifacts/wd24-xfbdev-i486.tgz
 sha256 af429004d7d279f84d6ebdf2b62f589b81471dd791f6d0949d3d6c67a106c224
 Extracts to /tmp/wd24-xfbdev/. It is static. It does not
-replace a system library. Remove the tree at the end. No CF write, no
-reboot, no new kernel.
+replace a system library. After the X child has been reaped, remove
+that tree, /tmp/.X1-lock, and /tmp/.X11-unix/X1. Leave
+/tmp/.X11-unix itself and any other socket. No CF write, no reboot,
+no new kernel.
 
 What was checked offline, against this driver and linux-6.18.57
 fb_chrdev.c / fbcmap.c / fbmem.c, and against xorg-server 1.14.7
@@ -54,44 +56,95 @@ ioctl is fatal to X if it fails. On the way out it sets KD_TEXT. The
 mmap tool did not do this. If the expiry line is not 0, stop. The
 picture on the panel is not the pass.
 
-This binary was not executed. Checks that were run: ELF 80386,
-static-pie, no INTERP, objdump cmov count 0. Three `pause` (`f3 90`)
-encodings are in musl pthread_rwlock. The mmap tool that already ran
-on this machine does not contain that encoding. Intel documents `pause`
-as a NOP on IA-32 processors older than the Pentium 4. This 486 has
-not executed those bytes. If X dies with SIGILL, that is a fail. The
-shell can still record it, because X is backgrounded, and the trial
-expiry is still the text restore.
+Offline smoke, not the 755C, not the draw path. Record:
+docs/s6d-xfbdev-smoke.txt. Hashes were unchanged.
+qemu-i386 8.2.2, `-cpu 486`, `Xfbdev -help`: RC 0, stdout empty, usage
+on stderr. The same file run as a host IA32 process on x86_64 also
+returned RC 0 with the same stderr. That host run is not a 486 result.
+The 486 model is the qemu run. Under that same `-cpu 486`, a stub whose
+only extra instruction is `cmovne %eax,%eax` gets signal 4 and the
+shell reports RC 132. A stub that returns 42 under `-cpu 486` reports
+RC 42. So the help path started the static PIE and parsed `-help`
+without SIGILL on a CPU model that rejects cmov. `-version` is not a
+flag of this binary: RC 1, "Unrecognized option: -version", then
+"Fatal server error". The help path does not open /dev/fb0 and does not
+draw. The three `pause` (`f3 90`) encodings in musl pthread_rwlock are
+not on it. The mmap tool that already ran does not contain them. If a
+later live X dies with SIGILL, that is a fail. The shell can record it,
+because X is backgrounded, and the trial expiry is still the text
+restore.
+
+This binary's usage lists `-mouse driver [,n,,options]` and
+`-keybd driver [,,options]`. It has no flag whose meaning is "no mouse"
+or "no keyboard". `-2button` and `-3button` only change button
+emulation. This run passes neither `-mouse` nor `-keybd`. An older
+root image used `Xfbdev :0 -mouse /dev/input/mice -2button`. That is
+not this command. Mouse and keyboard stay unproven.
+
+The id line is printed in fbdevInitialize, before mmap, the font open,
+VT_ACTIVATE, and KD_GRAPHICS. It is not readiness. Readiness is all of:
+the process still has a /proc/<PID>/stat line, the state letter after
+the command's closing parenthesis is not Z, the log contains
+"Framebuffer device id: wd24s6d", and the log does not contain
+"Fatal server error". Alive with no fatal still does not prove
+KD_GRAPHICS or any pixel. A stuck VT wait can look like that.
+
+SIGTERM is caught. GiveUp sets DE_TERMINATE and returns. The server
+then leaves its loop and AbortDDX runs. AbortDDX calls LinuxDisable
+only if the VT enable path already set kdEnabled. LinuxDisable issues
+KDSETMODE KD_TEXT. There is no printk for that ioctl. SIGKILL does not
+run it. `kill` returning 0 means the signal was delivered to a pid that
+existed, not that the task has exited. A zombie still has a /proc line
+and state Z until `wait` reaps it. `wait` is run only when the state is
+Z or /proc is already gone, so it returns. Do not `wait` on a live
+state. That call blocks, and this shell has nothing else to type.
+
+After the child is dead, the module trial is still a separate restore
+of the saved text registers. The headless restore evidence is expiry 0,
+mismatches 0, in_text 1. The panel is not that evidence.
 
 Headless pass, all of them:
   insmod RC=0
   the dmesg line "registered fb0 WITHOUT fbcon bind"
   /proc/fb shows one node before X
   no frame-buffer vtcon
+  after the readiness wait, /proc/<PID>/stat exists and the state is not Z
   x.log contains "Framebuffer device id: wd24s6d"
+  x.log does not contain "Fatal server error"
   no thrash line, latched stays 0
-  after X is gone: S6d end (fb release)
+  `wait` has reaped the child before any socket is removed
+  after that: S6d end (fb release)
   live trial expiry 0, mismatches 0, in_text 1
   armed 0, fb_reg 0, /proc/fb empty
   only vtcon0 (S) VGA+ bind 1
   RM=0 and the shell answers
 
 Not a pass: panel colors, readable glyphs, the keyboard, the mouse,
-or a root-window photo. xkbcomp is not in this payload. The server
-source says an xkbcomp failure is not fatal to the server. It also
-does not make the keyboard proven.
+or a root-window photo. The id line alone is not a pass. Alive with
+no fatal is not KD_GRAPHICS and is not a pixel. xkbcomp is not in
+this payload. The server source says an xkbcomp failure is not fatal
+to the server. It also does not make the keyboard proven.
 
 Headless fail, stop. Do not raise the thrash bound. Do not retry.
   RC does not return, or is not 0
   no WITHOUT fbcon bind line
-  x.log has FatalError, or never prints the wd24s6d id
+  x.log contains "Fatal server error"
+  the readiness wait ends with no id line
   any thrash line, or latched is not 0
+  the child is still alive after SIGKILL and the 5 s sleep
   expiry is not 0, or in_text is not 1
   /proc/fb still occupied after expiry
   the shell stops answering
   X dies with SIGILL
 
 Sequence. One line at a time. The trial clock starts at insmod.
+The waits below are 15 s, and at most one more 15 s, then 10 s, then
+at most 5 s. That is 45 s after X is started. Do not add another
+sleep. Start X as soon as RC=0. bind=0 does not do the fbcon redraw,
+so RC should return while most of the 180 s remains. If RC itself
+used more than about 120 s, skip the second 15 s sleep and go to
+SIGTERM. Do not let the trial unmap the framebuffer while the child
+is still the process you are trying to stop cleanly.
 
   cat /proc/fb
   cat /sys/class/vtconsole/vtcon0/name
@@ -122,32 +175,75 @@ One node. Then:
   /tmp/wd24-xfbdev/Xfbdev :1 -nolisten tcp -fb /dev/fb0 >/tmp/wd24-xfbdev/x.log 2>&1 &
   echo PID=$!
 
-The PID line is not readiness. Wait, then read the log once.
+The PID echo is not readiness. Use those digits below. Do not use $!.
+No -mouse and no -keybd. Do not start a client.
 
   sleep 15
   cat /tmp/wd24-xfbdev/x.log
+  cat /proc/<PID>/stat
 
-If the wd24s6d id line is absent, wait once more and read once more.
-If it is still absent, kill the decimal PID and stop after the cleanup
-below. Do not loop.
+The state letter is the field after the closing parenthesis.
+Ready means the file exists, that letter is not Z, the log has
+"Framebuffer device id: wd24s6d", and the log has no
+"Fatal server error".
 
-No -mouse and no -keybd. Do not start a client.
+If the id line is absent, the log has no "Fatal server error", and the
+state is not Z, do this once and not again:
 
-Kill with the decimal digits, SIGTERM first, so X can set KD_TEXT and
-close the fb. If that kill does not return, stop. Do not type further
-commands. kill -9 is only if SIGTERM returned and the pid is still
-there. Neither signal pulls a task out of mutex_lock, console_lock, or
-a fault that has not returned.
+  sleep 15
+  cat /tmp/wd24-xfbdev/x.log
+  cat /proc/<PID>/stat
 
-  kill <the decimal PID>
-  echo KILL=$?
+If it is ready, continue to the same SIGTERM. A ready child is the
+only one that can still be a headless pass. If it is still not ready,
+or the log has "Fatal server error", also go to SIGTERM now. Do not
+loop. A fatal line is a fail. Record it, reap, then the module
+cleanup below, and stop.
 
-Then one s6d read. If it says hw busy, do not loop. Wait for expiry.
+SIGTERM uses the decimal PID. echo TERM=$? afterwards. 0 means the
+signal was sent. It does not mean the task exited.
+
+  kill -TERM <PID>
+  echo TERM=$?
+  sleep 10
+  cat /proc/<PID>/stat
+
+If cat says there is no such file, or the state letter is Z, the task
+has exited. Reap it. `wait` returns immediately in those two cases.
+
+  wait <PID>
+  echo WAIT=$?
+
+Record WAIT as printed. A clean SIGTERM shutdown can be 0. 143 is
+128+15. Do not require one of those for the reap itself. Then, and
+only then:
+
+  rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
+
+That removes this display's lock and this display's socket. It leaves
+/tmp/.X11-unix and every other socket.
+
+If the state letter is anything else, the task has not exited. Do not
+wait. Send SIGKILL to the same digits, then look again.
+
+  kill -9 <PID>
+  echo KILL9=$?
+  sleep 5
+  cat /proc/<PID>/stat
+
+KILL9=0 still does not mean the task exited. SIGKILL does not run
+KD_TEXT. It does not interrupt mutex_lock, console_lock, or a fault
+that has not returned. If the file is now gone or the state is Z, run
+the same `wait` and the same `rm -f` of those two paths. If the state
+is still a live letter, stop. Do not wait. Do not delete the lock, the
+socket, or /tmp/wd24-xfbdev. Do not send another signal.
+
+After a reap, one s6d read. If it says hw busy, do not loop. Wait for
+the trial printk. The 180 s started at insmod.
 
   cat /proc/wd24adv/s6d
 
-Wait for the trial printk. It was armed for 180 s at insmod, not at
-the kill. Then:
+Then:
 
   cat /proc/wd24adv/live
   cat /proc/wd24adv/s6d
@@ -156,8 +252,10 @@ the kill. Then:
   cat /sys/class/vtconsole/vtcon0/bind
   rmmod wd24adv
   echo RM=$?
-  rm -rf /tmp/wd24-xfbdev /tmp/.X1-lock /tmp/.X11-unix
+  rm -rf /tmp/wd24-xfbdev
 
-If expiry is not 0, still one rmmod and the same rm -rf, then stop.
-Do not call that a pass. Leave /tmp/wd24adv-pr14.ko and /tmp/wd24adv.ko
-in place.
+If expiry is not 0, still one rmmod. Remove the lock and the X1 socket
+only if `wait` already reaped the child. Remove the payload tree only
+in that same case. Then stop. Do not call that a pass. Leave
+/tmp/wd24adv-pr14.ko and /tmp/wd24adv.ko in place. Leave
+/tmp/.X11-unix in place.
