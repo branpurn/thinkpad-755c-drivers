@@ -566,7 +566,7 @@ Design doc section 7, stage S6 (the RAM-shadow S6 is parked). One load:
 PROVEN 640x480-8 trial mode set, under hw_lock + console_lock, the program in
 `wd24adv_s6.c` runs once:
 
-### S6 v2 (prepared 2026-11-04, after the run above; NOT run)
+### S6 v2 (run 2026-11-04: OK, writes 31, SR06 relocked 0f; L7-L8 overlapped by operator error, stopped with wd24adv loaded in text, X not restored, baseline not run; see docs/s6v2-live-2026-11-04.txt)
 
 The lock: PR31 = SR11 is a Paradise extended register. Data book 14.1: PR20
 (SR06) must be x1x01xxx to read/write SR07+; locked, the 3C4 index is 3 bits

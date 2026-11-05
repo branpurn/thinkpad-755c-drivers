@@ -1,0 +1,53 @@
+S6 v2 (s6=1, guarded SR06 unlock/relock) live run, 2026-11-04 22:47-22:53 EST
+Approval: the owner, card t387s1239 (this S6 v2 run only).
+Module: wd24adv.ko sha256 08c12db4b650c06aa81bb0d290f289819b9d7e356bc7cb6ba24a8f880c0e7118
+(commit 1b43ec8), sent with send1.sh (logger SIGSTOP/SIGCONT); remote sha matched.
+Lines: docs/WD24ADV-LIVE-TEST.md "S6 v2" (v1 list, G=08c12db4001).
+
+RESULT: OK (register writes 31), mismatches 0
+  E read-only: PR0A 00 PR0B 00 PR1 c5 GR06 05 SR06 0f lock locked PR31(locked) 00
+  E2: SR06 4f -> readback 0f, width unlocked; PR31 (unlocked) 5d; SR06 0f -> readback 0f, width locked
+  prefill verified; P1 PR0B 70; P2 PR1 cd
+  D1 split read: A0000 (Y+0000) 0 bad, A8000 (X+8000) 0 bad
+  V1 single: PR1 c5, Y+0000'=0 X+8000'=0 bad -> split yes
+  U: SR06 readback 0f, width unlocked; P3 PR31 readback dd
+  D2 rw: read X+1000 0 bad; after write, read still X 0 bad; copy X+1000 -> Y+2000
+  P4 PR31 readback 5d; L: SR06 readback 0f, width locked
+  V2 single: Y+1000(C)=0 Y+2000(copy)=0 X+1000 kept=0 bad
+  regions restored: 0 bytes differ; trial expiry mismatches 0
+PROVEN: PR1 b3 split (read + write halves); PR31 b7 read PR0A / write PR0B
+(whole window) once SR06 is unlocked with 4Fh; SR06 relock to 0Fh reads back.
+
+INCIDENT after L6 (operator error): L7 and L8 were sent OVERLAPPING (two
+calls at once, against the one-line rule). The serial characters interleaved;
+the shell ran garbage: "rmmod iwnds2m4oadd ..." (rmmod: no such module,
+"u: not found") and "b/modules/.../wd90c24fb.ko" (not found, RC=127).
+Nothing was unloaded or loaded. State at stop: wd24adv still loaded (trial
+expired, text restored, mismatches 0), wd90c24fb NOT loaded, X NOT running.
+Per the rules (interrupted call: check commands.log, never re-send) no
+further lines were sent: L7-L10 and the wd24probe3 baseline are NOT done.
+X status: <not restored, pending owner decision>
+Baseline wd24probe3: <not run>
+
+== commands.log ==
+2026-11-04 22:47:06 EST  S6 v2: send-file wd24adv-s6v2.ko -> /tmp/wd24adv.ko (approval t387s1239)
+2026-11-04 22:47:06 EST  host: SIGSTOP logger 64434; send-file.sh ~/wd24adv-s6v2.ko -> /tmp/wd24adv.ko (38400)
+2026-11-04 22:48:09 EST  host: SIGCONT logger 64434
+2026-11-04 22:48:18 EST  S6 v2: send-file done, sha 08c12db4 match
+2026-11-04 22:48:18 EST  S6 v2 L1
+2026-11-04 22:48:18 EST  slow: pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt" CR
+2026-11-04 22:48:36 EST  S6 v2 L2
+2026-11-04 22:48:37 EST  slow: kill 1065 CR
+2026-11-04 22:48:49 EST  S6 v2 L3
+2026-11-04 22:48:49 EST  slow: echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo RM=$? CR
+2026-11-04 22:49:16 EST  S6 v2 L4
+2026-11-04 22:49:17 EST  slow: dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$? CR
+2026-11-04 22:49:36 EST  S6 v2 L5
+2026-11-04 22:49:36 EST  slow: S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 08c12db4001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s6=1; echo RC=$?; } CR
+2026-11-04 22:51:08 EST  S6 v2 L6
+2026-11-04 22:51:08 EST  slow: sleep 20; cat /proc/wd24adv/s6 > /tmp/s6run.txt; cat /proc/wd24adv/live > /tmp/s6live.txt; grep -vE "^  write" /tmp/s6run.txt; dmesg | grep wd24adv CR
+2026-11-04 22:52:21 EST  S6 v2 L6 result OK (writes 31), SR06 relocked 0f, mismatches 0
+2026-11-04 22:52:22 EST  S6 v2 L7
+2026-11-04 22:52:22 EST  slow: rmmod wd24adv; echo RM=$? CR
+2026-11-04 22:52:22 EST  S6 v2 L8
+2026-11-04 22:52:23 EST  slow: insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$? CR
