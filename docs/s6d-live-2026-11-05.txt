@@ -20,3 +20,42 @@ Panel: Brandon said looked OK / bet nothing happened — consistent with refuse-
 
 No trial restore needed (module never loaded). No further visual/s6d steps (t434u STOP).
 No CF writes.
+
+--- Box investigation 2026-11-05 (no further live) ---
+
+1. Entry check (wd24adv_core.c wd24_entry_check, WD24_PH_LOAD):
+   - Reads SR06 (PR20); at load must be 0x0F ("locked value").
+   - Then port_seq_unlocked() (wd24adv_port.c): write 3C4 index 0x11, read
+     index — 0x01 => locked (return 0), 0x11 => unlocked (return 1).
+   - Refuse -ENODEV if unl != 0. Message "SR06 read 01 expected 00" prints
+     the *width-test result* (got=unl want=0), NOT the SR06 data register.
+   - Live fail: SR06 data must have been 0x0F (else earlier message), width=1
+     unlocked. Index writes 12, data writes 0 — fail-safe as designed.
+   - Host test_vga #33: SR06 latch unlocked at entry → -ENODEV, 0 data writes.
+
+   When 01 (unlocked) is "valid": mid S6/S6b/S6c after deliberate unlock to
+   4Fh ((BIOS&EFh)|48h); SR06 bits 3:0 still read 0Fh. Not valid at *load*
+   entry — load requires locked, then save_ext unlocks, plan ends with relock.
+
+2. vs S6/S6b/S6c and boot context:
+   - S6/S6c: guarded unlock→work→relock; entry and begin require locked.
+   - S6b begin: "SR06 lock not in the expected locked state" → refuse.
+   - Prior live S6* were on CF/rootfs after wd90c24fb (text=1+rmmod relocks)
+     or after a successful wd24adv load that left SR06 locked (3C4test=00).
+   - S6d floppy: no wd90c24fb, never successful wd24adv load; font+fb only
+     (no VGA ports). Likely BIOS/POST or TC init left latch unlocked with
+     SR06 nibble still 0Fh — same ambiguous state S6 docs call "already
+     unlocked → ENTRY, zero writes". Fresh-BIOS SR06 width is **U** in
+     LIVE-TEST (proven locked only after wd90c24fb unload path).
+
+3. Proposed next live (Brandon watching; do NOT run until then):
+   A. Box first: add opt-in fix_sr06=1 — if width unlocked && SR06==0x0F,
+      write SR06=0x0F once (S6 "L" relock idiom), re-check width locked,
+      else refuse. Host test. Rebuild + XMODEM. (Do not auto-accept unlocked.)
+   B. Live text-only prove (no mode/s6d, panel stays text):
+        insmod /tmp/wd24adv.ko dryrun=0 live=1 trial=15 fix_sr06=1
+      Expect live load: 0; then trial restore / rmmod.
+   C. Then visual:
+        insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0 fix_sr06=1
+   Alternate without code change: boot path that relocks (e.g. brief
+   wd90c24fb text=1+rmmod on a tree that has it) — not on this S6d floppy.

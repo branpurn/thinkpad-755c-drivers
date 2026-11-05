@@ -215,3 +215,20 @@ Exact command run once with Brandon watching. Refused at entry check:
 `SR06 read 01 expected 00` (latch unlocked). Nothing written; no fbcon bind;
 `wd24adv` never stayed loaded. STOP pending Brandon (t434u); do not retry visual
 until SR06-lock precondition understood on this floppy boot.
+
+### SR06 unlocked on S6d floppy — analysis (box, 2026-11-05)
+
+Live `s6d=1` RC=19 was the **entry width test** (`port_seq_unlocked` → 1), not
+a bad SR06 data value. Message `SR06 read 01 expected 00` means unl=1/want=0.
+SR06 data was almost certainly still `0x0F` (bits 3:0 echo after unlock to
+`4Fh`). Designed refuse: 0 data writes. Same as host test “latch unlocked at
+entry” and S6 “already unlocked → ENTRY”.
+
+Prior S6/S6b/S6c lives started from **locked** text (after wd90c24fb unload or
+prior wd24adv relock). S6d floppy never had that path — latch left unlocked.
+
+**Next (when Brandon watches; code change first on box):**
+1. Implement opt-in `fix_sr06=1`: if unlocked && SR06==0x0F → write 0x0F once,
+   verify locked; else refuse. Host test + rebuild + XMODEM.
+2. Text prove: `insmod /tmp/wd24adv.ko dryrun=0 live=1 trial=15 fix_sr06=1`
+3. Visual: `insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0 fix_sr06=1`
