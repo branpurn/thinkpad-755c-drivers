@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""QEMU system test of wd24adv S6 (s6=1: dual window, PR0B + PR1 b3 + PR31 b7).
+"""QEMU system test of wd24adv S6 (s6=1: dual window, PR0B + PR1 b3 + SR06 unlock + PR31 b7).
 
   * s6=1 (dry-run): runs on the 86Box-semantics model, /proc/wd24adv/s6 = OK,
     ZERO port accesses;
@@ -180,7 +180,8 @@ def main():
         pl, _ = g.run("cat /proc/wd24adv/s6")
         seqlog.append("# s6=1 dry-run (model)\n" + out + "\n" + pl)
         check("s6=1 dry-run: model result OK, every step listed", "result: OK" in pl and "P2 PR1 readback cd" in pl
-              and "P3 PR31 readback dd" in pl and "regions restored: 0 bytes differ" in pl)
+              and "P3 PR31 readback dd" in pl and "E2 PR31 (unlocked) 5d" in pl
+              and "write SR06 unlock = 4f -> 0" in pl and "write SR06 relock = 0f -> 0" in pl and "regions restored: 0 bytes differ" in pl)
         out, acc = step(g, "rmmod wd24adv; echo RC=$?")
         check("s6=1 dry-run: rmmod clean, zero accesses", "RC=0" in out and len(acc) == 0)
 
@@ -216,7 +217,9 @@ def main():
         check("fake s6=1: split + rw data verified, regions restored",
               "D1 split read: A0000 (Y+0000) 0 bad, A8000 (X+8000) 0 bad" in res and
               "D2 rw: read X+1000 0 bad; after write, read still X 0 bad" in res and
-              "regions restored: 0 bytes differ" in res and "P4 restore: PR31 5d PR1 c5" in res)
+              "regions restored: 0 bytes differ" in res and "P4 PR31 readback 5d" in res and
+              "V1 single: PR1 c5 Y+0000'=0 X+8000'=0 bad -> split yes" in res and
+              "SR06 readback 0f, index width: locked" in res)
         check("fake s6=1: ZERO port accesses", len(acc) == 0, f"{len(acc)}")
         out, acc = step(g, "rmmod wd24adv_qemufake; echo RC=$?")
         check("fake s6=1: rmmod clean, zero accesses", "RC=0" in out and len(acc) == 0)

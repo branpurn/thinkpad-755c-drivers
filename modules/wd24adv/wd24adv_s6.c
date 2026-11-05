@@ -65,15 +65,45 @@ static int wr(struct wd24s6 *s, enum wd24_rf rf, u8 idx, u8 v, const char *n)
 	return err;
 }
 
+/* SR06 lock step.  on: unlock to (BIOS & EFh) | 48h; off: relock to BIOS.
+ * Each write is read back by the guard layer (bits 3:0 + index width); the
+ * index width is read again here and logged.  Returns 0 if the lock is in
+ * the requested state. */
+static int lockstep(struct wd24s6 *s, bool on)
+{
+	const struct wd24s6_io *io = s->io;
+	u8 v = on ? WD24_PR20_UNLOCK(s->sr06) : s->sr06;
+	int err, lk;
+	u8 rb;
+
+	if (on)
+		io->lock(io->priv, true);
+	err = wr(s, WD24_SR, WD24_SR_PR20, v, on ? "SR06 unlock" : "SR06 relock");
+	rb = io->rd(io->priv, WD24_SR, WD24_SR_PR20);
+	lk = io->unlocked(io->priv);
+	if (!on)
+		io->lock(io->priv, false);
+	LOG(s, "  SR06 readback %02x, index width: %s\n", rb,
+	    lk > 0 ? "unlocked" : lk == 0 ? "locked" : "no answer");
+	if (on) {
+		s->rb_sr06_unl = rb;
+		s->lk_unl = lk;
+	} else {
+		s->rb_sr06_rel = rb;
+		s->lk_rel = lk;
+	}
+	if (err || (rb & 0x0f) != (v & 0x0f) || lk != (on ? 1 : 0))
+		return err ? err : -5;
+	return 0;
+}
+
 /* tags: Y0=1 Y1(B)=2 X8(X)=3 X1(A)=4 Y0'=5 X8'=6 C=7 */
 void wd24s6_run(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save)
 {
-	const void *p = io->priv;
-	bool saved = false, regs = false;
+	bool saved = false, pr1set = false, unl = false, pr31set = false;
 	u32 i;
 	int err = 0;
 
-	(void)p;
 	memset(s, 0, sizeof(*s));
 	s->io = io;
 	s->save = save;
@@ -83,26 +113,53 @@ void wd24s6_run(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save)
 	s->pr0a = io->rd(io->priv, WD24_GR, WD24_GR_PR0A);
 	s->pr0b = io->rd(io->priv, WD24_GR, WD24_GR_PR0B);
 	s->pr1 = io->rd(io->priv, WD24_GR, WD24_GR_PR1);
-	s->pr31 = io->rd(io->priv, WD24_SR, WD24_SR_PR31);
 	s->gr6 = io->rd(io->priv, WD24_GR, 0x06);
-	LOG(s, "E read-only: PR0A %02x PR0B %02x PR1 %02x PR31 %02x GR06 %02x\n",
-	    s->pr0a, s->pr0b, s->pr1, s->pr31, s->gr6);
+	s->sr06 = io->rd(io->priv, WD24_SR, WD24_SR_PR20);
+	s->lock0 = io->unlocked(io->priv);
+	s->pr31_locked = io->rd(io->priv, WD24_SR, WD24_SR_PR31);
+	LOG(s, "E read-only: PR0A %02x PR0B %02x PR1 %02x GR06 %02x SR06 %02x lock %s PR31(locked) %02x\n",
+	    s->pr0a, s->pr0b, s->pr1, s->gr6, s->sr06,
+	    s->lock0 > 0 ? "OPEN" : s->lock0 == 0 ? "locked" : "no answer", s->pr31_locked);
 	if (s->pr1 & WD24_PR1_PR0B)
 		s->why = "PR1 b3 already set";
 	else if ((s->pr1 & 0xc0) != 0xc0)
 		s->why = "PR1 b7:6 not 1 MiB";
-	else if (s->pr31 & WD24_PR31_RWSPLIT)
-		s->why = "PR31 b7 already set";
 	else if ((s->gr6 & 0x0c) != 0x04)
 		s->why = "GR06 map is not 64 KiB at A0000";
 	else if (s->pr0a != 0)
 		s->why = "PR0A not 0 after the mode set";
+	else if (s->lock0 != 0)
+		s->why = "SR06 lock not in the expected locked state";
 	if (s->why) {
 		s->res = WD24S6_ENTRY;
 		LOG(s, "entry check: %s: nothing written\n", s->why);
 		return;
 	}
 	io->open(io->priv, true);
+
+	/* E2: PR31 is readable only unlocked: unlock, read, relock.  The only
+	 * writes before the entry decision are this SR06 pair. */
+	LOG(s, "E2 PR31 entry read (SR06 unlock/relock only)\n");
+	err = lockstep(s, true);
+	if (!err)
+		s->pr31 = io->rd(io->priv, WD24_SR, WD24_SR_PR31);
+	if (lockstep(s, false)) {
+		s->res = WD24S6_RESTORE;
+		s->why = "SR06 did not relock";
+		goto out;
+	}
+	if (err) {
+		s->res = WD24S6_REG;
+		s->why = "SR06 unlock did not read back";
+		goto out;
+	}
+	LOG(s, "E2 PR31 (unlocked) %02x\n", s->pr31);
+	if (s->pr31 != 0x5d) {
+		s->res = WD24S6_ENTRY;
+		s->why = "PR31 not 5d";
+		LOG(s, "entry check: %s: only the SR06 unlock/relock pair written\n", s->why);
+		goto out;
+	}
 
 	/* save the regions (single window: PR0A only, proven) */
 	for (i = 0; i < WD24S6_NREG && !err; i++) {
@@ -141,7 +198,7 @@ void wd24s6_run(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save)
 	LOG(s, "P1 PR0B readback %02x\n", s->rb_pr0b);
 
 	/* P2: PR1 b3 -> split */
-	regs = true;
+	pr1set = true;
 	if ((err = wr(s, WD24_GR, WD24_GR_PR1, s->pr1 | WD24_PR1_PR0B, "PR1")))
 		goto reg;
 	s->rb_pr1_on = io->rd(io->priv, WD24_GR, WD24_GR_PR1);
@@ -153,8 +210,31 @@ void wd24s6_run(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save)
 	put_pat(s, 0x8000, 6);
 	LOG(s, "D1 split read: A0000 (Y+0000) %u bad, A8000 (X+8000) %u bad; wrote Y+0000', X+8000'\n",
 	    s->d_lo, s->d_hi);
+	/* PR1 back, then V1: D1 writes checked through the single window */
+	err = wr(s, WD24_GR, WD24_GR_PR1, s->pr1, "PR1");
+	s->rb_pr1_off = io->rd(io->priv, WD24_GR, WD24_GR_PR1);
+	if (err || s->rb_pr1_off != s->pr1) {
+		s->res = WD24S6_RESTORE;
+		s->why = "PR1 did not restore";
+		goto restore;
+	}
+	pr1set = false;
+	if ((err = wr(s, WD24_GR, WD24_GR_PR0A, WD24S6_Y, "PR0A")))
+		goto reg;
+	s->v_lo = cmp_pat(s, 0x0000, 5);
+	if ((err = wr(s, WD24_GR, WD24_GR_PR0A, WD24S6_X, "PR0A")))
+		goto reg;
+	s->v_hi = cmp_pat(s, 0x8000, 6);
+	s->split_ok = !s->d_lo && !s->d_hi && !s->v_lo && !s->v_hi &&
+		      s->rb_pr1_on == (s->pr1 | WD24_PR1_PR0B);
+	LOG(s, "V1 single: PR1 %02x Y+0000'=%u X+8000'=%u bad -> split %s\n",
+	    s->rb_pr1_off, s->v_lo, s->v_hi, s->split_ok ? "yes" : "no");
 
-	/* P3: PR31 b7 -> read PR0A, write PR0B */
+	/* U + P3: unlock, PR31 b7 -> read PR0A (X), write PR0B (Y) */
+	unl = true;
+	if ((err = lockstep(s, true)))
+		goto reg;
+	pr31set = true;
 	if ((err = wr(s, WD24_SR, WD24_SR_PR31, s->pr31 | WD24_PR31_RWSPLIT, "PR31")))
 		goto reg;
 	s->rb_pr31_on = io->rd(io->priv, WD24_SR, WD24_SR_PR31);
@@ -171,32 +251,40 @@ void wd24s6_run(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save)
 	    s->d_rd, s->d_wr_noecho);
 
 restore:
-	/* P4: registers back (each read back by the guard layer) */
-	if (regs) {
+	/* P4 + L: PR31 back (while unlocked), relock, PR1 back; each read back */
+	if (pr31set) {
 		err = wr(s, WD24_SR, WD24_SR_PR31, s->pr31, "PR31");
 		s->rb_pr31_off = io->rd(io->priv, WD24_SR, WD24_SR_PR31);
-		err |= wr(s, WD24_GR, WD24_GR_PR1, s->pr1, "PR1");
-		s->rb_pr1_off = io->rd(io->priv, WD24_GR, WD24_GR_PR1);
-		LOG(s, "P4 restore: PR31 %02x PR1 %02x\n", s->rb_pr31_off, s->rb_pr1_off);
-		if (err || s->rb_pr31_off != s->pr31 || s->rb_pr1_off != s->pr1) {
+		LOG(s, "P4 PR31 readback %02x\n", s->rb_pr31_off);
+		if (err || s->rb_pr31_off != s->pr31) {
 			s->res = WD24S6_RESTORE;
-			s->why = "PR31/PR1 did not restore";
-			goto out;	/* single window not trustworthy: text restore */
+			s->why = "PR31 did not restore";
 		}
 	}
-	/* V: verify in single window */
-	if (regs && s->res == WD24S6_NOTRUN) {
+	if (unl && lockstep(s, false)) {
+		s->res = WD24S6_RESTORE;
+		s->why = "SR06 did not relock";
+	}
+	if (pr1set) {
+		err = wr(s, WD24_GR, WD24_GR_PR1, s->pr1, "PR1");
+		s->rb_pr1_off = io->rd(io->priv, WD24_GR, WD24_GR_PR1);
+		LOG(s, "PR1 restore readback %02x\n", s->rb_pr1_off);
+		if (err || s->rb_pr1_off != s->pr1) {
+			s->res = WD24S6_RESTORE;
+			s->why = "PR1 did not restore";
+		}
+	}
+	if (s->res == WD24S6_RESTORE)
+		goto out;	/* single window not trustworthy: text restore */
+	/* V2: D2 checked in single window */
+	if (pr31set && s->res == WD24S6_NOTRUN) {
 		wr(s, WD24_GR, WD24_GR_PR0A, WD24S6_Y, "PR0A");
-		s->v_lo = cmp_pat(s, 0x0000, 5);
 		s->v_wr = cmp_pat(s, 0x1000, 7);
 		s->v_copy = cmp_pat(s, 0x2000, 4);
 		wr(s, WD24_GR, WD24_GR_PR0A, WD24S6_X, "PR0A");
-		s->v_hi = cmp_pat(s, 0x8000, 6);
 		s->v_x = cmp_pat(s, 0x1000, 4);
-		LOG(s, "V single: Y+0000'=%u Y+1000(C)=%u Y+2000(copy)=%u X+8000'=%u X+1000 kept=%u bad\n",
-		    s->v_lo, s->v_wr, s->v_copy, s->v_hi, s->v_x);
-		s->split_ok = !s->d_lo && !s->d_hi && !s->v_lo && !s->v_hi &&
-			      s->rb_pr1_on == (s->pr1 | WD24_PR1_PR0B);
+		LOG(s, "V2 single: Y+1000(C)=%u Y+2000(copy)=%u X+1000 kept=%u bad\n",
+		    s->v_wr, s->v_copy, s->v_x);
 		s->rw_ok = !s->d_rd && !s->d_wr_noecho && !s->v_wr && !s->v_copy &&
 			   !s->v_x && s->rb_pr31_on == (s->pr31 | WD24_PR31_RWSPLIT);
 		s->res = s->split_ok && s->rw_ok ? WD24S6_OK : s->split_ok ? WD24S6_SPLIT_ONLY :
@@ -237,6 +325,15 @@ reg:
 }
 
 /* ---- model ------------------------------------------------------------ */
+/* lock: DS 14.1 pattern x1x01xxx (fault lock_exact48: 86Box, exactly 48h).
+ * Locked: SR07+ read 00h (755C live) or FFh (locked_ff, 86Box), writes
+ * ignored.  SR06 reads back bits 3:0 only (DS table 6-8 / live 4F -> 0F). */
+static bool m_unl(const struct wd24s6_model *m)
+{
+	u8 v = m->sr[0x06];
+
+	return m->lock_exact48 ? v == 0x48 : (v & 0x58) == 0x48;
+}
 
 static u32 m_addr(struct wd24s6_model *m, u32 off, bool write)
 {
@@ -257,7 +354,16 @@ static u8 m_rd(void *priv, enum wd24_rf rf, u8 idx)
 
 	if (rf == WD24_GR)
 		return idx < 16 ? m->gr[idx] : 0xff;
+	if (idx == 0x06)
+		return m->sr[6] & 0x0f;
+	if (idx > 7 && !m_unl(m))
+		return m->locked_ff ? 0xff : 0x00;
 	return idx < 0x20 ? m->sr[idx] : 0xff;
+}
+
+static int m_unlocked(void *priv)
+{
+	return m_unl(priv) ? 1 : 0;
 }
 
 static int m_wr(void *priv, enum wd24_rf rf, u8 idx, u8 v)
@@ -265,10 +371,14 @@ static int m_wr(void *priv, enum wd24_rf rf, u8 idx, u8 v)
 	struct wd24s6_model *m = priv;
 
 	m->nreg++;
-	/* the guard rule, restated: b3 / b7 only while open */
+	/* the guard rules, restated: b3 only while open; b7 and the SR06
+	 * unlock value only while open and inside the lock step */
 	if (rf == WD24_GR && idx == 0x0b && (v & 0x08) && !m->open)
 		return -1;
-	if (rf == WD24_SR && idx == 0x11 && (v & 0x80) && !m->open)
+	if (rf == WD24_SR && idx == 0x11 && (v & 0x80) && !(m->open && m->lock_open))
+		return -1;
+	if (rf == WD24_SR && idx == 0x06 && v != 0x0f &&
+	    !(m->open && m->lock_open && v == 0x4f))
 		return -1;
 	if (m->refuse && rf == WD24_GR && idx == 0x0b && (v & 0x08))
 		return -1;
@@ -279,9 +389,17 @@ static int m_wr(void *priv, enum wd24_rf rf, u8 idx, u8 v)
 		return (m_rd(priv, rf, idx) ^ v) & (idx == 0x09 || idx == 0x0a ? 0x7f : 0xff) ?
 			-5 : 0;	/* readback, as wd24_write */
 	}
+	if (rf == WD24_SR && idx == 0x06) {
+		if (!m->lock_ignore && !(m->relock_stuck && v == 0x0f))
+			m->sr[6] = v;
+		/* wd24_verify: bits 3:0 echo + width == (v & 58h) == 48h */
+		return ((m->sr[6] ^ v) & 0x0f) ||
+		       m_unl(m) != ((v & 0x58) == 0x48) ? -5 : 0;
+	}
 	if (rf == WD24_SR && idx < 0x20) {
-		m->sr[idx] = v;
-		return 0;
+		if (idx <= 7 || m_unl(m))
+			m->sr[idx] = v;
+		return m_rd(priv, rf, idx) != v ? -5 : 0;
 	}
 	return -1;
 }
@@ -309,7 +427,13 @@ static void m_open(void *priv, bool on)
 	((struct wd24s6_model *)priv)->open = on;
 }
 
-const struct wd24s6_io wd24s6_model_io = { m_rd, m_wr, m_mr, m_mw, m_open, NULL };
+static void m_lock(void *priv, bool on)
+{
+	((struct wd24s6_model *)priv)->lock_open = on;
+}
+
+const struct wd24s6_io wd24s6_model_io = { m_rd, m_wr, m_mr, m_mw, m_open, m_lock,
+					   m_unlocked, NULL };
 
 void wd24s6_model_init(struct wd24s6_model *m, u8 *vram1m)
 {
@@ -319,8 +443,10 @@ void wd24s6_model_init(struct wd24s6_model *m, u8 *vram1m)
 	m->vram = vram1m;
 	for (i = 0; i < 0x100000; i++)
 		vram1m[i] = (u8)(i * 13 + (i >> 12));
-	/* the 640x480-8 trial state: PR1 C5h (POST trace), PR31 5Dh, GR06 05h */
+	/* the 640x480-8 trial state: PR1 C5h (POST trace), PR31 5Dh, GR06 05h,
+	 * SR06 0Fh = BIOS value, locked (trial mode ends "SR06 = saved") */
 	m->gr[0x06] = 0x05;
 	m->gr[0x0b] = 0xc5;
-	m->sr[0x11] = 0x5d;	/* live: SR11=5D */
+	m->sr[0x06] = 0x0f;
+	m->sr[0x11] = 0x5d;	/* live: SR11=5D (read unlocked, wd24probe3) */
 }

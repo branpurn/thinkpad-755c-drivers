@@ -75,6 +75,8 @@ enum wd24_rf {
 #define WD24_SR_PR30A	0x10
 #define WD24_SR_PR31	0x11
 #define WD24_PR31_RWSPLIT	0x80	/* DS PR31 b7: PR0A read / PR0B write (S6 only) */
+/* DS 14.1: PR20 = x1x01xxx unlocks SR07+; the S6 unlock value */
+#define WD24_PR20_UNLOCK(bios)	((u8)(((bios) & 0xef) | 0x48))
 #define WD24_PR1_PR0B	0x08	/* DS 13.2 b3: enable PR0B, window split (S6 only) */
 #define WD24_SR_PR32	0x12
 #define WD24_SR_PR57	0x19	/* b2: panel power (never written) */
@@ -211,6 +213,8 @@ struct wd24_ctx {
 	bool pr1b_open;		/* inside the CR34 read idiom */
 	u8 pr1b_lock;		/* CR34 value read at the start of the idiom */
 	bool dual_open;		/* S6 only: PR1 b3 / PR31 b7 may be set */
+	bool s6_active;		/* S6 program running: SR06 narrowed (below) */
+	bool s6_lock_open;	/* S6 lock step: SR06 = (BIOS & EFh) | 48h allowed */
 	bool pr72_open;		/* SR35 = 50h written, not yet restored */
 	u8 reg[WD24_NRF][WD24_NIDX];	/* model: last known value */
 	u64 known[WD24_NRF];		/* bit i: reg[rf][i] is known */

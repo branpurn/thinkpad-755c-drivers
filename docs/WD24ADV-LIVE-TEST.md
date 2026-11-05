@@ -566,6 +566,72 @@ Design doc section 7, stage S6 (the RAM-shadow S6 is parked). One load:
 PROVEN 640x480-8 trial mode set, under hw_lock + console_lock, the program in
 `wd24adv_s6.c` runs once:
 
+### S6 v2 (prepared 2026-11-04, after the run above; NOT run)
+
+The lock: PR31 = SR11 is a Paradise extended register. Data book 14.1: PR20
+(SR06) must be x1x01xxx to read/write SR07+; locked, the 3C4 index is 3 bits
+wide (unlocked 6); table 6-8: bits 7:4 RO, 3:0 RW. 86Box vid_paradise.c: SR
+index > 7 only when SR06 == 48h exactly, else reads FFh and writes are
+ignored. The trial mode ends with SR06 = BIOS value 0Fh (locked), so the v1
+P3 write of DDh was ignored and read back 00h. wd24probe3 proved live that
+SR06 = 4Fh ((0Fh & EFh) | 48h) unlocks (SR11 read 5Dh, index width 6 bits),
+that SR06 reads back 0Fh (bits 3:0 only) and that writing 0Fh relocks.
+
+| step | what | writes |
+|---|---|---|
+| E | read PR0A PR0B PR1 GR06 SR06, index width, PR31 (locked read, logged); need PR1 b3=0, b7:6=11, GR06 b3:2=01, PR0A=0, width = locked; else ENTRY (nothing written) | none |
+| E2 | SR06 = 4Fh (read back 0Fh + width unlocked), read PR31, SR06 = 0Fh (read back + width locked). PR31 must be 5Dh else ENTRY (only this pair written); relock fail -> RESTORE FAIL | SR06 x2 |
+| save | 7 x 4 KiB off screen via PR0A (proven) | PR0A |
+| prefill | 4 patterns, single window, read back (else MEM) | PR0A |
+| P1 | PR0B = 70h, read back | PR0B |
+| P2 | PR1 = C5h -> CDh, read back | PR1 b3 |
+| D1 | A0000 reads Y+0, A8000 reads X+8000; new patterns written through both halves | memory |
+| P2' + V1 | PR1 back to C5h (read back), then single window: Y+0' and X+8000' verified BEFORE any PR31 write | PR1, PR0A |
+| U | SR06 = 4Fh, read back (0Fh + width unlocked) | SR06 |
+| P3 | PR31 = 5Dh -> DDh, read back | PR31 b7 |
+| D2 | read X+1000; write Y+1000, re-read (still X); copy X+1000 -> Y+2000 | memory |
+| P4 | PR31 = 5Dh, read back (still unlocked) | PR31 |
+| L | SR06 = 0Fh, read back (0Fh + width locked); fail -> RESTORE FAIL | SR06 |
+| V2 | single window: Y+1000 C, Y+2000 copy, X+1000 kept | PR0A |
+| restore | 7 regions back and compared, PR0B and PR0A back | PR0A PR0B |
+
+Every error after an unlock goes through P4 (if PR31 was touched) and L.
+Guard while S6 runs (`s6_active`): SR06 only the saved BIOS value, or exactly
+(BIOS & EFh) | 48h while the program's lock step is open (`s6_lock_open`);
+PR31 b7 only with `dual_open` and `s6_lock_open`. Outside S6 the proven SR06
+and PR31 rules are unchanged. Flags cleared after the run. 31 register writes
+when OK.
+
+Build: tc755x tree (kobj-vm86), vermagic `6.18.57-tc755x mod_unload 486`, sha256
+`08c12db4b650c06aa81bb0d290f289819b9d7e356bc7cb6ba24a8f880c0e7118`.
+Tests: host test_s6 88/0: v1 cases plus lock variants: locked SR07+ read FFh
+(86Box) -> OK; unlock only on exactly 48h (86Box) -> REGISTER READBACK after
+the E2 pair; SR06 writes ignored -> REGISTER READBACK; PR31 5Ch -> ENTRY with
+2 writes; relock ignored -> RESTORE FAIL; SR06 already unlocked -> ENTRY, zero
+writes; guard: 4F refused in S6 outside the lock step, 48/5F refused in it,
+PR31 b7 needs both flags. In every non-relock-fault case all registers (SR06
+= 0Fh) and all 1 MiB restored. Host suites unchanged; QEMU
+qemu-wd24adv-s6.py 19/19.
+
+Lines (only after a separate approval of a new live run, and after the new
+.ko is copied to /tmp/wd24adv.ko on the 755C by the usual send1.sh route):
+the v1 list below, with the G line expecting `08c12db4001`:
+
+```
+S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 08c12db4001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s6=1; echo RC=$?; }
+```
+
+Expected v2: E line `SR06 0f lock locked PR31(locked) 00`, `E2 PR31
+(unlocked) 5d`, every `SR06 readback 0f`, width unlocked after U / locked
+after L, P2 cd, `V1 single: PR1 c5 Y+0000'=0 X+8000'=0 bad -> split yes`,
+P3 dd, P4 5d, V2 all 0, `regions restored: 0 bytes differ`, `result: OK`.
+Extra v2 stop rules: `SR06 did not relock`, any SR06 readback other than 0f,
+or width `unlocked`/`no answer` after L: RESTORE FAIL rule (no rmmod, power
+off). ENTRY `PR31 not 5d` or REGISTER READBACK at E2/U: restored by design,
+carry on with the text/X lines, report.
+
+### S6 v1 (run 2026-11-04)
+
 | step | what | writes |
 |---|---|---|
 | E | read PR0A PR0B PR1 PR31 GR06; need PR1 b3=0, PR1 b7:6=11, PR31 b7=0, GR06 b3:2=01, PR0A=0, else ENTRY (nothing written) | none |

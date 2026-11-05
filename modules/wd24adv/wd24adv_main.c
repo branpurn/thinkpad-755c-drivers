@@ -1254,10 +1254,24 @@ static void s6_mw(void *priv, u32 off, const u8 *buf, u32 n)
 
 static void s6_open(void *priv, bool on)
 {
+	hw->s6_active = on;
 	hw->dual_open = on;
+	if (!on)
+		hw->s6_lock_open = false;
 }
 
-static const struct wd24s6_io s6_live_io = { s6_rd, s6_wr, s6_mr, s6_mw, s6_open, NULL };
+static void s6_lock(void *priv, bool on)
+{
+	hw->s6_lock_open = on;
+}
+
+static int s6_unlocked(void *priv)
+{
+	return hw->be->seq_unlocked ? hw->be->seq_unlocked(hw) : -1;
+}
+
+static const struct wd24s6_io s6_live_io = { s6_rd, s6_wr, s6_mr, s6_mw, s6_open, s6_lock,
+					     s6_unlocked, NULL };
 
 /* caller holds hw_lock; the trial mode is set and its timer queued */
 static void s6_live(const struct wd24_mode *m)
@@ -1269,14 +1283,17 @@ static void s6_live(const struct wd24_mode *m)
 	}
 	console_lock();
 	hw->be->begin(hw);
-	hw->tag = "S6: dual window (PR0B, PR1 b3, PR31 b7)";
+	hw->tag = "S6: dual window (PR0B, PR1 b3, SR06 unlock, PR31 b7)";
 	wd24s6_run(s6st, &s6_live_io, s6_save);
 	hw->dual_open = false;
+	hw->s6_lock_open = false;
+	hw->s6_active = false;
 	hw->be->end(hw);
 	console_unlock();
-	pr_info("S6: %s%s%s; PR0B rb %02x, PR1 on %02x off %02x, PR31 on %02x off %02x; register writes %u; details: /proc/wd24adv/s6\n",
+	pr_info("S6: %s%s%s; SR06 %02x unl %02x/%d rel %02x/%d, PR31 %02x; PR0B rb %02x, PR1 on %02x off %02x, PR31 on %02x off %02x; writes %u; /proc/wd24adv/s6\n",
 		wd24s6_res_name(s6st->res), s6st->why ? ": " : "", s6st->why ? s6st->why : "",
-		s6st->rb_pr0b, s6st->rb_pr1_on, s6st->rb_pr1_off, s6st->rb_pr31_on,
+		s6st->sr06, s6st->rb_sr06_unl, s6st->lk_unl, s6st->rb_sr06_rel, s6st->lk_rel,
+		s6st->pr31, s6st->rb_pr0b, s6st->rb_pr1_on, s6st->rb_pr1_off, s6st->rb_pr31_on,
 		s6st->rb_pr31_off, s6st->nwr);
 }
 

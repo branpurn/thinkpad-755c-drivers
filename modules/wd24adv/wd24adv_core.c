@@ -97,6 +97,14 @@ int wd24_guard(const struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 old, u8 val
 			return 0;
 		switch (idx) {
 		case WD24_SR_PR20:	/* hw.c 72 unlock, 287/622/640 restore */
+			if (c->s6_active) {
+				/* S6: relock to the BIOS value at any time; the
+				 * unlock value only inside the S6 lock step */
+				if (c->saved && val == c->bios.pr20)
+					return 0;
+				return (c->saved && c->s6_lock_open &&
+					val == WD24_PR20_UNLOCK(c->bios.pr20)) ? 0 : -EPERM;
+			}
 			if (val == ((old & 0xef) | 0x48))
 				return 0;
 			return (c->saved && val == c->bios.pr20) ? 0 : -EPERM;
@@ -104,7 +112,8 @@ int wd24_guard(const struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 old, u8 val
 			return 0;
 		case WD24_SR_PR31:	/* hw.c 271; b7 (R/W bank split) S6 only */
 			/* value-only rule: no extra read on the proven paths */
-			if ((val & WD24_PR31_RWSPLIT) && !c->dual_open && !(c->saved && val == c->bios.pr31))
+			if ((val & WD24_PR31_RWSPLIT) && !(c->dual_open && c->s6_lock_open) &&
+			    !(c->saved && val == c->bios.pr31))
 				return -EPERM;
 			return 0;
 		case WD24_SR_PR72:	/* hw.c 222/225, 256/260: 50h then P */

@@ -9,6 +9,13 @@
  * touched: 7 x 4 KiB in OFF-SCREEN banks X = 50000h and Y = 70000h, saved
  * first and written back at the end.
  *
+ * PR31 (SR11) is a Paradise extended register: DS 14.1 PR20 (SR06) must be
+ * x1x01xxx to read or write SR07+ (86Box: exactly 48h).  The trial mode ends
+ * with SR06 at the BIOS value 0Fh (locked; live S6 run 2026-11-04: PR31
+ * read 00, write ignored), so P3/P4 run inside a guarded SR06 unlock
+ * ((BIOS & EFh) | 48h = 4Fh, the value wd24probe3 used live) and relock,
+ * each verified by SR06 bits 3:0 and the 3C4 index width test.
+ *
  * Semantics under test (data sheet PR1 13.2 / PR31; same as 86Box
  * vid_paradise.c paradise_remap() for a 64 KiB A0000 map, GR6 b3:2 = 01):
  *   PR1 b3 = 1, PR31 b7 = 0: A0000-A7FFF -> PR0B, A8000-AFFFF -> PR0A + 8000h
@@ -38,7 +45,9 @@ struct wd24s6_io {
 	int (*wr)(void *priv, enum wd24_rf rf, u8 idx, u8 val);	/* guarded */
 	void (*mr)(void *priv, u32 off, u8 *buf, u32 n);	/* window */
 	void (*mw)(void *priv, u32 off, const u8 *buf, u32 n);
-	void (*open)(void *priv, bool on);	/* guard: c->dual_open */
+	void (*open)(void *priv, bool on);	/* guard: c->s6_active, c->dual_open */
+	void (*lock)(void *priv, bool on);	/* guard: c->s6_lock_open (SR06 unlock) */
+	int (*unlocked)(void *priv);	/* 3C4 index width: 1 unlocked, 0 locked, <0 ? */
 	void *priv;
 };
 
@@ -47,9 +56,12 @@ struct wd24s6 {
 	u8 *save;		/* WD24S6_NREG * WD24S6_N */
 	u8 a[WD24S6_N], b[WD24S6_N];
 	/* snapshot */
-	u8 pr0a, pr0b, pr1, pr31, gr6;
+	u8 pr0a, pr0b, pr1, pr31, gr6, sr06, pr31_locked;
+	int lock0;		/* lock state at entry (must be 0 = locked) */
 	/* readbacks */
 	u8 rb_pr0b, rb_pr1_on, rb_pr31_on, rb_pr1_off, rb_pr31_off;
+	u8 rb_sr06_unl, rb_sr06_rel;	/* SR06 low nibble after unlock / relock */
+	int lk_unl, lk_rel;		/* index width after unlock / relock */
 	/* data results: mismatching bytes per check (0 = verified) */
 	u32 d_lo, d_hi, d_rd, d_wr_noecho, v_lo, v_hi, v_wr, v_copy, v_x;
 	u32 rest_bad;
@@ -69,6 +81,11 @@ struct wd24s6_model {
 	u8 *vram;		/* 1 MiB */
 	u8 gr[16], sr[0x20];
 	int ignore_pr1b3, ignore_pr31b7, pr1_stuck, refuse;	/* fault injection */
+	/* lock faults: unlock only on exactly 48h (86Box), SR06 writes
+	 * ignored, relock ignored (stays unlocked), locked SR07+ reads FFh
+	 * (86Box) instead of 00h (755C live) */
+	int lock_exact48, lock_ignore, relock_stuck, locked_ff;
+	bool lock_open;
 	u32 nreg;
 	bool open;
 };
