@@ -39,21 +39,21 @@ wd90c24fb 28672 2 - Live 0xc2d9a000 (O)
 sha256sum: can't open '/tmp/wd24probe3.ko': No such file or directory
 sha256sum: can't open '/tmp/wd24adv.ko': No such file or directory
 Q2
-root@box:~# pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
+user@host:~# pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
 449
    98 root       580 S    {startx} /bin/sh /usr/local/bin/startx
   449 root      1664 S    Xfbdev :0 -mouse /dev/input/mice -2button
   454 root      2128 S    jwm
   455 root      1924 S    rxvt -fn fixed -geometry 80x24+8+8
   501 root       576 R    grep -E startx|Xfbdev|jwm|rxvt
-root@box:~# kill 449
-root@box:~# apm: set display: Unrecognized device ID
+user@host:~# kill 449
+user@host:~# apm: set display: Unrecognized device ID
 echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c
 24fb; echo RMW=$?
 wd90c24fb: text=1: back to text mode (now rmmod wd90c24fb can unload)
 Console: switching to colour VGA+ 80x25
 RMW=0
-root@box:~# S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|
+user@host:~# S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|
 vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null
 ; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = ba71dcc7001 ] && { dmesg -c >/dev/null; in
 smod /tmp/wd24adv.ko dryrun=0 s2=1; echo RC=$?; }
@@ -62,7 +62,7 @@ wd24adv: S2: NOT REFERENCE (selects only, no 23C2h write): pre-pass: a register 
 wd24adv: S2: 23C0h restore read back 1002; details: /proc/wd24adv/s2
 wd24adv: loaded, S2 done, all restored inside insmod (no port region held); see /proc/wd24adv/s2
 RC=0
-root@box:~# cat /proc/wd24adv/s2 > /tmp/s2run1.txt; wc -l /tmp/s2run1.txt; sed -
+user@host:~# cat /proc/wd24adv/s2 > /tmp/s2run1.txt; wc -l /tmp/s2run1.txt; sed -
 n 1,30p /tmp/s2run1.txt
 23 /tmp/s2run1.txt
 wd24adv S2 result: NOT REFERENCE (selects only, no 23C2h write): pre-pass: a register differs from the S1 reference
@@ -88,10 +88,10 @@ access log (in order):
   R16 23c2 2800
   W16 23c0 1002
   R16 23c0 1002
-root@box:~# dmesg | grep -c wd24adv; rmmod wd24adv; echo RM=$?
+user@host:~# dmesg | grep -c wd24adv; rmmod wd24adv; echo RM=$?
 3
 RM=0
-root@box:~# insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; ech
+user@host:~# insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; ech
 o RC=$?
 wd90c24fb: found WD90C24 (CR36/37 "24"), 1024 KiB video memory
 wd90c24fb: panel: PR18=0xc7 PR19=0x54: LCD on, CRT off
@@ -101,10 +101,10 @@ wd90c24fb: BITBLT self-test passed: acceleration on
 wd90c24fb: colour expansion: var 0 works but is not faster (1.0x), off
 wd90c24fb: fb0: WD90C24, 640x480x8 via PR0(A) banking, 300 KiB shadow, BITBLT
 RC=0
-root@box:~# ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;
+user@host:~# ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;
  HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautost
 art.log 2>&1 & )
-root@box:~# pidof Xfbdev; dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo R
+user@host:~# pidof Xfbdev; dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo R
 C=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u
 530
 wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
@@ -289,4 +289,4 @@ RC=19
 <6>wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
 <6>wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
 <6>wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
-root@box:~# 
+user@host:~# 

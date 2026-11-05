@@ -1,4 +1,4 @@
-root@box:~# uname -r; cat /proc/modules | cut -d" " -f1 | tr "\n" " "; echo; wc 
+user@host:~# uname -r; cat /proc/modules | cut -d" " -f1 | tr "\n" " "; echo; wc 
 -l </proc/fb; pidof Xfbdev; ls -la /tmp/*.ko; sha256sum /tmp/wd24probe3.ko
 6.18.57-tc755x
 wd90c24fb evdev mousedev psmouse syscopyarea sysfillrect vgastate sysimgblt fb_sys_fops fb font serial_cs pata_pcmcia pcmcia firmware_class i82365 pcmcia_rsrc pcmcia_core 
@@ -7,7 +7,7 @@ wd90c24fb evdev mousedev psmouse syscopyarea sysfillrect vgastate sysimgblt fb_s
 -rw-r--r--    1 root     root         65804 Nov  4 16:39 /tmp/wd24adv.ko
 -rw-r--r--    1 root     root          8188 Nov  4 16:39 /tmp/wd24probe3.ko
 eb0a36e23f7b0a512ba8c154530f8223d7dbe4840eb693b03e8d0222861f304d  /tmp/wd24probe3.ko
-root@box:~# sha256sum /tmp/wd24adv.ko /tmp/wd24probe3.ko; pidof Xfbdev; ps | gre
+user@host:~# sha256sum /tmp/wd24adv.ko /tmp/wd24probe3.ko; pidof Xfbdev; ps | gre
 p -E "startx|Xfbdev|jwm|rxvt"
 f55ee02fbcd3d513006ee92b1996d13e07c507567678d201d87a98d36c6fa89c  /tmp/wd24adv.ko
 eb0a36e23f7b0a512ba8c154530f8223d7dbe4840eb693b03e8d0222861f304d  /tmp/wd24probe3.ko
@@ -17,13 +17,13 @@ eb0a36e23f7b0a512ba8c154530f8223d7dbe4840eb693b03e8d0222861f304d  /tmp/wd24probe
   532 root      2128 S    jwm
   533 root      1924 S    rxvt -fn fixed -geometry 80x24+8+8
   567 root       580 R    grep -E startx|Xfbdev|jwm|rxvt
-root@box:~# kill 530
-root@box:~# apm: set display: Unrecognized device ID
+user@host:~# kill 530
+user@host:~# apm: set display: Unrecognized device ID
 echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c
 24fb
 wd90c24fb: text=1: back to text mode (now rmmod wd90c24fb can unload)
 Console: switching to colour VGA+ 80x25
-root@box:~# S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|
+user@host:~# S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|
 vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null
 ; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = f55ee02f001 ] && { dmesg -c >/dev/null; in
 smod /tmp/wd24adv.ko dryrun=0 s2=1; echo RC=$?; }
@@ -32,7 +32,7 @@ wd24adv: S2: OK; entry check 0 (index writes 14, data 0); 23C0h writes 110, 23C2
 wd24adv: S2: 23C0h restore read back 1002; details: /proc/wd24adv/s2
 wd24adv: loaded, S2 done, all restored inside insmod (no port region held); see /proc/wd24adv/s2
 RC=0
-root@box:~# cat /proc/wd24adv/s2 > /tmp/s2run1.txt; grep -E "S2 result|snapshot|
+user@host:~# cat /proc/wd24adv/s2 > /tmp/s2run1.txt; grep -E "S2 result|snapshot|
 restore:|writes|stopped" /tmp/s2run1.txt; dmesg | grep wd24adv
 wd24adv S2 result: OK
 entry check: passed (0); VGA index writes 14, data writes 0
@@ -43,7 +43,7 @@ restore: wrote 1002, read 1002 (equal)
 <6>wd24adv: S2: OK; entry check 0 (index writes 14, data 0); 23C0h writes 110, 23C2h writes 34, reads 257
 <6>wd24adv: S2: 23C0h restore read back 1002; details: /proc/wd24adv/s2
 <6>wd24adv: loaded, S2 done, all restored inside insmod (no port region held); see /proc/wd24adv/s2
-root@box:~# grep -vE "^ +[WR]16 " /tmp/s2run1.txt
+user@host:~# grep -vE "^ +[WR]16 " /tmp/s2run1.txt
 wd24adv S2 result: OK
 entry check: passed (0); VGA index writes 14, data writes 0
   # entry check passed (reads only)
@@ -72,9 +72,9 @@ restore: wrote 1002, read 1002 (equal)
 access log (in order):
   R8 03c0 0020
   R8 03c1 003f
-root@box:~# rmmod wd24adv; echo RM=$?
+user@host:~# rmmod wd24adv; echo RM=$?
 RM=0
-root@box:~# insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; ech
+user@host:~# insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; ech
 o RC=$?
 wd90c24fb: found WD90C24 (CR36/37 "24"), 1024 KiB video memory
 wd90c24fb: panel: PR18=0xc7 PR19=0x54: LCD on, CRT off
@@ -84,13 +84,13 @@ wd90c24fb: BITBLT self-test passed: acceleration on
 wd90c24fb: colour expansion: var 0 works but is not faster (1.0x), off
 wd90c24fb: fb0: WD90C24, 640x480x8 via PR0(A) banking, 300 KiB shadow, BITBLT
 RC=0
-root@box:~# ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;
+user@host:~# ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;
  HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautost
 art.log 2>&1 & )
-root@box:~# pidof Xfbdev; wc -l </proc/fb
+user@host:~# pidof Xfbdev; wc -l </proc/fb
 597
 1
-root@box:~# dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | 
+user@host:~# dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | 
 grep wd24probe3 | grep -v " tr " | sort -u
 wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
 wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
@@ -274,7 +274,7 @@ RC=19
 <6>wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
 <6>wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
 <6>wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
-root@box:~# cat /tmp/s2run1.txt; wc -l /tmp/s2run1.txt
+user@host:~# cat /tmp/s2run1.txt; wc -l /tmp/s2run1.txt
 wd24adv S2 result: OK
 entry check: passed (0); VGA index writes 14, data writes 0
   # entry check passed (reads only)
@@ -703,4 +703,4 @@ access log (in order):
   W16 23c0 1002
   R16 23c0 1002
 427 /tmp/s2run1.txt
-root@box:~# 
+user@host:~# 

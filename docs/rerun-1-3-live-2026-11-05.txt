@@ -1,4 +1,4 @@
-# commands.log (Pop, EST)
+# commands.log (serial host, EST)
 2026-11-04 19:54:05 EST  RR prep: read-only state check
 2026-11-04 19:54:05 EST  slow: uptime; sha256sum /tmp/wd24adv.ko /tmp/wd24probe3.ko | cut -c1-8; cut -d" " -f1,3 /proc/modules | tr "\n" " "; echo; cat /proc/fb; pidof Xfbdev; ls /tmp/ru.stop CR
 2026-11-04 20:01:43 EST  RR step0 read-only check 01:01:43 UTC
@@ -37,51 +37,51 @@ wd90c24fb 2 evdev 0 mousedev 1 psmouse 0 syscopyarea 1 sysfillrect 1 vgastate 1 
 0 WD90C24
 727
 ls: /tmp/ru.stop: No such file or directory
-root@box:~# pidof Xfbdev; cut -d" " -f1 /proc/modules | grep -E "wd90|vga16|wd24
+user@host:~# pidof Xfbdev; cut -d" " -f1 /proc/modules | grep -E "wd90|vga16|wd24
 "; ls /tmp/ru.stop
 727
 wd90c24fb
 ls: /tmp/ru.stop: No such file or directory
-root@box:~# kill 727; sleep 3; pidof Xfbdev
+user@host:~# kill 727; sleep 3; pidof Xfbdev
 apm: set display: Unrecognized device ID
-root@box:~# echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c
+user@host:~# echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c
 24fb; echo RM=$?; rm -f /tmp/ru.stop
 wd90c24fb: text=1: back to text mode (now rmmod wd90c24fb can unload)
 Console: switching to colour VGA+ 80x25
 RM=0
-root@box:~# dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$?
+user@host:~# dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$?
 Q=0
-root@box:~# gt(){ S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90
+user@host:~# gt(){ S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90
 c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/de
 v/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 9c77fe90001 ]; }
-root@box:~# ru(){ [ -e /tmp/ru.stop ] && { echo SKIP; return 1; }; gt && dmesg -
+user@host:~# ru(){ [ -e /tmp/ru.stop ] && { echo SKIP; return 1; }; gt && dmesg -
 c >/dev/null && insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=$1 $2 && sleep 20 &&
  grep -q "mismatches 0; in_text 1" /proc/wd24adv/live && echo OK-$1 $2 || { touc
 h /tmp/ru.stop; echo STOP-$1; dmesg | grep wd24adv; return 1; }; }; type ru | he
 ad -1
 ru is a function
-root@box:~# ru 640x480-8 && { rmmod wd24adv && echo STEP1-OK || touch /tmp/ru.st
+user@host:~# ru 640x480-8 && { rmmod wd24adv && echo STEP1-OK || touch /tmp/ru.st
 op; }
 G=9c77fe90001
 OK-640x480-8
 STEP1-OK
-root@box:~# ru 320x200-8 && { rmmod wd24adv && echo STEP3-OK || touch /tmp/ru.st
+user@host:~# ru 320x200-8 && { rmmod wd24adv && echo STEP3-OK || touch /tmp/ru.st
 op; }
 G=9c77fe90001
 OK-320x200-8
 STEP3-OK
-root@box:~# [ -e /tmp/ru.stop ] && echo "STOPPED: do not load wd90c24fb until ch
+user@host:~# [ -e /tmp/ru.stop ] && echo "STOPPED: do not load wd90c24fb until ch
 ecked" || { insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; ech
 o RC=$?; }
 RC=0
-root@box:~# ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;
+user@host:~# ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;
  HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautost
 art.log 2>&1 & )
-root@box:~# i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i
+user@host:~# i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i
 =$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X
 798
 X-UP
-root@box:~# pidof Xfbdev >/dev/null && { dmesg -c >/dev/null; insmod /tmp/wd24pr
+user@host:~# pidof Xfbdev >/dev/null && { dmesg -c >/dev/null; insmod /tmp/wd24pr
 obe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u; }
 insmod: can't insert '/tmp/wd24probe3.ko': No such device
 RC=19
@@ -93,4 +93,4 @@ RC=19
 <6>wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
 <6>wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
 <6>wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
-root@box:~# 
+user@host:~# 
