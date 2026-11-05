@@ -1,0 +1,120 @@
+S5 s5=2 (HOSTCOL) live run, 2026-11-05 UTC (2026-11-04 21:4x-22:0x EST)
+Approval: Brandon, card t378s1179 "I'm at the screen watching, run s5=2" (this run only).
+Module: wd24adv.ko sha256 1c7b21b099dee110bcb8a913d495abeea722cc993257ed0b049bb4127c1885f1
+(commit 3059401), sent with tc32-gfx send-file.sh, logger paused; remote sha matched.
+Lines: docs/WD24ADV-LIVE-TEST.md "S5 s5=2" L1-L10, one per call, each after the prompt
+returned. L8's local call was interrupted after the line had returned (RC=0 at the
+prompt); commands.log checked, nothing running, then L9. No retries.
+
+RESULT: S5 HOSTCOL: OK, 4/4 VERIFIED (full bank-1 readback == model)
+  op 1 probe 4x2 (560,112)    host words 4/4       VERIFIED
+  op 2 HOSTCOL 8x8 (400,112)  host words 32/32     VERIFIED
+  op 3 HOSTCOL 32x16 (424,112) host words 256/256  VERIFIED
+  op 4 HOSTCOL 64x64 (472,120) host words 2048/2048 VERIFIED
+  probe alternative words: 0 -> format 2*ceil(w/4) words/row, low byte = left: PROVEN
+  readback class: none (no mismatch, so no label)
+  restore 1002 == 1002; 23C4h 2340, refusals 0, restore fails 0; trial expiry 0
+L7 RM=0, L8 RC=0, L10 X-UP (Xfbdev 1002).
+Baseline wd24probe3: RC=19, result=ok restore_fail=0x00 (same as S4 and S5 s5=1).
+Doc nit: the L6 grep pattern "S5 result" does not match "S5 HOSTCOL: OK"; dmesg shows it.
+
+PHOTO (Brandon: "Probably what you wanted") vs expected frame:
+  x=400 8x8 diagonal stripes (38h+((r+c)&7))    seen: small striped patch    match
+  x=424 32x16 xor checker (30h+((r^c)&15))       seen: checker patch          match
+  x=472 64x64 (4r+c)&FFh                          seen: dark sheared parallelogram
+        with a coloured fringe at the top-left and bottom-right               match
+  x=560 4x2 probe (40h-47h)                       seen: tiny dot               match
+  The parallelogram is the expected value pattern, not a stride or packing
+  error: the readback was exact (VERIFIED), and the DAC is still the BIOS text
+  DAC, so only indices 00h-3Fh have colours and 40h-FFh show as dark. In the
+  patch, index (4r+c) mod 256 < 40h only in the top-left triangle (r < 16) and
+  past the wrap at 4r+c >= 256 (bottom right). Both edges have slope 4 px per
+  row, which is why the dark band looks sheared.
+
+== commands.log ==
+2026-11-04 21:48:32 EST  S5 s5=2: send-file wd24adv-s5h.ko -> /tmp/wd24adv.ko done, sha 1c7b21b0 match (approval t378s1179)
+2026-11-04 21:48:32 EST  S5 s5=2 L1
+2026-11-04 21:48:33 EST  slow: pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt" CR
+2026-11-04 21:48:50 EST  S5 s5=2 L2
+2026-11-04 21:48:50 EST  slow: kill 938 CR
+2026-11-04 21:49:07 EST  S5 s5=2 L3
+2026-11-04 21:49:07 EST  slow: echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo RM=$? CR
+2026-11-04 21:49:34 EST  S5 s5=2 L4
+2026-11-04 21:49:34 EST  slow: dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$? CR
+2026-11-04 21:49:54 EST  S5 s5=2 L5
+2026-11-04 21:49:55 EST  slow: S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 1c7b21b0001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s5=2; echo RC=$?; } CR
+2026-11-04 21:51:17 EST  S5 s5=2 L6
+2026-11-04 21:51:17 EST  slow: sleep 20; cat /proc/wd24adv/s5 > /tmp/s5run2.txt; cat /proc/wd24adv/live > /tmp/s5live2.txt; grep -E "S5 result|op [0-9]+ |host|probe|class|DEAD|idle|restore:|writes" /tmp/s5run2.txt; dmesg | grep wd24adv CR
+2026-11-04 21:52:35 EST  S5 s5=2 L7
+2026-11-04 21:52:35 EST  slow: rmmod wd24adv; echo RM=$? CR
+2026-11-04 21:52:52 EST  S5 s5=2 L8
+2026-11-04 21:52:52 EST  slow: insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$? CR
+2026-11-04 21:53:58 EST  S5 s5=2 L8 returned RC=0 (call interrupted locally; commands.log checked, no slow.sh running)
+2026-11-04 21:53:59 EST  S5 s5=2 L9
+2026-11-04 21:53:59 EST  slow: ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & ) CR
+2026-11-04 21:54:35 EST  S5 s5=2 L10
+2026-11-04 21:54:35 EST  slow: i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X CR
+2026-11-04 21:55:17 EST  S5 s5=2 baseline: wd24probe3
+2026-11-04 21:55:17 EST  slow: pidof Xfbdev >/dev/null && { dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u; } CR
+
+== serial transcript ==
+user@host:~# pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
+938
+  928 root       580 S    {startx} /bin/sh /usr/local/bin/startx
+  938 root      1664 S    Xfbdev :0 -mouse /dev/input/mice -2button
+  940 root      2128 S    jwm
+  941 root      1924 S    rxvt -fn fixed -geometry 80x24+8+8
+  970 root       576 S    grep -E startx|Xfbdev|jwm|rxvt
+user@host:~# kill 938
+user@host:~# echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c
+24fb; echo RM=$?
+RM=0
+user@host:~# dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$?
+Q=0
+user@host:~# S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|
+vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null
+; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 1c7b21b0001 ] && { dmesg -c >/dev/null; in
+smod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s5=2; echo RC=$?; }
+G=1c7b21b0001
+RC=0
+user@host:~# sleep 20; cat /proc/wd24adv/s5 > /tmp/s5run2.txt; cat /proc/wd24adv/
+live > /tmp/s5live2.txt; grep -E "S5 result|op [0-9]+ |host|probe|class|DEAD|idl
+e|restore:|writes" /tmp/s5run2.txt; dmesg | grep wd24adv
+  op 1 HOSTCOL probe 4x2 (560,112)            model changes 8; idle polls 0; busy seen, polls 0; CNTRL1 after 0102; host words 4/4 VERIFIED
+  op 2 HOSTCOL 8x8 (400,112)                  model changes 64; idle polls 0; busy seen, polls 0; CNTRL1 after 0102; host words 32/32 VERIFIED
+  op 3 HOSTCOL 32x16 (424,112)                model changes 512; idle polls 0; busy seen, polls 0; CNTRL1 after 0102; host words 256/256 VERIFIED
+  op 4 HOSTCOL 64x64 (472,120)                model changes 4080; idle polls 0; busy seen, polls 0; CNTRL1 after 0102; host words 2048/2048 VERIFIED
+probe alternative words: 0
+restore: wrote 1002, read 1002 (equal)
+23C0h writes 134, 23C2h writes 54 (starts 4), PR0A writes 15, 23C4h 2340, refusals 0, reads 2616 (polls 2349), restore fails 0
+<6>wd24adv: live load: 0 (port data writes 46, index writes 224, mismatches 0)
+<6>wd24adv: LIVE: text state saved (4 planes, DAC, VGA + ext regs); trial 15 s; control: /proc/wd24adv/control
+<6>wd24adv: live mode 640x480-8: 0 (port data writes 93, index writes 263, mismatches 0)
+<6>wd24adv: 640x480-8 set: write "confirm" to /proc/wd24adv/control within 15 s or it reverts to text
+<6>wd24adv: S5 HOSTCOL: OK; ops verified 4; 23C2h writes 54 (starts 4), PR0A writes 15; details: /proc/wd24adv/s5
+<6>wd24adv: live trial expiry: 0 (port data writes 896, index writes 336, mismatches 0)
+user@host:~# rmmod wd24adv; echo RM=$?
+RM=0
+user@host:~# insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; ech
+o RC=$?
+RC=0
+user@host:~# ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;
+ HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautost
+art.log 2>&1 & )
+user@host:~# i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i
+=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X
+1002
+X-UP
+user@host:~# pidof Xfbdev >/dev/null && { dmesg -c >/dev/null; insmod /tmp/wd24pr
+obe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u; }
+insmod: can't insert '/tmp/wd24probe3.ko': No such device
+RC=19
+<6>wd24probe3: 3C4test pre=11 SR06again=00 wrote=00 rb=00 post=00 restored-rb=00 after=11
+<6>wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
+<6>wd24probe3: CR34 L=a0 again=a0 wrote=a0 rb=a0 restored-rb=a0
+<6>wd24probe3: GR0F=05 GR0E=01 SR06=0f CR11=8c CR29=85
+<6>wd24probe3: PR18(CR31)=c7 PR19(CR32)=54 PR1A(CR33)=00 PR36(CR3B)=ef PR37(CR3C)=9a PR39(CR3E)=20
+<6>wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
+<6>wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
+<6>wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+user@host:~# 

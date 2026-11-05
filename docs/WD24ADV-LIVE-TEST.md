@@ -499,7 +499,7 @@ else: stop and save the files. HOST DATA SHORT: stop, save, do not continue to
 s5=2. TIMEOUT: read the idle re-check line; IDLE seen: carry on. STILL BUSY /
 LOCKED: stop; no rmmod, no wd90c24fb load; save the files and power off.
 
-## S5 s5=2: on-screen host-data BITBLT, HOSTCOL (prepared 2026-11-05, NOT run, needs its own approval)
+## S5 s5=2: on-screen host-data BITBLT, HOSTCOL (run 2026-11-05 UTC: OK 4/4, probe alt 0; X + baseline OK, see docs/s5-2-live-2026-11-05.txt)
 
 Design doc section 7, stage S5 second half. Same load, machinery and safety
 model as s5=1 above (`insmod wd24adv.ko dryrun=0 live=1 mode=640x480-8 s5=2`),
