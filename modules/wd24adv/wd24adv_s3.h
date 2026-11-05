@@ -56,7 +56,9 @@
 #define WD24S3_NPAR	11
 #define WD24S3_SPINS	200000		/* as wd90c24fb WD_BLT_SPINS, ~0.2 s */
 #define WD24S3_NCRC	6		/* banks 0-5 */
-#define WD24S3_NLOG	900
+#define WD24S3_NLOG	2400
+#define WD24S3_MAXOPS	12		/* S3: 3, S4: 11 (per-op arrays) */
+#define WD24S3_BACKC	0x0d00		/* ACT | PACKED | BACK (S4 only) */
 #define WD24S3_FILL	0x0908		/* ACT | PACKED | SRC_FCOL */
 #define WD24S3_COPY	0x0900		/* ACT | PACKED */
 
@@ -74,9 +76,31 @@ struct wd24s3_op {
 	u16 cntrl1;
 	unsigned int npar;
 	struct wd24s3_par par[WD24S3_NPAR];
+	u16 rop;		/* ROP word (idx 9) value, for the model */
+	bool back;		/* CNTRL1 BACK: par src/dst are bottom-right */
 };
 
 extern const struct wd24s3_op wd24s3_ops[WD24S3_NOPS];
+
+/*
+ * A stage program: the op list and the one 64 KiB PR0A bank all its
+ * rectangles lie in (checked by tests/test_s3.c).  S3 = wd24s3_prog3
+ * (60000h, off screen); S4 = wd24s3_prog4 (10000h, ON SCREEN: frame rows
+ * 103-203, inside wd24adv's 256 KiB plane save, so the trial revert
+ * restores it like any other frame byte).  Every other bank 0-6 is
+ * checksummed before and after and must not change.
+ */
+struct wd24s3_prog {
+	const char *stage;		/* "S3" / "S4" */
+	const struct wd24s3_op *ops;
+	unsigned int nops;
+	u32 base;			/* bank start, = bank << 12 */
+	u8 bank;			/* PR0A value */
+	unsigned int max_ix, max_data;	/* guard caps on 23C0h / 23C2h writes */
+};
+extern const struct wd24s3_prog wd24s3_prog3, wd24s3_prog4;
+#define WD24S4_NOPS	11
+extern const struct wd24s3_op wd24s4_ops[WD24S4_NOPS];
 
 struct wd24s3_mem {
 	int (*bank)(void *priv, u8 pr0a);	/* PR0A write + readback; 0 ok */
@@ -99,6 +123,7 @@ enum wd24s3_res {
 struct wd24s3 {
 	const struct wd24s1_io *io;
 	const struct wd24s3_mem *mem;
+	const struct wd24s3_prog *prog;	/* wd24s3_init: S3; then set_prog */
 	u8 *pre, *model, *buf;		/* WD24S3_WIN bytes each (caller) */
 	bool have_saved, snap_ok, armed, go, restored, dead;
 	/* after a timeout: idle re-check (reads only) */
@@ -112,10 +137,10 @@ struct wd24s3 {
 	u32 crc0[WD24S3_NCRC], crc1[WD24S3_NCRC];
 	int op;				/* op being programmed, -1 none */
 	unsigned int done;		/* ops run and verified */
-	u32 changes[WD24S3_NOPS];	/* bytes each op changes (model) */
-	u32 spins[WD24S3_NOPS], idle_spins[WD24S3_NOPS];
-	u16 c1_after[WD24S3_NOPS];
-	bool busy_seen[WD24S3_NOPS];
+	u32 changes[WD24S3_MAXOPS];	/* bytes each op changes (model) */
+	u32 spins[WD24S3_MAXOPS], idle_spins[WD24S3_MAXOPS];
+	u16 c1_after[WD24S3_MAXOPS];
+	bool busy_seen[WD24S3_MAXOPS];
 	u32 ndiff, diff_off;
 	u8 diff_got, diff_want;
 	bool dirty[WD24S1_N_BLT];
@@ -132,6 +157,8 @@ struct wd24s3 {
 int wd24s3_guard_out(const struct wd24s3 *s, u16 port, u16 val);
 void wd24s3_init(struct wd24s3 *s, const struct wd24s1_io *io,
 		 const struct wd24s3_mem *mem, u8 *pre, u8 *model, u8 *buf);
+/* before wd24s3_run only: select the stage program (S3 is the default) */
+void wd24s3_set_prog(struct wd24s3 *s, const struct wd24s3_prog *p);
 int wd24s3_run(struct wd24s3 *s);	/* 0 = OK */
 /* after TIMEOUT: reads only (23C0h must still be 1001h, then <= SPINS
  * 23C2h reads); 1 = CNTRL1 ACT seen clear (sets idle_seen), 0 = busy or
@@ -139,6 +166,10 @@ int wd24s3_run(struct wd24s3 *s);	/* 0 = OK */
 int wd24s3_idle_poll(struct wd24s3 *s);
 const char *wd24s3_res_name(enum wd24s3_res r);
 void wd24s3_apply(const struct wd24s3_op *o, u8 *win);	/* model, bank 6 */
+/* model for a window starting at base: ROP (fill: fg op dst), copy in
+ * the engine's order (BACK: bottom row first, right to left) */
+void wd24s3_apply_at(const struct wd24s3_op *o, u8 *win, u32 base);
+u8 wd24s3_rop(u16 rop, u8 src, u8 dst);
 u32 wd24s3_sum(const u8 *p, u32 n, u32 h);		/* FNV-1a */
 #ifdef __KERNEL__
 extern const struct wd24s1_io wd24s3_kernel_io;

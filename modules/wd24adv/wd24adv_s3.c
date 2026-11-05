@@ -25,12 +25,52 @@
 
 const struct wd24s3_op wd24s3_ops[WD24S3_NOPS] = {
 	{ "FILL 8x8 @60000h c=3Ch", true, 0x60000, 0x60000, 8, 8, 0x3c, WD24S3_FILL, 11,
-	  { PARS(0x60000, 0x60000, 8, 8), { 0xa, 0x3c } } },
+	  { PARS(0x60000, 0x60000, 8, 8), { 0xa, 0x3c } }, 0x300, false },
 	{ "FILL 32x32 @60200h c=C3h", true, 0x60200, 0x60200, 32, 32, 0xc3, WD24S3_FILL, 11,
-	  { PARS(0x60200, 0x60200, 32, 32), { 0xa, 0xc3 } } },
+	  { PARS(0x60200, 0x60200, 32, 32), { 0xa, 0xc3 } }, 0x300, false },
 	{ "COPY 32x32 60200h->60100h fwd", false, 0x60200, 0x60100, 32, 32, 0, WD24S3_COPY, 10,
-	  { PARS(0x60200, 0x60100, 32, 32) } },
+	  { PARS(0x60200, 0x60100, 32, 32) }, 0x300, false },
 };
+
+/*
+ * S4: ON SCREEN, bank 1 (10000h-1FFFFh = frame rows 102.4-204.8; every
+ * rectangle is inside rows 110-203, x 16-591).  ROP codes are the data
+ * sheet's (DS 19.7 / Table 19-3, as wd24adv_engine.h WD24X_ROP_*); SRC and
+ * XOR fills and both copy directions are what wd90c24fb runs under X on
+ * this machine (wd_blt_go / wd_blt_copy_lin); AND, OR, INVDST, CLEAR and
+ * SET are new here.  The copies overlap source and destination and the
+ * direction is chosen as wd24x_backward(): dst > src -> BACK, src and dst
+ * programmed at the bottom-right pixel (wd_blt_copy_lin).
+ */
+#define A(x, y)	((u32)(y) * WD24S3_PITCH + (x))
+#define PARR(s, d, w, h, r)	{ 2, LO(s) }, { 3, HI(s) }, { 4, LO(d) }, { 5, HI(d) }, \
+	{ 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, r }, { 1, 0 }
+#define FILL4(nm, x, rop, c) { nm, true, A(x, 112), A(x, 112), 64, 16, c, WD24S3_FILL, 11, \
+	{ PARR(A(x, 112), A(x, 112), 64, 16, rop), { 0xa, c } }, rop, false }
+#define BR(a, w, h)	((a) + ((h) - 1) * WD24S3_PITCH + (w) - 1)
+#define COPYF(nm, s, d, w, h) { nm, false, s, d, w, h, 0, WD24S3_COPY, 10, \
+	{ PARR(s, d, w, h, 0x300) }, 0x300, false }
+#define COPYB(nm, s, d, w, h) { nm, false, s, d, w, h, 0, WD24S3_BACKC, 10, \
+	{ PARR(BR(s, w, h), BR(d, w, h), w, h, 0x300) }, 0x300, true }
+
+const struct wd24s3_op wd24s4_ops[WD24S4_NOPS] = {
+	FILL4("FILL 64x16 (16,112) SRC c=3Ch", 16, 0x300, 0x3c),
+	FILL4("FILL 64x16 (96,112) XOR c=3Fh", 96, 0x600, 0x3f),
+	FILL4("FILL 64x16 (176,112) AND c=30h", 176, 0x100, 0x30),
+	FILL4("FILL 64x16 (256,112) OR c=38h", 256, 0x700, 0x38),
+	FILL4("FILL 64x16 (336,112) INVERT", 336, 0xa00, 0x00),
+	FILL4("FILL 64x16 (416,112) CLEAR", 416, 0x000, 0x00),
+	FILL4("FILL 64x16 (496,112) SET", 496, 0xf00, 0x00),
+	COPYF("COPY 128x24 (48,150)->(40,146) fwd", A(48, 150), A(40, 146), 128, 24),
+	COPYB("COPY 128x24 (300,150)->(308,154) back", A(300, 150), A(308, 154), 128, 24),
+	COPYB("COPY 120x16 (460,184)->(468,184) back", A(460, 184), A(468, 184), 120, 16),
+	COPYF("COPY 120x16 (48,184)->(40,184) fwd", A(48, 184), A(40, 184), 120, 16),
+};
+
+const struct wd24s3_prog wd24s3_prog3 = {
+	"S3", wd24s3_ops, WD24S3_NOPS, WD24S3_BASE, WD24S3_BANK, 400, 64 };
+const struct wd24s3_prog wd24s3_prog4 = {
+	"S4", wd24s4_ops, WD24S4_NOPS, 0x10000, 0x10, 800, 200 };
 
 /* registers S3 may write (snapshot restore allowed): block 1 idx 1-A, E */
 static bool s3_reg(unsigned int idx)
@@ -45,18 +85,41 @@ u32 wd24s3_sum(const u8 *p, u32 n, u32 h)
 	return h;
 }
 
-/* the model: what the engine must have done to bank 6 */
+/* DS Table 19-3 abcd: result bit = code bit (3 - (2 * src + dst)), the
+ * X11 GX numbering (clear 0, and 1, copy 3, xor 6, or 7, invert A, set F) */
+u8 wd24s3_rop(u16 rop, u8 src, u8 dst)
+{
+	unsigned int code = (rop >> 8) & 0xf, b;
+	u8 r = 0;
+
+	for (b = 0; b < 8; b++) {
+		unsigned int sb = (src >> b) & 1, db = (dst >> b) & 1;
+
+		if (code & (1u << (3 - (2 * sb + db))))
+			r |= (u8)(1u << b);
+	}
+	return r;
+}
+
+/* the model: what the engine must have done to the bank window */
+void wd24s3_apply_at(const struct wd24s3_op *o, u8 *win, u32 base)
+{
+	u32 rr, ii;
+
+	for (rr = 0; rr < o->h; rr++)
+		for (ii = 0; ii < o->w; ii++) {
+			u32 r = o->back ? o->h - 1 - rr : rr;
+			u32 i = o->back ? o->w - 1 - ii : ii;
+			u32 d = o->dst - base + r * WD24S3_PITCH + i;
+			u32 sr = o->src - base + r * WD24S3_PITCH + i;
+
+			win[d] = wd24s3_rop(o->rop, o->fill ? o->fg : win[sr], win[d]);
+		}
+}
+
 void wd24s3_apply(const struct wd24s3_op *o, u8 *win)
 {
-	u32 r, i;
-
-	for (r = 0; r < o->h; r++)
-		for (i = 0; i < o->w; i++) {
-			u32 d = o->dst - WD24S3_BASE + r * WD24S3_PITCH + i;
-			u32 sr = o->src - WD24S3_BASE + r * WD24S3_PITCH + i;
-
-			win[d] = o->fill ? o->fg : win[sr];
-		}
+	wd24s3_apply_at(o, win, WD24S3_BASE);
 }
 
 static bool is_sel(u16 v)
@@ -82,13 +145,13 @@ int wd24s3_guard_out(const struct wd24s3 *s, u16 port, u16 val)
 	if (!s->have_saved || s->restored || s->dead)
 		return -EPERM;
 	if (port == WD24S1_P_INDEX) {
-		if (s->wix >= 400)
+		if (s->wix >= s->prog->max_ix)
 			return -EPERM;
 		if (is_sel(val) || (val == (s->saved & IDX_WR) && s->saved == WD24S2_S))
 			return 0;
 		return -EPERM;
 	}
-	if (port != WD24S1_P_DATA || !s->armed || s->wdata >= 64)
+	if (port != WD24S1_P_DATA || !s->armed || s->wdata >= s->prog->max_data)
 		return -EPERM;		/* 23C4h and everything else: never */
 	if ((s->cur & 0xf0ff) != (WD24S1_NOINC | 1))
 		return -EPERM;		/* block 1 only: cursor block never */
@@ -96,17 +159,17 @@ int wd24s3_guard_out(const struct wd24s3 *s, u16 port, u16 val)
 	if ((val >> 12) != idx)
 		return -EPERM;
 	if (idx == 0) {			/* CNTRL1: the start */
-		if (!s->go || s->op < 0 || s->op >= WD24S3_NOPS)
+		if (!s->go || s->op < 0 || s->op >= (int)s->prog->nops)
 			return -EPERM;
-		return val == wd24s3_ops[s->op].cntrl1 ? 0 : -EPERM;
+		return val == s->prog->ops[s->op].cntrl1 ? 0 : -EPERM;
 	}
 	if (!s3_reg(idx))
 		return -EPERM;		/* B (BG), C, D, F */
 	if (s->snap_ok && val == s->snap[idx])
 		return 0;		/* this load's snapshot word */
-	if (s->op < 0 || s->op >= WD24S3_NOPS)
+	if (s->op < 0 || s->op >= (int)s->prog->nops)
 		return -EPERM;
-	o = &wd24s3_ops[s->op];
+	o = &s->prog->ops[s->op];
 	for (j = 0; j < o->npar; j++)
 		if (o->par[j].idx == idx && o->par[j].val == (val & 0xfff))
 			return 0;
@@ -123,6 +186,14 @@ void wd24s3_init(struct wd24s3 *s, const struct wd24s1_io *io,
 	s->model = model;
 	s->buf = buf;
 	s->op = -1;
+	s->prog = &wd24s3_prog3;
+}
+
+void wd24s3_set_prog(struct wd24s3 *s, const struct wd24s3_prog *p)
+{
+	if (s->res == WD24S3_NOT_RUN && !s->have_saved && p && p->nops &&
+	    p->nops <= WD24S3_MAXOPS)
+		s->prog = p;
 }
 
 const char *wd24s3_res_name(enum wd24s3_res r)
@@ -302,18 +373,21 @@ static const char *snapshot(struct wd24s3 *s)
 	return NULL;
 }
 
-/* banks 0-5 checksums; then bank 6 (left selected) into dst */
+/* banks 0-6 except the program's bank: checksums (S3: 0-5); then the
+ * program's bank (left selected) into dst */
 static int vram_pass(struct wd24s3 *s, u32 *crc, u8 *dst)
 {
-	unsigned int b;
+	unsigned int b, k = 0;
 
-	for (b = 0; b < WD24S3_NCRC; b++) {
-		if (bank(s, (u8)(b << 4)))
+	for (b = 0; b <= WD24S3_NCRC; b++) {
+		if ((u8)(b << 4) == s->prog->bank)
+			continue;
+		if (k >= WD24S3_NCRC || bank(s, (u8)(b << 4)))
 			return -EIO;
 		vread(s, s->buf);
-		crc[b] = wd24s3_sum(s->buf, WD24S3_WIN, 2166136261u);
+		crc[k++] = wd24s3_sum(s->buf, WD24S3_WIN, 2166136261u);
 	}
-	if (bank(s, WD24S3_BANK))
+	if (k != WD24S3_NCRC || bank(s, s->prog->bank))
 		return -EIO;
 	if (dst)
 		vread(s, dst);
@@ -329,11 +403,11 @@ static const char *pre_check(struct wd24s3 *s)
 		return "PR0A did not read back";
 	vread(s, s->buf);
 	if (memcmp(s->pre, s->buf, WD24S3_WIN))
-		return "bank 6 read twice differs";
+		return "the stage bank read twice differs";
 	memcpy(s->model, s->pre, WD24S3_WIN);
-	for (j = 0; j < WD24S3_NOPS; j++) {
+	for (j = 0; j < s->prog->nops; j++) {
 		memcpy(s->buf, s->model, WD24S3_WIN);
-		wd24s3_apply(&wd24s3_ops[j], s->model);
+		wd24s3_apply_at(&s->prog->ops[j], s->model, s->prog->base);
 		for (i = n = 0; i < WD24S3_WIN; i++)
 			n += s->buf[i] != s->model[i];
 		s->changes[j] = n;
@@ -365,7 +439,7 @@ static void restore_dirty(struct wd24s3 *s)
 /* one operation; NULL = ran and verified.  *res set on failure */
 static const char *one(struct wd24s3 *s, int j, enum wd24s3_res *res)
 {
-	const struct wd24s3_op *o = &wd24s3_ops[j];
+	const struct wd24s3_op *o = &s->prog->ops[j];
 	unsigned int p;
 	u16 v;
 	u32 i;
@@ -404,19 +478,19 @@ static const char *one(struct wd24s3 *s, int j, enum wd24s3_res *res)
 		return "engine still busy after the operation";
 	}
 	s->op = -1;
-	wd24s3_apply(o, s->model);
+	wd24s3_apply_at(o, s->model, s->prog->base);
 	vread(s, s->buf);
 	for (i = 0; i < WD24S3_WIN; i++)
 		if (s->buf[i] != s->model[i]) {
 			if (!s->ndiff++) {
-				s->diff_off = WD24S3_BASE + i;
+				s->diff_off = s->prog->base + i;
 				s->diff_got = s->buf[i];
 				s->diff_want = s->model[i];
 			}
 		}
 	if (s->ndiff) {
 		*res = WD24S3_VRAM_BAD;
-		return "bank 6 differs from the model";
+		return "the stage bank differs from the model";
 	}
 	s->done++;
 	return NULL;
@@ -461,7 +535,7 @@ int wd24s3_run(struct wd24s3 *s)
 		goto banks;
 	}
 	s->armed = true;
-	for (j = 0; j < WD24S3_NOPS; j++) {
+	for (j = 0; j < (int)s->prog->nops; j++) {
 		why = one(s, j, &res);
 		if (why)
 			break;
@@ -502,7 +576,7 @@ int wd24s3_run(struct wd24s3 *s)
 			if (s->crc0[k] != s->crc1[k]) {
 				if (res == WD24S3_OK) {
 					res = WD24S3_VRAM_BAD;
-					why = "video memory outside the scratch bank changed";
+					why = "video memory outside the stage bank changed";
 				}
 			}
 	}
@@ -558,13 +632,18 @@ static void fake_blt(u16 c1)
 
 	if (!wd24s3_fake_vram)
 		return;
+	/* BACK: addresses are the bottom-right pixel, rows bottom-up, right
+	 * to left; result = ROP (idx 9 bits 11:8) of source and destination */
 	for (r = 0; r < h; r++)
 		for (i = 0; i < w; i++) {
-			u32 d = dst + r * p + i, sa = src + r * p + i;
+			bool bk = c1 & 0x0400;
+			u32 d = bk ? dst - r * p - i : dst + r * p + i;
+			u32 sa = bk ? src - r * p - i : src + r * p + i;
 
 			if (d < 7 * WD24S3_WIN && sa < 7 * WD24S3_WIN)
-				wd24s3_fake_vram[d] = (c1 & 0x8) ?
-					(u8)fake_reg[0xa] : wd24s3_fake_vram[sa];
+				wd24s3_fake_vram[d] = wd24s3_rop(fake_reg[9],
+					(c1 & 0x8) ? (u8)fake_reg[0xa] : wd24s3_fake_vram[sa],
+					wd24s3_fake_vram[d]);
 		}
 	fake_busy = 3;
 	if (!fake_started && fake_hang)

@@ -364,6 +364,76 @@ If the result is TIMEOUT, read the "idle re-check" line. IDLE seen: carry on
 (rmmod, wd90c24fb back). STILL BUSY / LOCKED: stop; do not rmmod, do not load
 wd90c24fb; save the files and power off.
 
+## S4: on-screen BITBLT fills (all X ROPs) and overlapping copies (prepared 2026-11-05 UTC, not run)
+
+Design doc section 7, stage S4. `insmod wd24adv.ko dryrun=0 live=1 mode=640x480-8 s4=1`:
+after the PROVEN 640x480-8 trial mode set and test pattern (15 s trial timer
+already queued), inside the same insmod, 11 BITBLT operations on the visible
+frame in bank 1 (10000h-1FFFFh, PR0A 10h, rows 102.4-204.8). Each op is
+followed by a full bank-1 readback compared against the model. This is the
+same S3 machinery (entry checks, 25-word snapshot read twice, ACT polls,
+~0.2 s timeout latch with the idle re-check / LOCKED path, restore to the
+same-load snapshot), driven by a second op table. Bank 1 is inside the 256 KiB
+plane save, so the trial expiry restores the text screen as usual.
+
+| op | what | ROP | CNTRL1 |
+|---|---|---|---|
+| 1 | FILL 64x16 (16,112) c=3Ch | SRC 300 | 0908 |
+| 2 | FILL 64x16 (96,112) c=3Fh | XOR 600 | 0908 |
+| 3 | FILL 64x16 (176,112) c=30h | AND 100 | 0908 |
+| 4 | FILL 64x16 (256,112) c=38h | OR 700 | 0908 |
+| 5 | FILL 64x16 (336,112) | INVERT A00 | 0908 |
+| 6 | FILL 64x16 (416,112) | CLEAR 000 | 0908 |
+| 7 | FILL 64x16 (496,112) | SET F00 | 0908 |
+| 8 | COPY 128x24 (48,150)->(40,146), overlap, forward | SRC | 0900 |
+| 9 | COPY 128x24 (300,150)->(308,154), overlap, backward | SRC | 0D00 |
+| 10 | COPY 120x16 (460,184)->(468,184), same rows, backward | SRC | 0D00 |
+| 11 | COPY 120x16 (48,184)->(40,184), same rows, forward | SRC | 0900 |
+
+The kernel picks the direction (dst > src: backward, with src/dst at the
+bottom-right pixel, as wd_blt_copy_lin). Every rectangle is checked to lie
+inside the 640x480 frame and inside bank 1 (rows 110-203); every op must
+change >= 1 byte. Banks 0 and 2-6 are checksummed before and after (must be
+equal). Exact 23C2h writes: 139 (op table in tests/qemu-wd24adv-s4.py,
+checked byte-for-byte in QEMU). CNTRL1 is only 0908/0900/0D00, written last.
+Never written: block 2, BG, C, D, F, 23C4h; no abort.
+
+What the owner should see, for ~15 s: the normal pattern, with seven 64x16
+blocks in a row near y=112 (solid, XOR, AND, OR, inverted, black, white),
+and two bands near y=146-178 and y=184-200 where the bars are shifted 8 px
+left (forward copies) or right/down (backward copies), with no smearing. A
+smeared or repeated band would mean the wrong direction; the readback would
+also report VRAM_BAD.
+
+Build: commit (this one), tc755x tree (kobj-vm86), vermagic
+`6.18.57-tc755x mod_unload 486`, sha256
+`7b33b083c012e43a8fde302a28cfb4b4d18fb590f5ff30ec3d4e735d65894607`.
+Tests: host test_s4 299/0 (independent engine model, plus faults: BACK
+ignored, widened rect, stray write, timeout at op 9, entry refusals,
+readback flip); QEMU qemu-wd24adv-s4.py 35/35; S3 QEMU 34/34 unchanged.
+
+Exact serial lines (each logged with plog.sh first; each sent only after
+the previous returned; no retries):
+
+```
+pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
+kill <the Xfbdev PID printed above>
+echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo RM=$?
+dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$?
+S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 7b33b083001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s4=1; echo RC=$?; }
+sleep 20; cat /proc/wd24adv/s4 > /tmp/s4run1.txt; cat /proc/wd24adv/live > /tmp/s4live1.txt; grep -E "S4 result|op [0-9]+ |DEAD|idle|restore:|writes" /tmp/s4run1.txt; dmesg | grep wd24adv
+rmmod wd24adv; echo RM=$?
+insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?
+( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & )
+i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X
+```
+
+Expected: RC=0, the pattern with the S4 changes for ~15 s, `S4 result: OK`,
+11 ops VERIFIED, restore read 1002, text back at expiry, RM=0, X-UP. Any
+other result: stop and save the files. TIMEOUT: read the idle re-check line.
+IDLE seen: carry on. STILL BUSY / LOCKED: stop; do not rmmod, do not load
+wd90c24fb; save the files and power off.
+
 ## Roll-up visual test (prepared 2026-11-04, run live 2026-11-04)
 
 One sequence, each PROVEN mode as its own load with the 15 s auto-revert
