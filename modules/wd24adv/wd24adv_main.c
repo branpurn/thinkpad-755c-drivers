@@ -35,6 +35,7 @@
  *   /proc/wd24adv/s3       - s3=1 only: the S3 operation list (dryrun=1) or result
  *   /proc/wd24adv/s4       - s4=1 only: the S4 operation list (dryrun=1) or result
  *   /proc/wd24adv/s5       - s5=1|2 only: the S5 host-data list (dryrun=1) or result
+ *   /proc/wd24adv/s6       - s6=1 only: the S6 dual-window proof (dryrun=1: run on the model) or result
  *
  * S1 (s1=1 dryrun=0, never with live=1 or mode=): after the same read-only
  * entry check, a read-only probe of the 23C0h register blocks
@@ -86,6 +87,7 @@
 #include "wd24adv_s2.h"
 #include "wd24adv_s3.h"
 #include "wd24adv_s1.h"
+#include "wd24adv_s6.h"
 
 static bool dryrun = true;
 module_param(dryrun, bool, 0444);
@@ -146,6 +148,10 @@ MODULE_PARM_DESC(s4, "S4 ON-SCREEN BITBLT fills (all 7 X ROPs) and overlapping f
 static int s5;
 module_param(s5, int, 0444);
 MODULE_PARM_DESC(s5, "S5 ON-SCREEN host-data BITBLT (23C4h) in frame bank 1 after the 640x480-8 trial mode set: 1 = MONO colour expansion (opaque + transparent), 2 = HOSTCOL (UNPROVEN); dryrun=1 lists, dryrun=0 live=1 mode=640x480-8 runs once");
+
+static bool s6;
+module_param(s6, bool, 0444);
+MODULE_PARM_DESC(s6, "S6 dual window: PR0B + PR1 b3 (split) + PR31 b7 (read PR0A / write PR0B) readback-restore and data test in off-screen 50000h/70000h after the 640x480-8 trial mode set: dryrun=1 runs it on the model, dryrun=0 live=1 mode=640x480-8 runs once");
 
 /* s3=1, s4=1 or s5=1|2: the program run by s3_live() */
 static const struct wd24s3_prog *sprog = &wd24s3_prog3;
@@ -287,6 +293,17 @@ static ssize_t s3_read(struct file *f, char __user *b, size_t n, loff_t *p)
 
 static const struct proc_ops s3_ops = {
 	.proc_read = s3_read, .proc_lseek = default_llseek };
+
+static struct wd24s6 *s6st;
+static u8 *s6_save;
+
+static ssize_t s6_read(struct file *f, char __user *b, size_t n, loff_t *p)
+{
+	return s6st ? rd(b, n, p, s6st->log, s6st->loglen) : 0;
+}
+
+static const struct proc_ops s6_ops = {
+	.proc_read = s6_read, .proc_lseek = default_llseek };
 
 static const struct proc_ops live_ops = {
 	.proc_read = live_read, .proc_lseek = default_llseek };
@@ -632,6 +649,10 @@ static void free_all(void)
 	vfree(s2_txt);
 	s2st = NULL;
 	s2_txt = NULL;
+	vfree(s6st);
+	vfree(s6_save);
+	s6st = NULL;
+	s6_save = NULL;
 	vfree(s3st);
 	vfree(s3_txt);
 	vfree(s3_mem);
@@ -1175,6 +1196,90 @@ static int s3_fake_run(void)
 }
 #endif
 
+/* ---- S6: dual window ------------------------------------------------- */
+
+static int s6_alloc(void)
+{
+	s6st = vmalloc(sizeof(*s6st));
+	s6_save = vmalloc(WD24S6_NREG * WD24S6_N);
+	return s6st && s6_save ? 0 : -ENOMEM;
+}
+
+/* dryrun=1 listing and the QEMU fake build: the 86Box-semantics model */
+static int s6_model_run(void)
+{
+	struct wd24s6_model *mdl = vmalloc(sizeof(*mdl));
+	u8 *vr = vmalloc(0x100000);
+	struct wd24s6_io io = wd24s6_model_io;
+
+	if (!mdl || !vr || s6_alloc()) {
+		vfree(mdl);
+		vfree(vr);
+		return -ENOMEM;
+	}
+	wd24s6_model_init(mdl, vr);
+	io.priv = mdl;
+	wd24s6_run(s6st, &io, s6_save);
+	pr_info("S6 (model, no port access): %s\n", wd24s6_res_name(s6st->res));
+	vfree(mdl);
+	vfree(vr);
+	return 0;
+}
+
+static u8 s6_rd(void *priv, enum wd24_rf rf, u8 idx)
+{
+	return wd24_read(hw, rf, idx);
+}
+
+static int s6_wr(void *priv, enum wd24_rf rf, u8 idx, u8 v)
+{
+	return wd24_write(hw, rf, idx, v);	/* guarded, read back */
+}
+
+static void s6_mr(void *priv, u32 off, u8 *buf, u32 n)
+{
+	u32 i;
+
+	for (i = 0; i < n; i++)
+		buf[i] = readb(vmem + ((off + i) & (WD24_PLANE - 1)));
+}
+
+static void s6_mw(void *priv, u32 off, const u8 *buf, u32 n)
+{
+	u32 i;
+
+	for (i = 0; i < n; i++)
+		writeb(buf[i], vmem + ((off + i) & (WD24_PLANE - 1)));
+}
+
+static void s6_open(void *priv, bool on)
+{
+	hw->dual_open = on;
+}
+
+static const struct wd24s6_io s6_live_io = { s6_rd, s6_wr, s6_mr, s6_mw, s6_open, NULL };
+
+/* caller holds hw_lock; the trial mode is set and its timer queued */
+static void s6_live(const struct wd24_mode *m)
+{
+	if (!hw || hw->in_text || !hw->trial_pending || hw->nmismatch ||
+	    !m || strcmp(m->name, "640x480-8") || !vmem || hw->no_vram) {
+		pr_err("S6: not run: not in the 640x480-8 trial state\n");
+		return;
+	}
+	console_lock();
+	hw->be->begin(hw);
+	hw->tag = "S6: dual window (PR0B, PR1 b3, PR31 b7)";
+	wd24s6_run(s6st, &s6_live_io, s6_save);
+	hw->dual_open = false;
+	hw->be->end(hw);
+	console_unlock();
+	pr_info("S6: %s%s%s; PR0B rb %02x, PR1 on %02x off %02x, PR31 on %02x off %02x; register writes %u; details: /proc/wd24adv/s6\n",
+		wd24s6_res_name(s6st->res), s6st->why ? ": " : "", s6st->why ? s6st->why : "",
+		s6st->rb_pr0b, s6st->rb_pr1_on, s6st->rb_pr1_off, s6st->rb_pr31_on,
+		s6st->rb_pr31_off, s6st->nwr);
+}
+
 /* live: claim the ports, map A0000, save the text state */
 static int live_start(void)
 {
@@ -1239,6 +1344,21 @@ static int __init wd24adv_init(void)
 		pr_err("s3=1 / s4=1 / s5 are separate stages: s1=1 / s2=1 refused with them\n");
 		return -EINVAL;
 	}
+	if (s6 && (s1 || s2 || sx)) {
+		pr_err("s6=1 is a separate stage: s1-s5 refused with it\n");
+		return -EINVAL;
+	}
+#ifdef WD24S1_QEMU_FAKE
+	if (s6 && !dryrun && (live || *mode)) {
+		pr_err("QEMU fake build: s6=1 runs on the model only, without live=1\n");
+		return -EINVAL;
+	}
+#else
+	if (s6 && !dryrun && (!live || strcmp(mode, "640x480-8"))) {
+		pr_err("s6=1 with dryrun=0 needs live=1 mode=640x480-8\n");
+		return -EINVAL;
+	}
+#endif
 	if (s5 < 0 || s5 > 2) {
 		pr_err("s5 must be 1 (MONO) or 2 (HOSTCOL)\n");
 		return -EINVAL;
@@ -1267,7 +1387,7 @@ static int __init wd24adv_init(void)
 		return -EINVAL;
 	}
 #ifdef WD24S1_QEMU_FAKE
-	if (!dryrun && !live && !s1 && !s2 && !sx) {
+	if (!dryrun && !live && !s1 && !s2 && !sx && !s6) {
 #else
 	if (!dryrun && !live && !s1 && !s2) {
 #endif
@@ -1371,6 +1491,14 @@ static int __init wd24adv_init(void)
 		s3_plan_text();
 	}
 #ifdef WD24S1_QEMU_FAKE
+	if (s6 && (fails || s6_model_run())) {
+#else
+	if (s6 && (dryrun ? s6_model_run() : s6_alloc())) {
+#endif
+		free_all();
+		return -ENOMEM;
+	}
+#ifdef WD24S1_QEMU_FAKE
 	if (sx && !dryrun) {
 		if (fails || s3_fake_run()) {
 			free_all();
@@ -1416,6 +1544,7 @@ static int __init wd24adv_init(void)
 	    (s1 && !proc_create_data("s1", 0444, pdir, &s1_ops, NULL)) ||
 	    (s2 && !proc_create_data("s2", 0444, pdir, &s2_ops, NULL)) ||
 	    (sx && !proc_create_data(sprog->param, 0444, pdir, &s3_ops, NULL)) ||
+	    (s6 && !proc_create_data("s6", 0444, pdir, &s6_ops, NULL)) ||
 	    (live && (!proc_create_data("live", 0444, pdir, &live_ops, NULL) ||
 		      !proc_create_data("control", 0200, pdir, &control_ops, NULL)))) {
 		if (live && !hw_dead) {
@@ -1437,6 +1566,11 @@ static int __init wd24adv_init(void)
 	if (s2) {
 		pr_info("loaded, S2 %s; see /proc/wd24adv/s2\n",
 			dryrun ? "plan only (dry-run, no port access)" : "done, all restored inside insmod (no port region held)");
+		return 0;
+	}
+	if (s6 && !live) {
+		pr_info("loaded, S6 %s; see /proc/wd24adv/s6\n",
+			dryrun ? "run on the model (dry-run, no port access)" : "QEMU fake run on the model done");
 		return 0;
 	}
 	if (sx && !live) {
@@ -1465,6 +1599,11 @@ static int __init wd24adv_init(void)
 				s3_report("the mode set failed");
 			else
 				s3_live(m);
+			mutex_unlock(&hw_lock);
+		}
+		if (s6 && !err) {
+			mutex_lock(&hw_lock);
+			s6_live(m);
 			mutex_unlock(&hw_lock);
 		}
 	}

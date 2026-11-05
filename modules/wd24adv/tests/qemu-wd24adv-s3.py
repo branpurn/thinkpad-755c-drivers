@@ -41,7 +41,7 @@ def build_mod(kdir, dst, fake):
         if f.endswith((".c", ".h")) and not f.startswith("wd24adv_engine"):
             shutil.copy(os.path.join(src, f), dst)
     name = "wd24adv-qemufake" if fake else "wd24adv"
-    objs = "wd24adv_main.o wd24adv_core.o wd24adv_modes.o wd24adv_port.o wd24adv_s1.o wd24adv_s2.o wd24adv_s3.o"
+    objs = "wd24adv_main.o wd24adv_core.o wd24adv_modes.o wd24adv_port.o wd24adv_s1.o wd24adv_s2.o wd24adv_s3.o wd24adv_s6.o"
     with open(os.path.join(dst, "Kbuild"), "w") as f:
         f.write(f"obj-m += {name}.o\n{name}-y := {objs}\n")
         if fake:

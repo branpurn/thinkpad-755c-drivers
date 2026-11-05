@@ -559,6 +559,72 @@ with L7-L10 (restored, not dead); the format is then redesigned on the box.
 TIMEOUT: read the idle re-check line; IDLE seen: carry on. STILL BUSY / LOCKED:
 stop; no rmmod, no wd90c24fb load; save the files and power off.
 
+## S6: dual window, PR0A read / PR0B write (prepared 2026-11-04, box only, not run)
+
+Design doc section 7, stage S6 (the RAM-shadow S6 is parked). One load:
+`insmod wd24adv.ko dryrun=0 live=1 mode=640x480-8 s6=1`. Right after the
+PROVEN 640x480-8 trial mode set, under hw_lock + console_lock, the program in
+`wd24adv_s6.c` runs once:
+
+| step | what | writes |
+|---|---|---|
+| E | read PR0A PR0B PR1 PR31 GR06; need PR1 b3=0, PR1 b7:6=11, PR31 b7=0, GR06 b3:2=01, PR0A=0, else ENTRY (nothing written) | none |
+| save | 7 x 4 KiB off screen via PR0A (proven): Y=70000h +0/+1000/+2000, X=50000h +8000/+1000/+0/+2000 | PR0A |
+| prefill | 4 patterns, single window, read back (else MEM) | PR0A |
+| P1 | PR0B = 70h, read back | PR0B |
+| P2 | PR1 = PR1 or 08h (C5h -> CDh), read back | PR1 b3 |
+| D1 | A0000 must read Y+0, A8000 must read X+8000; write new patterns through both halves | memory |
+| P3 | PR31 = PR31 or 80h (5Dh -> DDh), read back | PR31 b7 |
+| D2 | read X+1000; write Y+1000 and re-read (still X); copy X+1000 -> Y+2000 | memory |
+| P4 | PR31 back, PR1 back, each read back (else RESTORE FAIL) | PR31, PR1 |
+| V | single window: verify all five results | PR0A |
+| restore | 7 regions written back and compared, PR0B and PR0A back | PR0A PR0B |
+
+The guard allows PR1 b3 and PR31 b7 only while this program runs
+(`dual_open`); the PR1 aperture bits b5:4 stay refused. 25 register writes.
+Results: OK (both), SPLIT ONLY, RW ONLY, NO DUAL WINDOW, ENTRY CHECK, REGISTER
+READBACK, MEMORY, RESTORE FAIL. The text restore at trial expiry also restores
+PR0B/PR1/PR31.
+
+What to see for ~15 s: the normal 640x480-8 pattern, with NO change (every
+access is off screen, above 4B000h); then text.
+
+Build: tc755x tree (kobj-vm86), vermagic `6.18.57-tc755x mod_unload 486`, sha256
+`e84364a8f5f8d2263bac6d15efb426fa78b3d52186eda4e12e36e03299891a11`.
+Tests: host test_s6 42/0 (86Box semantics OK; chip ignoring PR31 b7 -> SPLIT
+ONLY, ignoring PR1 b3 -> RW ONLY, ignoring both -> NONE, PR1 b3 not read back
+-> REGISTER READBACK, refused -> REGISTER READBACK, 5 entry refusals with zero
+writes; in every case all registers and all 1 MiB restored); host 94/0 (PR1 b3
+/ PR31 b7 refused outside S6); QEMU qemu-wd24adv-s6.py 19/19; S1-S5 and base
+QEMU unchanged.
+
+Exact serial lines (plog.sh each first; send each only after the previous
+returned to the prompt; never overlap; no retries):
+
+```
+pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
+kill <the Xfbdev PID printed above>
+echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo RM=$?
+dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$?
+S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = e84364a8001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s6=1; echo RC=$?; }
+sleep 20; cat /proc/wd24adv/s6 > /tmp/s6run.txt; cat /proc/wd24adv/live > /tmp/s6live.txt; grep -vE "^  write" /tmp/s6run.txt; dmesg | grep wd24adv
+rmmod wd24adv; echo RM=$?
+insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?
+( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & )
+i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X
+```
+
+Expected: G=e84364a8001, RC=0, `result: OK`, P1 PR0B readback 70, P2 PR1
+readback cd, P3 PR31 readback dd, P4 restore PR31 5d PR1 c5, all `0 bad`,
+`regions restored: 0 bytes differ`, screen unchanged, text back at expiry,
+RM=0, X-UP.
+
+Stop rules:
+- G line not matching: stop, send nothing more of S6 (L6-L7 not sent); L8-L10 to get X back.
+- SPLIT ONLY / RW ONLY / NO DUAL WINDOW / ENTRY CHECK / REGISTER READBACK / MEMORY: restored by design; save the files, carry on with L7-L10, report; redesign on the box.
+- RESTORE FAIL, any `DIFFERENT`/mismatch in /tmp/s6live.txt, a garbled screen that does not return to text at expiry, or a shell that does not return: stop; no rmmod, no wd90c24fb load, no reload; power off.
+- Interrupted call: check commands.log first; never re-send.
+
 ## Roll-up visual test (prepared 2026-11-04, run live 2026-11-04)
 
 One sequence, each PROVEN mode as its own load with the 15 s auto-revert

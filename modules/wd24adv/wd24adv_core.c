@@ -101,7 +101,11 @@ int wd24_guard(const struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 old, u8 val
 				return 0;
 			return (c->saved && val == c->bios.pr20) ? 0 : -EPERM;
 		case WD24_SR_PR30A:	/* hw.c 275 */
-		case WD24_SR_PR31:	/* hw.c 271 */
+			return 0;
+		case WD24_SR_PR31:	/* hw.c 271; b7 (R/W bank split) S6 only */
+			/* value-only rule: no extra read on the proven paths */
+			if ((val & WD24_PR31_RWSPLIT) && !c->dual_open && !(c->saved && val == c->bios.pr31))
+				return -EPERM;
 			return 0;
 		case WD24_SR_PR72:	/* hw.c 222/225, 256/260: 50h then P */
 			if (!c->pr72_open)
@@ -125,7 +129,13 @@ int wd24_guard(const struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 old, u8 val
 		case WD24_GR_PR3:	/* hw.c 246, 264 */
 			return 0;
 		case WD24_GR_PR1:	/* hw.c 254: mask C8h, aperture never */
-			return ((old ^ val) & WD24_PR1_APERTURE) ? -EPERM : 0;
+			if ((old ^ val) & WD24_PR1_APERTURE)
+				return -EPERM;
+			/* b3 (PR0B enable / window split): S6 only */
+			if ((val & WD24_PR1_PR0B) && !(old & WD24_PR1_PR0B) &&
+			    !c->dual_open && !(c->saved && val == c->bios.pr1))
+				return -EPERM;
+			return 0;
 		case WD24_GR_PR4:	/* hw.c 247, 266: bit 5 kept */
 			return ((old ^ val) & WD24_PR4_TRISTATE) ? -EPERM : 0;
 		case WD24_GR_PR5:	/* hw.c 187 unlock, 289 relock */
@@ -1241,6 +1251,8 @@ static const struct st_refuse st_refusals[] = {
 	{ WD24_SR, 0x21, 0x15, "refuse unknown SR21" },
 	{ WD24_GR, 0x0e, 0x60, "refuse PR4 b5 (panel tri-state)" },
 	{ WD24_GR, 0x0b, 0xd5, "refuse PR1 b5:4 (aperture)" },
+	{ WD24_GR, 0x0b, 0xcd, "refuse PR1 b3 (PR0B split) outside S6" },
+	{ WD24_SR, 0x11, 0xdc, "refuse PR31 b7 (R/W split) outside S6" },
 	{ WD24_GR, 0x0c, 0x01, "refuse PR2 write" },
 	{ WD24_GR, 0x0f, 0x07, "refuse GR0F other than 05/saved" },
 	{ WD24_AR, 0x15, 0x00, "refuse AR15" },

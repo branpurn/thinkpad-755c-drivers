@@ -258,7 +258,8 @@ Design for wd24adv:
      banked modes), uses `vmf_insert_pfn` for the window's 16 pages, and
      zaps the previously mapped bank's PTEs in every VMA;
    - it is single-bank at first (PR0A only). The PR0A/PR0B dual-window
-     read/write split is a later option (Q6).
+     read/write split is proven first as stage S6 (Q6); this mmap path is
+     parked as S6b.
    - So the fb software renderer draws straight into VRAM. The cost of an
      op is its own pixels plus about one fault per 64 KiB bank crossed
      (at pitch 640 a bank is about 102 lines).
@@ -422,14 +423,15 @@ General rules for all stages:
 | **S3** first blit, off screen | 640x480-8 under trial. FILL 8x8 in scratch (implemented at 60000h, see note), then 32x32, then COPY scratch → scratch. Wait after each op, VRAM readback vs model | The engine starts and stops within bound, and writes exactly the model's bytes and nothing outside | Screen untouched (the frame stays the test pattern). Timeout → latch + revert |
 | **S4** on-screen fill/copy | Same, but FILL bars onto the frame, then forward and backward overlapping COPYs. Checksum vs model, and the owner looks | Visible correctness, overlap direction, all ROPs used by X (copy, xor, and, or, invert, clear, set) | Trial revert |
 | **S5** host data | MONO expansion (opaque, then transparent), then HOSTCOL, small to 64x64, exact word counts | The host port neither stalls nor locks the bus, the bit order and packing are right, transparency works | Trial revert. Run only after S3/S4 are clean, because this is the riskiest op type |
-| **S6** fbdev + fault-banked mmap, **no accel** | Unaccelerated Xfbdev on wd24adv, started by hand (not via the boot autostart) | The CPU path is correct, there are no fault storms, and VT switch, exit and `kill -9` of the X PID all restore text | Last close → `restore_all`. wd90c24fb restored after |
-| **S7** X accel: FILL/COPY | `wd24accel` with fill/copy only, behind an env flag (`WD24ACCEL=1`) | Real desktop correctness (moving and scrolling windows, jwm), and that SYNC discipline holds | Unset the flag → S6 behaviour. `accel_dead` → CPU path |
+| **S6** dual window (box-proven first) | 640x480-8 under trial, `s6=1`. Read-only entry check, PR0B write + readback, PR1 b3 (split: A0000-A7FFF -> PR0B, A8000-AFFFF -> PR0A+8000h) + readback, PR31 b7 (reads PR0A, writes PR0B) + readback, data test reading bank X (50000h) while writing bank Y (70000h), all off screen, verified in single-window mode, everything restored | That the C24 implements the PR0B split and the R/W split as the data sheet and the public 86Box model say, with exact readback and restore of PR1/PR31. Answers Q6 | The guard opens PR1 b3 / PR31 b7 only during this program (`dual_open`); restore inside the stage, then trial revert (restores PR0B/PR1/PR31). **Prepared on the box 2026-11-04: host test_s6 42/0, QEMU 19/19; not run.** The earlier S6 plan (fbdev + fault-banked mmap with a RAM shadow) is **parked**: the banked-mmap path has a fault-livelock hole (two pages in different banks touched by one instruction), and with CONFIG_FRAMEBUFFER_CONSOLE=y (no deferred takeover) registering an fbdev would bind fbcon. It returns after S6 as a later stage |
+| **S6b** fbdev + fault-banked mmap, **no accel** (parked) | Unaccelerated Xfbdev on wd24adv, started by hand (not via the boot autostart) | The CPU path is correct, there are no fault storms, and VT switch, exit and `kill -9` of the X PID all restore text | Last close → `restore_all`. wd90c24fb restored after |
+| **S7** X accel: FILL/COPY | `wd24accel` with fill/copy only, behind an env flag (`WD24ACCEL=1`) | Real desktop correctness (moving and scrolling windows, jwm), and that SYNC discipline holds | Unset the flag → S6b behaviour. `accel_dead` → CPU path |
 | **S8** X accel: text and PutImage | MONO for core text, HOSTCOL for PutImage | rxvt and jwm text correct and faster than the S7 CPU text path (measured in our own terms) | Same |
 | **S9** hardware cursor | `WD24ADV_IOC_CURSOR` from kdrive | The cursor's shape, hot spot and movement are right, and it is off in text mode after every exit path | Software cursor fallback |
 | **S10** offscreen pool | Pixmap migration and (if Q2) a glyph cache | Pool correctness, VT-switch loss handling, eviction | Pool disabled → S9 behaviour |
 | **S11** default | Owner-chosen boot option (e.g. cmdline `wd24adv`). wd90c24fb remains the default and the fallback | Boot path, fallback when wd24adv refuses to load | Remove the cmdline flag |
 
-Status 2026-11-05 UTC: S5 s5=1 (MONO) run live 2026-11-05 UTC: OK, 8/8 verified; s5=2 (HOSTCOL) run live 2026-11-05 UTC: OK 4/4, 1c7b21b0; HOSTCOL format PROVEN. See WD24ADV-LIVE-TEST.md S5.
+Status 2026-11-04: S6 = dual window, prepared on the box (not run); RAM-shadow S6 parked (git stash only, never committed). Earlier: S5 s5=1 (MONO) run live 2026-11-05 UTC: OK, 8/8 verified; s5=2 (HOSTCOL) run live 2026-11-05 UTC: OK 4/4, 1c7b21b0; HOSTCOL format PROVEN. See WD24ADV-LIVE-TEST.md S5.
 
 
 Moving from wait-after-every-op to wait-before-program (§3.4) is a separate
@@ -463,7 +465,12 @@ mini-gate between S8 and S9.
 - **Q6. Dual window.** Should the PR0A/PR0B dual window (separate read and
   write banks) be used to halve fault traffic for copy-like fallbacks? It
   needs the PR1 split. Is that already within the whitelist without the
-  aperture bits?
+  aperture bits? Answer (box, 2026-11-04): the bits needed are PR1 b3
+  (PR0B enable, split by window half) and PR31 (SR11) b7 (read PR0A / write
+  PR0B over the whole window); PR1 b7:6 (memory size) and b5:4 (aperture)
+  are never changed. Neither bit was in the whitelist; the guard now refuses
+  both except during stage S6 (`dual_open`) and when restoring the BIOS
+  value. PR0A/PR0B hold bits 6:0 (reach 0-7FFFFh). Live proof: stage S6.
 - **Q7. Completion IRQ.** Does the 755C wire up an engine-complete IRQ?
   It's assumed not.
 - **Q8. Fault-banking cost.** What does fault-driven banking cost on this
