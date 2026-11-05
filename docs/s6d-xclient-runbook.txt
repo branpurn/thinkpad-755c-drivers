@@ -1,0 +1,57 @@
+Next client trial. Not started. One script, not a reset stress test.
+Script: docs/s6d-xclient-run.sh
+Client source: modules/wd24adv/tests/wd24x-client.c
+Raw client: /opt/cursor/artifacts/wd24x-client
+sha256 d846aa0153c59017072118e142d075502cd0332d720527b0255f4a422a021179
+size 34324 bytes
+Built with i486-linux-musl-gcc 11.2.1 -static -march=i486 -mtune=i486 -Os.
+ELF static-pie, no interpreter, cmov count 0. No libX11.
+
+XMODEM the client to /tmp/wd24x-client and chmod 755.
+XMODEM the script to /tmp/wd24x-run.sh and run sh /tmp/wd24x-run.sh
+The extractor, both archives, and the module are already the checked
+files. The script extracts them again only if the trees are missing.
+It checks the client hash and the xkbcomp hash with sha256sum and no -c.
+
+The script starts X as
+  Xfbdev :1 -nolisten tcp -noreset -fb /dev/fb0
+No -ac. The client connects to /tmp/.X11-unix/X1. If HOME/.Xauthority
+or XAUTHORITY has a MIT-MAGIC-COOKIE-1 for display 1, the client sends
+it. If not, it sends no authorization name. That is the server default
+when it was started without -auth: local host access stays enabled.
+Do not pass -ac.
+
+Default last-client behavior sets DE_RESET. The server then runs
+InitOutput again. -noreset sets that flag to 0, so the client exit
+does not start a second generation. The script sends one SIGTERM
+after the client. There is no second X start.
+
+The client draws five 8x8 rectangles, one inside each 64 KiB window
+at pitch 640, indices 1, 2, 4, 14 and 15. It does not call StoreColors.
+GetImage reads the server pixmap. On this Xfbdev that pixmap is the
+RAM shadow, not the banked VRAM. A match line proves the protocol and
+the shadow. It does not prove the panel. After the client, one
+/proc/wd24adv/s6d read is the bank evidence. The panel stays operator
+only.
+
+Pass line, exact:
+  WD24X-CLIENT shadow 640x480x8 rects 5 match 5
+and CL=0, then TERM of X, reap, expiry 0, in_text 1, empty /proc/fb,
+VGA+ bind 1, rmmod 0, shell answers. faults may rise. thrash must
+stay 0.
+
+Client failure, a client that is still alive after 20 s, or a fatal
+X line: the script stops. Do not start X again in that sitting.
+
+The client alarm is 15 s. The script's client wait is 20 s, then
+SIGTERM, 2 s, and if the state is still live one SIGKILL and 5 s.
+It does not wait on a live state. X TERM uses the same reap. The
+15 s readiness plus these waits stay inside trial=180.
+
+Offline, qemu-i386 8.2.2 -cpu 486, against Xvfb :7 -screen 0
+640x480x8 -nolisten tcp -noreset, no -ac. Client stdout was
+WD24X-CLIENT shadow 640x480x8 rects 5 match 5 and RC 0.
+The same client against Xvfb 800x600x8 printed
+WD24X-CLIENT bad geom 800x600x8 bpp 8 and RC 1.
+Xvfb is not wd24s6d and not the panel. Its GetImage is also a RAM
+pixmap. That run does not prove VRAM.

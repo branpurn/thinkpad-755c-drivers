@@ -74,7 +74,11 @@ test_s6d_fault: test_s6d_fault.c ../wd24adv_s6d_fault.h ../wd24adv_s6d_bank.h ..
 wd24s6d-mmap: wd24s6d-mmap.c ../wd24adv_s6d_fault.h ../wd24adv_s6d_bank.h ../wd24adv_s6d_thrash.h
 	$(CC) $(CFLAGS) -o $@ wd24s6d-mmap.c
 
+# i486 static build is separate. Not part of `make test`.
+wd24x-client: wd24x-client.c
+	$(CC) $(CFLAGS) -o $@ wd24x-client.c
+
 clean:
-	rm -f test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test_s5 test_s6 test_s6b test_s6d_bank test_s6d_thrash test_s6d_fault test_dead wd24s6d-mmap
+	rm -f test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test_s5 test_s6 test_s6b test_s6d_bank test_s6d_thrash test_s6d_fault test_dead wd24s6d-mmap wd24x-client
 
 .PHONY: test clean

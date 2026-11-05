@@ -293,3 +293,30 @@ cursor stopped briefly and resumed. That is not the diagnosis.
 The string "Errors from xkbcomp are not fatal to the X server" is an
 argument passed to xkbcomp. It is not a server policy. This start had
 no xkbcomp, so the compile failed and core-device init called FatalError.
+
+---
+
+## X headless lifecycle — one pass, no client
+
+Same module 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36.
+Xfbdev 6450171476a8e6aa91883744947423db123c74a042d697f9263b686dcb2f9f13.
+xkb archive 5d2203659fffd031f85715e3ce29a7be987c04bc231e36574e6fb748147e9cb2.
+xkbcomp 5ebf28e8823a5165efb0a2a0b997d2218ebbaa24ddb5abd76160643a939a5f62.
+rules/evdev 43a2ee6f57dd6a3217b4bba6dc2126bd8b27ea3ac5532e880b0be5d6ea30c668.
+MemAvailable before the trial was 19876 KiB. No swap.
+insmod 0. fb0, no fbcon bind. /proc/fb listed wd24s6d.
+X pid 431 was alive, state S, after 15 s.
+dmesg: S6d: session ON (fb open).
+The log had "can't get colormap: Invalid argument" and the xkbcomp
+warnings for unresolved XF86 keysyms. It did not have
+"Failed to compile keymap", "Failed to activate core devices", or
+"Fatal server error".
+SIGTERM of that pid returned 0. The process was then gone. The shell
+reported the child done. A following wait returned 127 because the
+child was already reaped. No other signal.
+S6d: end (fb release): faults 5 switches 5 thrash 0 latched 0.
+Trial expiry 0, mismatches 0, in_text 1, armed 0, fb_reg 0.
+/proc/fb empty. VGA+ bind 1. rmmod 0. The shell answered.
+No pixel, protocol, or input claim. The trees were removed after the
+logs. The archives and the module stayed in RAM.
+
