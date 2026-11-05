@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "vgamodel.h"
+#include "../wd24adv_dac_entry.h"
 
 static int fails, passes;
 #define T(cond, what) do { if (cond) passes++; else { fails++; \
@@ -312,6 +313,40 @@ int main(void)
 		  c.hw_index - i0 <= 3, "13h pattern with BIOS PR0A != 0: refused, nothing drawn");
 	}
 	RUN(wd24_trial_expire(&c));
+
+	/* One DAC entry on a copy of the image. The saved snapshot stays.
+	 * Full restore writes that snapshot and readback-compares 6 bits.
+	 * This does not add the call to the loaded module. */
+	setup(VM_WD24, 80);
+	err = RUN(wd24_plan_load(&c));
+	T(err == 0 && !memcmp(c.cmap, m.dac, 768), "dac entry: load snapshot matches");
+	{
+		struct wd24_dac_entry e;
+		u8 saved[768];
+
+		T(wd24_dac_entry(256, 0, 0, 0, &e) == -22, "dac entry: regno 256 refused");
+		T(wd24_dac_entry(1, 0xffff, 0x8000, 0x0400, &e) == 0, "dac entry: regno 1 accepted");
+		T(e.index == 1 && e.pel == 0xff && e.rgb[0] == 0x3f &&
+		  e.rgb[1] == 0x20 && e.rgb[2] == 0x01, "dac entry: 6-bit channels");
+		memcpy(saved, c.cmap, 768);
+		{
+			u8 before[768];
+			unsigned int n, diff = 0;
+
+			memcpy(before, m.dac, 768);
+			wd24_dac_entry_store(m.dac, &e);
+			for (n = 0; n < 768; n++)
+				diff += (m.dac[n] != before[n]);
+			T(diff == 3 && m.dac[3] == 0x3f && m.dac[4] == 0x20 &&
+			  m.dac[5] == 0x01,
+			  "dac entry: exactly three bytes change in the working image");
+		}
+		T(!memcmp(c.cmap, saved, 768), "dac entry: saved snapshot untouched");
+		err = RUN(wd24_restore_cmap(&c));
+		T(err == 0 && c.nmismatch == 0 && m.violations == 0 &&
+		  !memcmp(m.dac, snap.dac, 768),
+		  "dac entry: full restore puts the snapshot back");
+	}
 
 	printf("wd24adv vga model test: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;

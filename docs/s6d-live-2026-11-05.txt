@@ -343,3 +343,48 @@ No physical input. No panel or color claim.
 The client, the extracted trees, and the script were removed afterward.
 The archives and the module stayed in RAM.
 
+---
+
+## Watched repeat of the same client — one pass, four squares seen
+
+Same client d846aa0153c59017072118e142d075502cd0332d720527b0255f4a422a021179,
+same script 10ee2f199d743c5650432d153940f6cd02aa793b19d8c1e4bf9c05e9071842f4,
+same module 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36.
+Nothing was rebuilt.
+Script status 0. insmod 0. X pid 641. Client pid 648. Client status 0.
+Stdout: WD24X-CLIENT shadow 640x480x8 rects 5 match 5.
+Mid-run /proc/wd24adv/s6d: faults 15 switches 15 thrash 0 latched 0,
+armed 1 active 1 stopping 0 busy 1 fb_reg 1 bind_param 0.
+SIGTERM 0. wait 0.
+Release counters stayed 15, 15, and 0.
+Expiry 0, mismatches 0, in_text 1. /proc/fb empty. VGA+ bind 1.
+No X process and no client process. rmmod 0. Only fb and font loaded.
+The shell answered. MemAvailable after that was 20916 KiB.
+The log had the known colormap error, the XF86 keysym warnings, and
+"Can't deallocate console 3 Resource busy". No fatal line.
+The client, script, extracted trees, and the :1 socket were removed.
+The extractor, the archives, and the module stayed.
+
+Two photographs, in order. The first shows a narrow band of vertical
+stripes at the top, a white band, a large blue field with three
+colored squares, and a dark bottom with speckles. The second shows a
+blue field and four small squares near the left. The operator said the
+artifacts cleared after a few seconds. Four squares were visible.
+That is panel evidence that X drawing reached the glass. It is not
+evidence that all five rectangles were visible, and it does not
+identify palette hues. A guess that index 1 matches the field is
+only a guess.
+
+insmod selects 640x480-8 before X exists, so the panel scans the
+frame that is already there. Xfbdev later copies damage from its RAM
+shadow into the mmap, one box at a time. Those are the two steps.
+They are not a register diagnosis for the stripes.
+
+"Can't deallocate console 3 Resource busy" is fprintf from Xfbdev
+LinuxFini, after that VT fd is closed, when VT_DISALLOCATE fails.
+In linux 6.18.57 vt_disallocate returns -EBUSY when that console is
+in use, is the foreground, or has a selection. The log does not say
+which. LinuxFini runs while the server is leaving, including after
+SIGTERM. This run had no fatal line, and text restore and rmmod
+still completed.
+
