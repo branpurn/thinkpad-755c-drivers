@@ -105,3 +105,49 @@ Open issues (box-only follow-ups; leave 755C idle):
 - fbcon bind wiped pattern to white
 - restore path needs fix (avoid serial overlap / hanging head on proc;
   consider fbcon bind strategy)
+
+---
+
+## Box follow-up 2026-11-05 ~19:20 UTC — root cause + safer restore (755C untouched)
+
+### Why pattern=0 produced a green line roll (not colour bars)
+
+`pattern` is a **bool** module param (default 1), not a pattern id:
+  - `pattern=1` → after mode set, `wd24_pattern()` draws 16 vertical BIOS-text-colour
+    bars over the whole 640x480 frame (banks 0-4; reversed from row >= 256 KiB).
+  - `pattern=0` → skip `wd24_pattern` entirely (`hw_run` OP_MODE: only call when
+    `pattern && wd24_has_pattern(m)`).
+
+The READY command in WD24ADV-NEXT-STAGE intentionally used `pattern=0` to
+"avoid colour-bar path" so the first S6d visual proved arm/register alone.
+So no bars was correct for that command — not a wrong pattern id.
+
+What Brandon saw instead:
+  1. Mode set leaves VRAM without bars (pattern skipped).
+  2. `s6d_arm` → `register_framebuffer` → fbcon binds (CONFIG_FRAMEBUFFER_CONSOLE=y,
+     no DEFERRED_TAKEOVER).
+  3. fbcon clear/redraw calls `s6d_fillrect` / `s6d_imageblit`: pixel-by-pixel
+     `writeb` under `hw_lock`, banked via SETWIN. That paints **line-by-line**
+     slowly across the panel → the green roll (BIOS text DAC still loaded;
+     S6d has no `fb_setcolreg` yet, so fbcon colour indices hit the leftover
+     DAC — often reads as green on this panel).
+  4. Further fbcon clear → white; then imageblit of the TTY line (80x30).
+
+### Why serial/keyboard died
+
+`/proc/wd24adv/live` took `mutex_lock(&hw_lock)`. During/after fbcon bind,
+fillrect holds that lock for a long paint. Overlapping POST `head` of
+`/proc/wd24adv/*` blocked on the mutex → serial shell hung. Keyboard shell
+also non-functional after the fbcon switch; power cycle needed.
+
+### Box fixes (this follow-up)
+
+  - `live_read`: `mutex_trylock`; if busy, return a short non-blocking message
+    (never hang `head`/`cat`).
+  - `control_write`: `mutex_trylock` → `-EAGAIN` if busy (restore cmds retry).
+  - `s6d_fbcon` (bool, default 1): `0` arms dual-window but skips
+    `register_framebuffer` so bars/`pattern` stay for the trial window.
+  - Docs: pattern is bool; no-overlap rule for /proc during visual; next LIVE
+    steps in WD24ADV-NEXT-STAGE.md (Brandon watching required).
+
+ko (restore-safe) sha256 d8b06a80695cb8bf47ad5b00ec628e8ce653b723c720303205e959f8a0c5b06c

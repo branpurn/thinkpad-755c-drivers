@@ -200,13 +200,15 @@ read-only font-plane compare.
 
 ### READY FOR LIVE / ready for visual — exact next command
 
-Brandon watching the panel; `font`+`fb` already loaded; serial idle at `root@box:~#`:
+**Superseded by "Recommended next LIVE" at the end of this file** (after the
+fix_sr06 PASS). Historical first-visual line used `pattern=0` on purpose to
+skip bars and prove arm/register only — that is why Brandon saw no colour bars.
 
-```
-insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0
-```
+Brandon watching the panel; `font`+`fb` already loaded; serial idle at `root@box:~#`.
+For **bars without fbcon wipe** use `pattern=1 s6d_fbcon=0 fix_sr06=1` (see end).
+For **full register/fbcon** use `pattern=1 s6d_fbcon=1 fix_sr06=1` and do not
+touch `/proc` until `RC=` returns.
 
-(`pattern=0` avoids colour-bar path; S6d arm registers fbdev after the mode set.)
 Stop on thrash latch, register mismatch, trial restore fail, or any unexpected panel/routing change.
 
 ### Live attempt 2026-11-05 ~11:57 America/New_York — **FAILED RC=19**
@@ -250,3 +252,63 @@ ko sha256 `63dc2654…`; commit `9ad254f`. See `docs/s6d-live-2026-11-05.txt`.
 **Verdict:** S6d PASS for arm/register + mode set. Open (box-only; leave 755C idle):
 pattern=0 vs expected bars; fbcon wipe-to-white; restore hang / serial overlap /
 fbcon bind strategy.
+
+### Box follow-up 2026-11-05 ~19:20 UTC (755C untouched) — root cause + safer path
+
+**pattern=0 is not a wrong id.** `pattern` is a **bool** (default 1):
+`1` = draw 16 roll-up colour bars via `wd24_pattern()` after the mode set;
+`0` = skip bars. The READY line used `pattern=0` on purpose ("avoid colour-bar
+path"). No bars on that run was correct.
+
+**Green line-by-line roll** = fbcon bind after `register_framebuffer` →
+`s6d_fillrect`/`s6d_imageblit` painting pixel-by-pixel (banked `writeb`) under
+`hw_lock`. BIOS text DAC still loaded (no `fb_setcolreg` yet) → clear colour
+often reads green; then white; then the 80x30 TTY line.
+
+**Serial hang** = overlapping POST `head` of `/proc/wd24adv/*` while fbcon
+paint held `hw_lock` on the blocking `live_read` path.
+
+**Code changes (rebuild staged):**
+| Change | Effect |
+|---|---|
+| `live_read` → `mutex_trylock` | busy → short message; `head` never hangs |
+| `control_write` → `mutex_trylock` | busy → `-EAGAIN`; retry restore |
+| `s6d_fbcon` (bool, default 1) | `0` = arm dual-window, **skip** `register_framebuffer` so pattern stays |
+
+ko sha256 `d8b06a80695cb8bf47ad5b00ec628e8ce653b723c720303205e959f8a0c5b06c`
+(staged `modules/wd24adv/wd24adv.ko` and `out-s6d-exports/xfer/wd24adv-s6d.ko`).
+Host tests: test_vga 70/0, test_s6d_bank 15/15, test_s6d_thrash 54/54, full wd24adv-test green.
+
+#### No-overlap rule (run notes — mandatory)
+
+After any `s6d=1` visual insmod (especially with `s6d_fbcon=1`):
+1. Wait for the shell `RC=?` (or trial expiry) **before** any `/proc` read.
+2. Never `head`/`cat` `/proc/wd24adv/*` while fbcon is painting.
+3. Prefer: `sleep 2; cat /proc/wd24adv/live` once; if "hw busy", sleep and retry.
+4. One serial line at a time; no overlapping POST.
+
+#### Recommended next LIVE (Brandon watching — do NOT run until then)
+
+755C idle until Brandon OK. Prefer the **pattern-visible** prove first:
+
+```
+# A. Bars stay (no fbcon wipe) — expect 16 colour bars for trial window
+dmesg -c >/dev/null
+insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=1 fix_sr06=1 s6d_fbcon=0
+echo RC=$?
+# wait for trial revert OR: echo text > /proc/wd24adv/control  (retry if EAGAIN)
+# THEN: cat /proc/wd24adv/live; rmmod wd24adv
+```
+
+```
+# B. Full S6d register path (fbcon will bind and wipe) — expect brief bars
+#    then green/white fbcon paint then 80x30; do NOT touch /proc until RC=
+dmesg -c >/dev/null
+insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=1 fix_sr06=1 s6d_fbcon=1
+echo RC=$?
+# wait fully idle; then short /proc read; trial restore / rmmod
+```
+
+Stop on: thrash latch, register mismatch, restore fail, panel/routing oddity.
+Still open (not this patch): `fb_setcolreg` so fbcon colours match; faster
+fillrect; optional vtcon unbind after register.

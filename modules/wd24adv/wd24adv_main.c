@@ -37,6 +37,12 @@
  *   /proc/wd24adv/s5       - s5=1|2 only: the S5 host-data list (dryrun=1) or result
  *   /proc/wd24adv/s6       - s6=1 only: the S6 dual-window proof (dryrun=1: run on the model) or result
  *   /proc/wd24adv/s6b      - s6b=1 only: S6b session log (/dev/wd24s6b, dual-window mmap + copy)
+ *   /proc/wd24adv/live     - live log; read uses trylock (never blocks on fbcon paint)
+ *
+ * S6d: s6d=1 arms after 640x480-8; s6d_fbcon=1 (default) register_framebuffer
+ * (fbcon binds). s6d_fbcon=0 skips register so pattern stays. pattern is a
+ * bool (1=bars, 0=skip), not a pattern id. Never overlap serial /proc reads
+ * with the visual/fbcon phase.
  *
  * S1 (s1=1 dryrun=0, never with live=1 or mode=): after the same read-only
  * entry check, a read-only probe of the 23C0h register blocks
@@ -111,7 +117,7 @@ MODULE_PARM_DESC(mode, "live: set this PROVEN mode right after load (trial appli
 
 static bool pattern = true;
 module_param(pattern, bool, 0444);
-MODULE_PARM_DESC(pattern, "live: draw 16 colour bars after a packed or 320x200 mode set (default 1)");
+MODULE_PARM_DESC(pattern, "live: bool — 1 (default) draw 16 roll-up colour bars after packed/320x200 mode set; 0 skip bars (NOT a pattern-id). With s6d=1+fbcon, bars are brief then wiped");
 
 static bool allow_routing;
 module_param(allow_routing, bool, 0444);
@@ -271,9 +277,16 @@ static const struct proc_ops self_ops = {
 
 static ssize_t live_read(struct file *f, char __user *b, size_t n, loff_t *p)
 {
+	/* Never block: fbcon fillrect/imageblit can hold hw_lock for a long
+	 * pixel-by-pixel paint. Overlapping head/cat of /proc during visual
+	 * hung the serial shell on the S6d live (2026-11-05). */
+	static const char busy[] =
+		"wd24adv: hw busy (draw/mode/fbcon holds lock); retry -- "
+		"do not overlap /proc reads with visual\n";
 	ssize_t r;
 
-	mutex_lock(&hw_lock);
+	if (!mutex_trylock(&hw_lock))
+		return rd(b, n, p, busy, sizeof(busy) - 1);
 	r = rd(b, n, p, live_txt, live_len);
 	mutex_unlock(&hw_lock);
 	return r;
@@ -316,10 +329,14 @@ MODULE_PARM_DESC(s6b, "S6b: /dev/wd24s6b explicit dual-window mmap (A0000 half =
 
 static bool s6d;
 module_param(s6d, bool, 0444);
-MODULE_PARM_DESC(s6d, "S6d: fault-banked fbdev (640x480-8) using S6b dual-window + thrash latch; dryrun=0 live=1 mode=640x480-8; BINDS fbcon (visual) — Brandon must watch");
+MODULE_PARM_DESC(s6d, "S6d: fault-banked fbdev (640x480-8) using S6b dual-window + thrash latch; dryrun=0 live=1 mode=640x480-8; with s6d_fbcon=1 (default) BINDS fbcon (visual) — Brandon must watch; s6d_fbcon=0 skips register");
 static unsigned int s6d_thrash_bound = WD24S6D_THRASH_BOUND_DEFAULT;
 module_param(s6d_thrash_bound, uint, 0444);
 MODULE_PARM_DESC(s6d_thrash_bound, "S6d: consecutive window-switch bound before thrash latch (default 32)");
+
+static bool s6d_fbcon = true;
+module_param(s6d_fbcon, bool, 0444);
+MODULE_PARM_DESC(s6d_fbcon, "S6d: 1 (default) register_framebuffer (fbcon binds, visual wipe); 0 arm dual-window only — no fbdev/fbcon, pattern stays for trial");
 
 static struct wd24s6 *s6st;
 static u8 *s6_save;
@@ -632,7 +649,9 @@ static ssize_t control_write(struct file *f, const char __user *b, size_t n,
 	cmd[k] = 0;
 	while (k && (cmd[k - 1] == '\n' || cmd[k - 1] == ' '))
 		cmd[--k] = 0;
-	mutex_lock(&hw_lock);
+	/* trylock: same hang class as live_read during fbcon paint */
+	if (!mutex_trylock(&hw_lock))
+		return -EAGAIN;
 	if (!hw)
 		err = -ENODEV;
 	else if (hw_dead)
@@ -2084,6 +2103,15 @@ static void s6d_arm(const struct wd24_mode *m)
 	}
 	s6d_st->active = true;
 	s6d_busy = true;
+	if (!s6d_fbcon) {
+		/* Dual-window armed; no fbdev node → no fbcon wipe. Pattern
+		 * (if pattern=1) stays for the trial window. Matches design
+		 * optional "no bind" proof path; default remains register. */
+		s6d_st->fb_reg = false;
+		pr_info("S6d: armed WITHOUT register_framebuffer (s6d_fbcon=0; no fbcon; pattern stays); thrash bound %u\n",
+			s6d_thrash_bound);
+		return;
+	}
 	/* drop hw_lock around register_framebuffer (fbcon may call fb_open) */
 	mutex_unlock(&hw_lock);
 	err = register_framebuffer(s6d_info);
