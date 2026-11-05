@@ -1,0 +1,135 @@
+S4 live run - ThinkPad 755C, 2026-11-05 ~01:25-01:50 UTC (2026-11-04 20:25-20:50 EST)
+Module: wd24adv.ko @373a365, sha256 7b33b083c012e43a8fde302a28cfb4b4d18fb590f5ff30ec3d4e735d65894607
+Sequence: docs/WD24ADV-LIVE-TEST.md "S4" section, lines L1-L10 + wd24probe3 baseline, one at a time.
+
+RESULT
+- S4 result: OK, 11/11 ops VERIFIED, idle polls 0 each, busy seen each op.
+- 23C2h writes 139 (starts 11), PR0A writes 15, refusals 0, restore 1002/1002 equal, restore fails 0.
+- Trial expired back to text (mismatches 0). rmmod RM=0, wd90c24fb reload RC=0, X up (Xfbdev 868).
+- Baseline wd24probe3: RC=19, 3CC=E3 GR0F=05 GR0E=01 CR11=8C CR29=85 CR34=A0 PR18=C7 PR19=54 SR06=0F, result=ok. Matches.
+
+OWNER OBSERVATION
+Brandon photographed the S4 frame on the panel: "Not sure what intent was but this is the visual".
+
+PHOTO vs MODEL (photo scale ~1.34 photo px per screen px)
+- Fills row y=112-127: seven 64x16 blocks at x=16,96,176,256,336,416,496 present, spaced as modelled.
+  op1 SRC: solid single colour (red). OK.
+  op2 XOR: two colours split at bar edge x=120 (pink|red). Expected: XOR over two bars gives two results. OK.
+  op3 AND 30: uniform dark. OK.
+  op4 OR 38: split at bar edge x=280 (yellow|white). OK.
+  op5 INVERT, op6 CLEAR, op7 SET: all render near-black. CLEAR=00 expected black. INVERT/SET give
+    indices >3F (e.g. FF, FA, EB) whose DAC entries are unprogrammed/black, so dark is consistent;
+    the photo cannot distinguish them. Not a mismatch, but not visually verifiable.
+- Copies: bar-edge notches visible exactly where modelled:
+  op8 left-shift 8px at x~40-168 y~146-169; op9 right/down shift at x~308-436 y~154-177;
+  op10 right shift at x~468-588 y184-199; op11 left shift at x~40-160 y184-199.
+- No mismatch found. Note: frame is the per-op design (test strips), so "intent" is register/BLT
+  verification, not a picture.
+
+COMMANDS.LOG (serial host)
+2026-11-04 20:25:52 EST  S4 copy prep: read-only state check
+2026-11-04 20:25:52 EST  slow: echo Q1; uptime; cut -d" " -f1,3 /proc/modules | tr "\n" " "; echo; cat /proc/fb; pidof Xfbdev; sha256sum /tmp/*.ko | cut -c1-8; echo Q2 CR
+2026-11-04 20:26:33 EST  copy: send wd24adv.ko 373a365 (sha 7b33b083) to 755C /tmp/wd24adv.ko (replaces 9c77fe90); no load
+2026-11-04 20:26:34 EST  host: SIGSTOP logger 64434; send-file.sh /tmp/wd24adv-373a365.ko -> /tmp/wd24adv.ko (38400)
+2026-11-04 20:27:26 EST  host: SIGCONT logger 64434
+2026-11-04 20:27:32 EST  S4 L1: read-only X check
+2026-11-04 20:27:33 EST  slow: pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt" CR
+2026-11-04 20:27:55 EST  S4 L2: kill 798
+2026-11-04 20:27:56 EST  slow: kill 798 CR
+2026-11-04 20:28:08 EST  S4 L3: text=1, rmmod wd90c24fb
+2026-11-04 20:28:08 EST  slow: echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo RM=$? CR
+2026-11-04 20:28:36 EST  S4 L4: quiet console
+2026-11-04 20:28:36 EST  slow: dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$? CR
+2026-11-04 20:28:56 EST  S4 L5: gate 7b33b083001 then insmod wd24adv.ko dryrun=0 live=1 mode=640x480-8 s4=1 (once)
+2026-11-04 20:28:57 EST  slow: S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 7b33b083001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s4=1; echo RC=$?; } CR
+2026-11-04 20:30:18 EST  S4 L6: save + read results
+2026-11-04 20:30:18 EST  slow: sleep 20; cat /proc/wd24adv/s4 > /tmp/s4run1.txt; cat /proc/wd24adv/live > /tmp/s4live1.txt; grep -E "S4 result|op [0-9]+ |DEAD|idle|restore:|writes" /tmp/s4run1.txt; dmesg | grep wd24adv CR
+2026-11-04 20:33:59 EST  S4 L7: rmmod wd24adv
+2026-11-04 20:34:00 EST  slow: rmmod wd24adv; echo RM=$? CR
+2026-11-04 20:34:16 EST  S4 L8: insmod wd90c24fb
+2026-11-04 20:34:16 EST  slow: insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$? CR
+2026-11-04 20:34:46 EST  S4 L9: startx
+2026-11-04 20:34:46 EST  slow: ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & ) CR
+2026-11-04 20:35:24 EST  S4 L10: wait X
+2026-11-04 20:35:25 EST  slow: i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X CR
+2026-11-04 20:37:08 EST  S4 baseline: wd24probe3
+2026-11-04 20:37:08 EST  slow: pidof Xfbdev >/dev/null && { dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u; } CR
+
+RAW SERIAL
+user@host:~# echo Q1; uptime; cut -d" " -f1,3 /proc/modules | tr "\n" " "; echo; 
+cat /proc/fb; pidof Xfbdev; sha256sum /tmp/*.ko | cut -c1-8; echo Q2
+Q1
+ 21:25:37 up  5:08,  load average: 0.14, 0.08, 0.02
+wd90c24fb 2 evdev 0 mousedev 1 psmouse 0 syscopyarea 1 sysfillrect 1 vgastate 1 sysimgblt 1 fb_sys_fops 1 fb 70 font 1 serial_cs 0 pata_pcmcia 1 pcmcia 2 firmware_class 1 i82365 0 pcmcia_rsrc 1 pcmcia_core 3 
+0 WD90C24
+798
+9c77fe90
+eb0a36e2
+Q2
+user@host:~# pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
+798
+  788 root       580 S    {startx} /bin/sh /usr/local/bin/startx
+  798 root      1664 S    Xfbdev :0 -mouse /dev/input/mice -2button
+  800 root      2128 S    jwm
+  801 root      1924 S    rxvt -fn fixed -geometry 80x24+8+8
+  836 root       576 R    grep -E startx|Xfbdev|jwm|rxvt
+user@host:~# kill 798
+user@host:~# echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c
+24fb; echo RM=$?
+RM=0
+user@host:~# dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$?
+Q=0
+user@host:~# S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|
+vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null
+; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 7b33b083001 ] && { dmesg -c >/dev/null; in
+smod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s4=1; echo RC=$?; }
+G=7b33b083001
+RC=0
+user@host:~# sleep 20; cat /proc/wd24adv/s4 > /tmp/s4run1.txt; cat /proc/wd24adv/
+live > /tmp/s4live1.txt; grep -E "S4 result|op [0-9]+ |DEAD|idle|restore:|writes
+" /tmp/s4run1.txt; dmesg | grep wd24adv
+wd24adv S4 result: OK
+  op 1 FILL 64x16 (16,112) SRC c=3Ch          model changes 1024; idle polls 0; busy seen, polls 18; CNTRL1 after 0108 VERIFIED
+  op 2 FILL 64x16 (96,112) XOR c=3Fh          model changes 1024; idle polls 0; busy seen, polls 42; CNTRL1 after 0108 VERIFIED
+  op 3 FILL 64x16 (176,112) AND c=30h         model changes 1024; idle polls 0; busy seen, polls 16; CNTRL1 after 0108 VERIFIED
+  op 4 FILL 64x16 (256,112) OR c=38h          model changes 1024; idle polls 0; busy seen, polls 18; CNTRL1 after 0108 VERIFIED
+  op 5 FILL 64x16 (336,112) INVERT            model changes 1024; idle polls 0; busy seen, polls 41; CNTRL1 after 0108 VERIFIED
+  op 6 FILL 64x16 (416,112) CLEAR             model changes 1024; idle polls 0; busy seen, polls 20; CNTRL1 after 0108 VERIFIED
+  op 7 FILL 64x16 (496,112) SET               model changes 1024; idle polls 0; busy seen, polls 9; CNTRL1 after 0108 VERIFIED
+  op 8 COPY 128x24 (48,150)->(40,146) fwd     model changes 576; idle polls 0; busy seen, polls 232; CNTRL1 after 0100 VERIFIED
+  op 9 COPY 128x24 (300,150)->(308,154) back  model changes 576; idle polls 0; busy seen, polls 122; CNTRL1 after 0500 VERIFIED
+  op 10 COPY 120x16 (460,184)->(468,184) back  model changes 384; idle polls 0; busy seen, polls 92; CNTRL1 after 0500 VERIFIED
+  op 11 COPY 120x16 (48,184)->(40,184) fwd     model changes 384; idle polls 0; busy seen, polls 85; CNTRL1 after 0100 VERIFIED
+restore: wrote 1002, read 1002 (equal)
+23C0h writes 226, 23C2h writes 139 (starts 11), PR0A writes 15, 23C4h 0, refusals 0, reads 1161 (polls 717), restore fails 0
+<6>wd24adv: live load: 0 (port data writes 46, index writes 224, mismatches 0)
+<6>wd24adv: LIVE: text state saved (4 planes, DAC, VGA + ext regs); trial 15 s; control: /proc/wd24adv/control
+<6>wd24adv: live mode 640x480-8: 0 (port data writes 93, index writes 263, mismatches 0)
+<6>wd24adv: 640x480-8 set: write "confirm" to /proc/wd24adv/control within 15 s or it reverts to text
+<6>wd24adv: S4: OK; ops verified 11; 23C2h writes 139 (starts 11), PR0A writes 15; details: /proc/wd24adv/s4
+<6>wd24adv: live trial expiry: 0 (port data writes 896, index writes 336, mismatches 0)
+user@host:~# rmmod wd24adv; echo RM=$?
+RM=0
+user@host:~# insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; ech
+o RC=$?
+RC=0
+user@host:~# ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;
+ HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautost
+art.log 2>&1 & )
+user@host:~# i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i
+=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X
+868
+X-UP
+user@host:~# pidof Xfbdev >/dev/null && { dmesg -c >/dev/null; insmod /tmp/wd24pr
+obe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u; }
+insmod: can't insert '/tmp/wd24probe3.ko': No such device
+RC=19
+<6>wd24probe3: 3C4test pre=11 SR06again=00 wrote=00 rb=00 post=00 restored-rb=00 after=11
+<6>wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
+<6>wd24probe3: CR34 L=a0 again=a0 wrote=a0 rb=a0 restored-rb=a0
+<6>wd24probe3: GR0F=05 GR0E=01 SR06=0f CR11=8c CR29=85
+<6>wd24probe3: PR18(CR31)=c7 PR19(CR32)=54 PR1A(CR33)=00 PR36(CR3B)=ef PR37(CR3C)=9a PR39(CR3E)=20
+<6>wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
+<6>wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
+<6>wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+user@host:~# 
