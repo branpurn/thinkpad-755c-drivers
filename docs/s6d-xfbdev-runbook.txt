@@ -1,0 +1,163 @@
+S6d Xfbdev runbook. Not started. Not an insmod approval. Not an X approval.
+Module: /tmp/wd24adv-pr14.ko
+sha256 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36
+Do not insmod /tmp/wd24adv.ko. That older file stays.
+Payload: /opt/cursor/artifacts/wd24-xfbdev-i486.tgz
+sha256 af429004d7d279f84d6ebdf2b62f589b81471dd791f6d0949d3d6c67a106c224
+Extracts to /tmp/wd24-xfbdev/. It is static. It does not
+replace a system library. Remove the tree at the end. No CF write, no
+reboot, no new kernel.
+
+What was checked offline, against this driver and linux-6.18.57
+fb_chrdev.c / fbcmap.c / fbmem.c, and against xorg-server 1.14.7
+hw/kdrive/fbdev/fbdev.c.
+
+The fb is PSEUDOCOLOR, packed 8 bpp, 640x480, line length 640, id
+wd24s6d. smem_len is the visible frame, 75 pages. There is one mmap.
+A second mmap returns -EBUSY. screen_base is NULL. Xfbdev mmaps
+fix.smem_len once and keeps a RAM shadow (shadowUpdatePacked memcpy
+from that shadow into the mapping). It does not call the kernel
+copyarea. The noop copyarea does not block this process.
+
+FBIOPUT_VSCREENINFO with no fb_check_var returns success and leaves the
+current mode (fbmem.c). fbdevEnable requires that ioctl to succeed. It
+does, and the mode stays 640x480x8.
+
+FBIOPUTCMAP returns -EINVAL. fb_setcolreg and fb_setcmap are absent
+(fbcmap.c). fbdevPutColors calls FBIOPUTCMAP and ignores the return.
+fbdevEnable programs a colormap only for DIRECTCOLOR. Missing
+fb_setcolreg does not stop this binary from starting. The DAC is left
+as it already is. Colors are not a pass criterion. A later color change
+would be fb_setcolreg under hw_lock, writing 3C8/3C9 the way the
+existing DAC save/restore does, with X's 16-bit channels shifted to the
+6-bit VGA DAC. That change is not in this tree.
+
+The thrash latch counts consecutive window switches and resets when a
+fault stays in the current window. The default bound is 32. A forward
+memcpy faults into the next window and then stays there. A single
+instruction that touches two windows alternates, and the latch stops
+that at 32 and the fault returns SIGBUS. The stamp test wrote single
+bytes. It does not show that an X shadow paint will stay under the
+bound. Do not raise s6d_thrash_bound. A thrash line is a fail and a
+stop. Do not retry.
+
+s6d_bind=0. fbcon does not bind. X is the user open. The bind=1 pass
+already returned to VGA text. This run does not bind fbcon at the same
+time as X. The trial cannot be turned off. It starts at insmod and
+ends the session even if X is still mapped. Kill X before that. kill
+does not interrupt mutex_lock, console_lock, or a fault that has not
+returned. The latch makes an alternating fault finite, then SIGBUS.
+That is not the same as kill breaking the wait.
+
+Xfbdev also opens a free VT and issues KDSETMODE KD_GRAPHICS. That
+ioctl is fatal to X if it fails. On the way out it sets KD_TEXT. The
+mmap tool did not do this. If the expiry line is not 0, stop. The
+picture on the panel is not the pass.
+
+This binary was not executed. Checks that were run: ELF 80386,
+static-pie, no INTERP, objdump cmov count 0. Three `pause` (`f3 90`)
+encodings are in musl pthread_rwlock. The mmap tool that already ran
+on this machine does not contain that encoding. Intel documents `pause`
+as a NOP on IA-32 processors older than the Pentium 4. This 486 has
+not executed those bytes. If X dies with SIGILL, that is a fail. The
+shell can still record it, because X is backgrounded, and the trial
+expiry is still the text restore.
+
+Headless pass, all of them:
+  insmod RC=0
+  the dmesg line "registered fb0 WITHOUT fbcon bind"
+  /proc/fb shows one node before X
+  no frame-buffer vtcon
+  x.log contains "Framebuffer device id: wd24s6d"
+  no thrash line, latched stays 0
+  after X is gone: S6d end (fb release)
+  live trial expiry 0, mismatches 0, in_text 1
+  armed 0, fb_reg 0, /proc/fb empty
+  only vtcon0 (S) VGA+ bind 1
+  RM=0 and the shell answers
+
+Not a pass: panel colors, readable glyphs, the keyboard, the mouse,
+or a root-window photo. xkbcomp is not in this payload. The server
+source says an xkbcomp failure is not fatal to the server. It also
+does not make the keyboard proven.
+
+Headless fail, stop. Do not raise the thrash bound. Do not retry.
+  RC does not return, or is not 0
+  no WITHOUT fbcon bind line
+  x.log has FatalError, or never prints the wd24s6d id
+  any thrash line, or latched is not 0
+  expiry is not 0, or in_text is not 1
+  /proc/fb still occupied after expiry
+  the shell stops answering
+  X dies with SIGILL
+
+Sequence. One line at a time. The trial clock starts at insmod.
+
+  cat /proc/fb
+  cat /sys/class/vtconsole/vtcon0/name
+  cat /sys/class/vtconsole/vtcon0/bind
+
+Empty /proc/fb. Name (S) VGA+. Bind 1. If another vtcon exists, stop.
+
+  cd /tmp
+  gzip -dc < /tmp/wd24-xfbdev-i486.tgz | tar -xf -
+  sha256sum /tmp/wd24-xfbdev/Xfbdev
+
+The Xfbdev line must be
+6450171476a8e6aa91883744947423db123c74a042d697f9263b686dcb2f9f13
+and it must match SHA256SUMS in that tree. If it does not, stop.
+Do not chmod a system directory. The binary is already executable.
+
+  dmesg -c >/dev/null
+  insmod /tmp/wd24adv-pr14.ko dryrun=0 live=1 mode=640x480-8 trial=180 s6d=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
+  echo RC=$?
+
+Wait for RC. pattern=0 was requested. Do not expect a particular picture.
+If RC is not 0, stop. Do not start X.
+
+  cat /proc/fb
+
+One node. Then:
+
+  /tmp/wd24-xfbdev/Xfbdev :1 -nolisten tcp -fb /dev/fb0 >/tmp/wd24-xfbdev/x.log 2>&1 &
+  echo PID=$!
+
+The PID line is not readiness. Wait, then read the log once.
+
+  sleep 15
+  cat /tmp/wd24-xfbdev/x.log
+
+If the wd24s6d id line is absent, wait once more and read once more.
+If it is still absent, kill the decimal PID and stop after the cleanup
+below. Do not loop.
+
+No -mouse and no -keybd. Do not start a client.
+
+Kill with the decimal digits, SIGTERM first, so X can set KD_TEXT and
+close the fb. If that kill does not return, stop. Do not type further
+commands. kill -9 is only if SIGTERM returned and the pid is still
+there. Neither signal pulls a task out of mutex_lock, console_lock, or
+a fault that has not returned.
+
+  kill <the decimal PID>
+  echo KILL=$?
+
+Then one s6d read. If it says hw busy, do not loop. Wait for expiry.
+
+  cat /proc/wd24adv/s6d
+
+Wait for the trial printk. It was armed for 180 s at insmod, not at
+the kill. Then:
+
+  cat /proc/wd24adv/live
+  cat /proc/wd24adv/s6d
+  cat /proc/fb
+  cat /sys/class/vtconsole/vtcon0/name
+  cat /sys/class/vtconsole/vtcon0/bind
+  rmmod wd24adv
+  echo RM=$?
+  rm -rf /tmp/wd24-xfbdev /tmp/.X1-lock /tmp/.X11-unix
+
+If expiry is not 0, still one rmmod and the same rm -rf, then stop.
+Do not call that a pass. Leave /tmp/wd24adv-pr14.ko and /tmp/wd24adv.ko
+in place.

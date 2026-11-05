@@ -1,4 +1,4 @@
-S6d s6d_bind=1 runbook. Not started. Not an insmod approval.
+S6d s6d_bind=1 runbook. Passed once. Not an approval to repeat it.
 Source of the driver behavior: commit 24ba4ae67b1cc143176a55754590d350f9724632
 (the C sources are the same as cfda0c4e14beeaa9c46ed55aa73124a4886b71f2).
 Module to load: /tmp/wd24adv-pr14.ko
@@ -15,8 +15,9 @@ s6d_bind=1 allows fb_open(info, 0). register_framebuffer is called
 with hw_lock dropped, because fbcon holds console_lock and then takes
 hw_lock in fillrect/imageblit. The armed printk is also outside
 hw_lock. A same-task reentry into those draw ops returns without
-drawing and without locking again. That is the 9ad254f self-deadlock,
-closed in this source and not yet tried with fbcon actually bound.
+drawing and without locking again. That is the 9ad254f self-deadlock.
+The one bind pass below is the first time this source ran with fbcon
+actually bound. It does not by itself prove a second run.
 
 Expiry calls s6d_stop before the text restore. s6d_stop sets the
 session inactive, drops hw_lock, then takes console_lock for the
@@ -97,11 +98,21 @@ Wait for the trial printk. Then:
 If expiry is not 0, still one rmmod so the module is not left loaded,
 then stop. Do not call that a pass.
 
-Xfbdev is not this run. On this floppy, Xfbdev, startx, and xinit are
-not on PATH and the X11 directories are absent. The design note names
-Xfbdev.tcz from Tiny Core 16.x/x86 as the small server, and rejects
-xorg-server.tcz on a 36 MB machine. A later RAM-only try would need
-those extension files and a loader already on the floppy, copied into
-RAM only. tce-load on this floppy is not established. No CF write, no
-reboot, and no new kernel for that. It waits until this bind trial
-and a separate approval.
+Result, one run, module 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36,
+staged as /tmp/wd24adv-pr14.ko. pattern=0 was requested.
+insmod returned 0.
+dmesg contained "Console: switching to colour frame buffer device 80x30"
+and "S6d: armed + registered fb0" with s6d_bind=1.
+No separate numeric register line was printed. Do not invent one.
+/proc/wd24adv/s6d during the trial: faults 0, switches 13, thrash 0.
+faults count mmap faults. These 13 switches were not mmap faults.
+Then "Console: switching to colour VGA+ 80x25".
+Trial expiry 0, mismatches 0, in_text 1, armed 0, fb_reg 0, latched 0.
+/proc/fb empty. Only vtcon0 (S) VGA+ bind 1. rmmod 0. The shell answered.
+The operator saw the standard bars briefly, then a downward redraw with
+a solid white upper area and a solid black lower area, then the root
+text console. pattern=0 was what was requested. This record does not
+explain the bars. Colors, glyph readability, and the keyboard were not
+established.
+
+X is a separate sequence. See docs/s6d-xfbdev-runbook.txt. Not started.

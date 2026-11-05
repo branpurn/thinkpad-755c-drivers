@@ -392,7 +392,15 @@ Same hashes as the Debian build: module `7da0fffe75883c1c28e876e0dc660f946a2e8f4
 
 Same two hashes, staged as `/tmp/wd24adv-pr14.ko` and `/tmp/wd24s6d-mmap-pr14`. The older `/tmp/wd24adv.ko` was not replaced. Preflight was the same kernel, empty `/proc/fb`, only VGA+. insmod 0, fb0, no bind. The tool printed `WD24S6D-MMAP hold` with active 1 busy 1. SIGKILL of that pid returned 0, wait status 137, pid gone. `S6d: end (fb release)` reported faults 10 switches 10 thrash 0. Then active 0, busy 0, stopping 1, framebuffer still registered. Trial expiry 0, mismatches 0, in_text 1, armed 0, fb_reg 0, `/proc/fb` empty, rmmod 0. Shell answered. Only fb, font, and VGA+. `kill -9` was used while the tool was in `pause()` after the hold line. That does not show that `kill -9` can interrupt `mutex_lock`, `console_lock`, or a fault.
 
-No `s6d_bind=1` run and no X run. `Xfbdev`, `startx`, and `xinit` are not on PATH, and the X11 directories are absent. The bounded bind sequence, not started, is `docs/s6d-bind-runbook.txt`. It uses `/tmp/wd24adv-pr14.ko` only. `copyarea` is not on the fbcon scroll path with this config (`fb_scrollmode` is `SCROLL_REDRAW`), and missing `fb_setcolreg` changes panel colors only. Neither blocks the teardown checks. Panel and keyboard stay operator observations.
+## s6d_bind=1 pass
+
+Same module hash, staged as `/tmp/wd24adv-pr14.ko`. pattern=0 was requested. insmod 0. dmesg showed `Console: switching to colour frame buffer device 80x30` and `S6d: armed + registered fb0` with `s6d_bind=1`. No separate numeric register line was printed. During the trial, faults 0, switches 13, thrash 0. Then `Console: switching to colour VGA+ 80x25`. expiry 0, mismatches 0, in_text 1, armed 0, fb_reg 0, latched 0. `/proc/fb` empty, only VGA+ bind 1, rmmod 0, shell answered. The operator saw the standard bars briefly, then a downward redraw with a solid white upper area and a solid black lower area, then the root text console. That is the observation. It does not identify why bars were visible after pattern=0. Colors, glyph readability, and the keyboard were not established. The sequence is `docs/s6d-bind-runbook.txt`.
+
+`copyarea` is not on the fbcon scroll path with this config (`fb_scrollmode` is `SCROLL_REDRAW`). Missing `fb_setcolreg` leaves the DAC alone. Neither blocked this teardown. Panel and keyboard stay operator observations.
+
+## Xfbdev payload, not started
+
+Stock Tiny Core `Xfbdev.tcz` is glibc. This floppy has no glibc loader, and `tce-load` does not fetch dependencies. The payload is a static-pie i486 musl kdrive `Xfbdev` from xorg-server 1.14.7, not `xorg-server` the DDX. It is not in git. The runbook is `docs/s6d-xfbdev-runbook.txt`. No driver change. `FBIOPUTCMAP` returns `-EINVAL` because `fb_setcolreg` is absent, and this `Xfbdev` does not treat that as fatal. The shadow upload writes the mmap from RAM. The thrash latch still stops a window-alternating fault at 32. The stamp test did not do that walk. Colors, glyphs, and the keyboard stay unproven.
 
 `test_s6d_fault` is a userspace simulator of the pure plan and a hand-written stop order. It does not load the module. Its OK line says SIMULATOR. The host `make -C modules/wd24adv/tests test` (system gcc) covers `test_vga` restore mismatch (`in_text` stays false) and that simulator. QEMU was not run. The cleanup figures are not kernel execution.
 
@@ -464,4 +472,4 @@ What the panel should show: the 16 bars, plus five 8×8 blocks at pixel (0,0), (
 
 Stop if: `Console: switching` appears, bars vanish into a text console, thrash is non-zero, a register mismatch is logged, the expiry line is non-zero or `in_text` is not 1, the shell stops answering, or the mmap tool prints `bad`.
 
-The `--hold` / SIGKILL pass is recorded above. The next sequence, not started, is `docs/s6d-bind-runbook.txt`. Xfbdev is not part of that sequence.
+The `--hold` / SIGKILL pass and the one `s6d_bind=1` pass are recorded above. The next sequence, not started, is `docs/s6d-xfbdev-runbook.txt`.
