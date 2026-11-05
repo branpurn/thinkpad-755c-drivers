@@ -98,6 +98,19 @@ change.
    without a new plan.
 5. Xfbdev only after the controlled live paints are OK (separate approval).
 
+### Separate S6d floppy (box, 2026-11-05) — inventory only, pending drop OK
+
+Brandon OK for a **separate** S6d floppy path (pt426u); CF boot stays off this
+path. Recovery `out/tc755.img` kept. **No** core rebuild / mcopy / media burn
+this turn.
+
+`core.xz` is ~218 KiB compressed / ~395 KiB busybox; overlay scripts are tiny.
+Drop proposal (Tier1 editors → Tier2 archival → Tier3 mkfs/swap → Tier4 extras),
+est. ≥60 KiB xz if Tier1+2(+3) approved:
+`/workspace/755c-research/out-s6d-exports/floppy/CORE-DROP-PROPOSAL.txt`
+(+ `CORE-INVENTORY.txt`). Must keep getty/rx/sha256sum/dmesg/mknod/ash. Awaiting
+Brandon approve-list before busybox-s6d rebuild.
+
 ### Floppy image (box, 2026-11-05) — **mkfloppy FAILED (size)**
 
 Brandon OK to build floppy (pt417u); burn on Pop-GNOME only (pt418u). Box did
