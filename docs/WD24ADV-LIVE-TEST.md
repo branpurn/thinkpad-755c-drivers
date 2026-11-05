@@ -566,6 +566,72 @@ Design doc section 7, stage S6 (the RAM-shadow S6 is parked). One load:
 PROVEN 640x480-8 trial mode set, under hw_lock + console_lock, the program in
 `wd24adv_s6.c` runs once:
 
+### S6c (prepared 2026-11-05, not run): PR31 b7 held across SR06 relock
+
+Question: does PR31 b7 (a) survive the SR06 relock and (b) still steer reads
+to PR0A / writes to PR0B while SR06 is locked? S6 v2 proved b7 only while
+unlocked. Load option `s6c=1` (with s6=1); everything up to P3 is S6 v2.
+
+| step | what | writes |
+|---|---|---|
+| E ... P3 | as S6 v2 (P3 must read back dd, else REGISTER READBACK) | as v2 |
+| L1 | SR06 = 0Fh with b7 set; must read 0f + width locked, else RESTORE FAIL; PR31 locked read logged (expect 00) | SR06 |
+| D2 | the v2 copy test, run LOCKED | memory |
+| U2 | SR06 = 4Fh (read back + width unlocked; fail -> relock, RESTORE FAIL, stop); read PR31: dd = held, 5d = cleared | SR06 |
+| P4, L, V2, restore | as S6 v2 | as v2 |
+
+Results: OK = held and effective locked; B7 NOT HELD LOCKED ("relock cleared
+PR31 b7" or "PR31 b7 kept but no effect while locked"; restored by design);
+RESTORE FAIL as v2. 33 register writes when OK. Extra dmesg line `S6c: held
+SR06 0f/0 PR31(locked) .., re-unlock PR31 dd (b7 held); D2 rd 0 noecho 0 V2 0/0/0`.
+
+Proven: everything through P3 (S6 v2 live). Assumed (what S6c tests): b7
+retention and effect while locked; that the re-unlock works with b7 set (if
+not: RESTORE FAIL with b7 possibly set, stop rule).
+
+Build: tc755x (kobj-vm86), vermagic `6.18.57-tc755x mod_unload 486`, sha256
+`96a6b5273454187db8002c2db55d0ee318363b5f57d82cbfc713a583583af479`.
+Tests: host test_s6 140/0 (v2 cases unchanged; S6c lock-hold OK; lock-clear,
+kept-no-effect, FFh variants -> NOT HELD; re-unlock refused -> RESTORE FAIL,
+relocked, guard closed; PR31 b7 ignored -> not OK; v2 on a lock-clear chip
+still OK); other host suites unchanged; QEMU qemu-wd24adv-s6.py 24/24 (v2 19 + S6c dry-run, s6c-without-s6 refusal, real .ko zero data writes, fake OK, rmmod).
+
+Copy route (as v2): box -> grok-bot-server -> Pop ~/wd24adv-s6c.ko, check
+sha on Pop, then `~/755c-install/xkit/send1.sh ~/wd24adv-s6c.ko /tmp/wd24adv.ko`,
+then on the 755C `sha256sum /tmp/wd24adv.ko` must start 96a6b527.
+
+Lines (separate approval; plog each; one per call, wait for the prompt; no
+overlap, no retries; interrupted -> check commands.log, never re-send):
+
+```
+pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
+kill <the Xfbdev PID printed above>
+echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo RM=$?
+dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$?
+S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 96a6b527001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s6=1 s6c=1; echo RC=$?; }
+sleep 20; cat /proc/wd24adv/s6 > /tmp/s6crun.txt; cat /proc/wd24adv/live > /tmp/s6clive.txt; grep -vE "^  write" /tmp/s6crun.txt; dmesg | grep wd24adv
+rmmod wd24adv; echo RM=$?
+insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?
+( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & )
+i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X
+pidof Xfbdev >/dev/null && { dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u; }
+```
+
+Expected: G=96a6b527001, RC=0, v2 lines through P3 dd, `L1 held: SR06 0f
+locked`, then either `U2 re-unlock: PR31 dd (b7 held)` + D2/V2 all 0 +
+`result: OK`, or `B7 NOT HELD LOCKED` (both are answers); P4 5d, final
+`SR06 readback 0f, index width: locked`, `regions restored: 0 bytes differ`,
+screen unchanged, text at expiry, RM=0, RC=0, X-UP, baseline RC=19 result=ok
+restore_fail=0x00 SR06=0f SR11=5d.
+
+Stop rules: G mismatch -> send none of the S6c lines, go to the wd90c24fb/X
+lines. ENTRY / REGISTER READBACK / MEMORY / NOT HELD / SPLIT ONLY: restored
+by design, continue with rmmod and X, report. RESTORE FAIL (incl. "did not
+relock with PR31 b7 set", "re-unlock failed"), any SR06 readback other than
+0f or width not locked after L, mismatch in /tmp/s6clive.txt, TIMEOUT, STILL
+BUSY, LOCKED, garbled screen not back to text at expiry, or no prompt: stop;
+no rmmod, no reload; power off.
+
 ### S6 v2 (run 2026-11-04: OK, writes 31, SR06 relocked 0f; L7-L8 overlapped by operator error, stopped with wd24adv loaded in text, X not restored, baseline not run; see docs/s6v2-live-2026-11-04.txt)
 
 The lock: PR31 = SR11 is a Paradise extended register. Data book 14.1: PR20

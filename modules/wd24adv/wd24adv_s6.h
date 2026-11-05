@@ -37,7 +37,8 @@
 
 enum wd24s6_res {
 	WD24S6_NOTRUN, WD24S6_OK, WD24S6_SPLIT_ONLY, WD24S6_RW_ONLY,
-	WD24S6_NONE, WD24S6_ENTRY, WD24S6_REG, WD24S6_MEM, WD24S6_RESTORE
+	WD24S6_NONE, WD24S6_ENTRY, WD24S6_REG, WD24S6_MEM, WD24S6_RESTORE,
+	WD24S6_NOTHELD	/* S6c: PR31 b7 effect not held while SR06 locked */
 };
 
 struct wd24s6_io {
@@ -71,9 +72,16 @@ struct wd24s6 {
 	char log[WD24S6_LOG];
 	u32 loglen;
 	u32 nwr;		/* register writes issued */
+	/* S6c (hold=1): PR31 b7 set, SR06 relocked, D2 run while LOCKED */
+	bool hold;
+	u8 rb_sr06_hold, rb_pr31_lk, rb_pr31_reunl;	/* SR06 / PR31 while held locked, PR31 after re-unlock */
+	int lk_hold;
+	bool cleared;		/* PR31 b7 gone after re-unlock */
 };
 
 void wd24s6_run(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save);
+/* hold=1: S6c, the copy test runs with SR06 relocked and PR31 b7 held */
+void wd24s6_run2(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save, bool hold);
 const char *wd24s6_res_name(enum wd24s6_res r);
 
 /* 86Box-semantics model (host tests, dry-run listing, QEMU fake build) */
@@ -85,6 +93,10 @@ struct wd24s6_model {
 	 * ignored, relock ignored (stays unlocked), locked SR07+ reads FFh
 	 * (86Box) instead of 00h (755C live) */
 	int lock_exact48, lock_ignore, relock_stuck, locked_ff;
+	/* S6c faults: relock clears PR31 b7 (lock-clear); b7 kept but no
+	 * effect while locked (lock-noeffect); re-unlock refused */
+	int relock_clears_b7, locked_noeffect, reunlock_fail;
+	u32 nunl;
 	bool lock_open;
 	u32 nreg;
 	bool open;

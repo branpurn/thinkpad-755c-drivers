@@ -14,11 +14,11 @@
 
 static const char *const resn[] = { "NOT RUN", "OK", "SPLIT ONLY", "RW ONLY",
 	"NO DUAL WINDOW", "ENTRY CHECK", "REGISTER READBACK", "MEMORY",
-	"RESTORE FAIL" };
+	"RESTORE FAIL", "B7 NOT HELD LOCKED" };
 
 const char *wd24s6_res_name(enum wd24s6_res r)
 {
-	return r <= WD24S6_RESTORE ? resn[r] : "?";
+	return r <= WD24S6_NOTHELD ? resn[r] : "?";
 }
 
 /* region table: bank (PR0A value in single mode), window offset */
@@ -100,6 +100,11 @@ static int lockstep(struct wd24s6 *s, bool on)
 /* tags: Y0=1 Y1(B)=2 X8(X)=3 X1(A)=4 Y0'=5 X8'=6 C=7 */
 void wd24s6_run(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save)
 {
+	wd24s6_run2(s, io, save, false);
+}
+
+void wd24s6_run2(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save, bool hold)
+{
 	bool saved = false, pr1set = false, unl = false, pr31set = false;
 	u32 i;
 	int err = 0;
@@ -108,6 +113,8 @@ void wd24s6_run(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save)
 	s->io = io;
 	s->save = save;
 	s->res = WD24S6_NOTRUN;
+	s->hold = hold;
+	LOG(s, "%s\n", hold ? "S6c: PR31 b7 hold across SR06 relock" : "S6 v2");
 
 	/* E: read-only snapshot + entry check */
 	s->pr0a = io->rd(io->priv, WD24_GR, WD24_GR_PR0A);
@@ -239,6 +246,25 @@ void wd24s6_run(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save)
 		goto reg;
 	s->rb_pr31_on = io->rd(io->priv, WD24_SR, WD24_SR_PR31);
 	LOG(s, "P3 PR31 readback %02x\n", s->rb_pr31_on);
+	if (hold) {
+		/* L1: relock with b7 set; verify locked before any data access */
+		if (s->rb_pr31_on != (s->pr31 | WD24_PR31_RWSPLIT)) {
+			err = -5;
+			goto reg;
+		}
+		err = lockstep(s, false);
+		s->rb_sr06_hold = s->rb_sr06_rel;
+		s->lk_hold = s->lk_rel;
+		if (err) {
+			s->res = WD24S6_RESTORE;
+			s->why = "SR06 did not relock with PR31 b7 set";
+			goto restore;
+		}
+		unl = false;
+		s->rb_pr31_lk = io->rd(io->priv, WD24_SR, WD24_SR_PR31);
+		LOG(s, "L1 held: SR06 %02x locked, PR31 (locked read) %02x; D2 runs LOCKED\n",
+		    s->rb_sr06_hold, s->rb_pr31_lk);
+	}
 	/* D2: read X while writing Y */
 	s->d_rd = cmp_pat(s, 0x1000, 4);	/* X+1000 */
 	put_pat(s, 0x1000, 7);			/* -> Y+1000 */
@@ -252,6 +278,20 @@ void wd24s6_run(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save)
 
 restore:
 	/* P4 + L: PR31 back (while unlocked), relock, PR1 back; each read back */
+	if (pr31set && !unl) {
+		/* S6c U2: re-unlock to restore PR31; read b7 first */
+		if (lockstep(s, true)) {
+			s->res = WD24S6_RESTORE;
+			s->why = "SR06 re-unlock failed: PR31 not restored";
+			lockstep(s, false);
+			goto out;
+		}
+		unl = true;
+		s->rb_pr31_reunl = io->rd(io->priv, WD24_SR, WD24_SR_PR31);
+		s->cleared = !(s->rb_pr31_reunl & WD24_PR31_RWSPLIT);
+		LOG(s, "U2 re-unlock: PR31 %02x (b7 %s)\n", s->rb_pr31_reunl,
+		    s->cleared ? "CLEARED by relock" : "held");
+	}
 	if (pr31set) {
 		err = wr(s, WD24_SR, WD24_SR_PR31, s->pr31, "PR31");
 		s->rb_pr31_off = io->rd(io->priv, WD24_SR, WD24_SR_PR31);
@@ -287,6 +327,11 @@ restore:
 		    s->v_wr, s->v_copy, s->v_x);
 		s->rw_ok = !s->d_rd && !s->d_wr_noecho && !s->v_wr && !s->v_copy &&
 			   !s->v_x && s->rb_pr31_on == (s->pr31 | WD24_PR31_RWSPLIT);
+		if (hold && !s->rw_ok) {
+			s->res = WD24S6_NOTHELD;
+			s->why = s->cleared ? "relock cleared PR31 b7" :
+				 "PR31 b7 kept but no effect while locked";
+		} else
 		s->res = s->split_ok && s->rw_ok ? WD24S6_OK : s->split_ok ? WD24S6_SPLIT_ONLY :
 			 s->rw_ok ? WD24S6_RW_ONLY : WD24S6_NONE;
 	}
@@ -339,7 +384,7 @@ static u32 m_addr(struct wd24s6_model *m, u32 off, bool write)
 {
 	u32 b;
 
-	if (m->sr[0x11] & 0x80 && !m->ignore_pr31b7)
+	if (m->sr[0x11] & 0x80 && !m->ignore_pr31b7 && !(m->locked_noeffect && !m_unl(m)))
 		b = write ? m->gr[0x0a] : m->gr[0x09];
 	else if (m->gr[0x0b] & 0x08 && !m->ignore_pr1b3)
 		b = off < 0x8000 ? m->gr[0x0a] : m->gr[0x09];
@@ -390,8 +435,12 @@ static int m_wr(void *priv, enum wd24_rf rf, u8 idx, u8 v)
 			-5 : 0;	/* readback, as wd24_write */
 	}
 	if (rf == WD24_SR && idx == 0x06) {
+		if (v != 0x0f && m->reunlock_fail && m->nunl++ >= 2)
+			return -5;	/* 3rd unlock (S6c U2) ignored */
 		if (!m->lock_ignore && !(m->relock_stuck && v == 0x0f))
 			m->sr[6] = v;
+		if (v == 0x0f && m->relock_clears_b7)
+			m->sr[0x11] &= 0x7f;
 		/* wd24_verify: bits 3:0 echo + width == (v & 58h) == 48h */
 		return ((m->sr[6] ^ v) & 0x0f) ||
 		       m_unl(m) != ((v & 0x58) == 0x48) ? -5 : 0;

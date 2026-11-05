@@ -12,7 +12,7 @@ static u8 vram[0x100000], ref[0x100000], save[WD24S6_NREG * WD24S6_N];
 static struct wd24s6 st;
 static struct wd24s6_model m;
 
-enum { L48 = 1, LIGN = 2, LREL = 4, LFF = 8, LP31 = 16 };
+enum { L48 = 1, LIGN = 2, LREL = 4, LFF = 8, LP31 = 16, HOLD = 32, LCLR = 64, LNOEF = 128, LREU = 256 };
 static int lockf;	/* lock faults for the next run() */
 
 static void run(const char *name, int ig1, int ig7, int stuck, int refuse)
@@ -29,13 +29,22 @@ static void run(const char *name, int ig1, int ig7, int stuck, int refuse)
 	m.lock_ignore = !!(lockf & LIGN);
 	m.relock_stuck = !!(lockf & LREL);
 	m.locked_ff = !!(lockf & LFF);
+	m.relock_clears_b7 = !!(lockf & LCLR);
+	m.locked_noeffect = !!(lockf & LNOEF);
+	m.reunlock_fail = !!(lockf & LREU);
 	if (lockf & LP31)
 		m.sr[0x11] = 0x5c;
 	memcpy(ref, vram, sizeof(ref));
 	memcpy(g0, m.gr, 16);
 	memcpy(s0, m.sr, 0x20);
 	io.priv = &m;
-	wd24s6_run(&st, &io, save);
+	wd24s6_run2(&st, &io, save, !!(lockf & HOLD));
+	if (lockf & LREU) {	/* PR31 b7 stuck set, locked: RESTORE, stop */
+		CHECK(st.res == WD24S6_RESTORE && m.sr[6] == 0x0f && !m.lock_open && !m.open,
+		      "%s: RESTORE, relocked, guard closed", name);
+		printf("--- %s: %s\n", name, wd24s6_res_name(st.res));
+		return;
+	}
 	/* always: registers and every byte of video memory as before */
 	if (!(lockf & LREL))
 		CHECK(!memcmp(m.gr, g0, 16) && !memcmp(m.sr, s0, 0x20) && m.sr[6] == 0x0f,
@@ -105,6 +114,43 @@ int main(void)
 	lockf = LREL;
 	run("relock ignored", 0, 0, 0, 0);
 	CHECK(st.res == WD24S6_RESTORE && st.nwr == 2 && st.lk_rel == 1, "relock stuck: RESTORE at E2");
+	lockf = 0;
+
+	/* S6c: hold PR31 b7 across the relock */
+	lockf = HOLD;
+	run("S6c lock-hold (b7 held + effective locked)", 0, 0, 0, 0);
+	CHECK(st.res == WD24S6_OK && st.rw_ok && st.split_ok && !st.cleared, "S6c hold: OK");
+	CHECK(st.rb_sr06_hold == 0x0f && st.lk_hold == 0 && st.rb_pr31_lk == 0x00 &&
+	      st.rb_pr31_reunl == 0xdd && st.rb_pr31_off == 0x5d && st.rb_sr06_rel == 0x0f &&
+	      st.lk_rel == 0, "S6c hold readbacks");
+	CHECK(!st.d_rd && !st.d_wr_noecho && !st.v_wr && !st.v_copy && !st.v_x, "S6c hold data");
+	fputs(st.log, stdout);
+	lockf = HOLD | LCLR;
+	run("S6c lock-clear (relock clears b7)", 0, 0, 0, 0);
+	CHECK(st.res == WD24S6_NOTHELD && st.cleared && st.rb_pr31_reunl == 0x5d && st.split_ok,
+	      "S6c clear: NOT HELD, cleared (%s)", wd24s6_res_name(st.res));
+	lockf = HOLD | LNOEF;
+	run("S6c b7 kept, no effect locked", 0, 0, 0, 0);
+	CHECK(st.res == WD24S6_NOTHELD && !st.cleared && st.rb_pr31_reunl == 0xdd && st.d_wr_noecho,
+	      "S6c noeffect: NOT HELD, b7 kept");
+	lockf = HOLD | LFF;
+	run("S6c hold, locked reads FFh", 0, 0, 0, 0);
+	CHECK(st.res == WD24S6_OK && st.rb_pr31_lk == 0xff, "S6c FF: OK");
+	lockf = HOLD | LCLR | LFF;
+	run("S6c clear, locked reads FFh", 0, 0, 0, 0);
+	CHECK(st.res == WD24S6_NOTHELD && st.cleared, "S6c clear FF");
+	lockf = HOLD | LREU;
+	run("S6c re-unlock refused", 0, 0, 0, 0);
+	CHECK(st.why && strstr(st.why, "re-unlock"), "S6c re-unlock fail reason");
+	lockf = HOLD;
+	run("S6c PR31 b7 ignored", 0, 1, 0, 0);
+	CHECK(st.res == WD24S6_NOTHELD || st.res == WD24S6_SPLIT_ONLY, "S6c ig7: not OK (%s)",
+	      wd24s6_res_name(st.res));
+	run("S6c PR1 write refused", 0, 0, 0, 1);
+	CHECK(st.res == WD24S6_REG && st.rb_pr31_on == 0, "S6c refused: stops before PR31");
+	lockf = LCLR;
+	run("S6 v2 unchanged on lock-clear chip", 0, 0, 0, 0);
+	CHECK(st.res == WD24S6_OK && !st.hold, "v2 still OK");
 	lockf = 0;
 
 	/* entry checks before any write */

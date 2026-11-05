@@ -26,3 +26,15 @@ D. Accel without split: copyarea via PR1 b3 split (A0000->PR0B, A8000->PR0A)
 
 Recommendation: run A (one live run, new approval), then build S6b
 (banked mmap + dual-window copyarea) if b7 persists locked, else C+D.
+
+## Status: option A built as S6c (box only, not run live)
+`s6=1 s6c=1` with `dryrun=0 live=1 mode=640x480-8`. Same entry, E2, save,
+prefill, P1/P2/D1/V1, U, P3 as S6 v2, then:
+L1 relock SR06 with PR31 b7 set (must read 0f + index width locked, PR31
+locked read logged) -> D2 copy test LOCKED -> U2 re-unlock, read PR31 (b7
+held or cleared) -> P4 PR31 = 5d -> L relock -> V2 -> regions back.
+Results: OK = b7 held and effective while locked; B7 NOT HELD LOCKED
+(why: "relock cleared PR31 b7" or "kept but no effect while locked");
+RESTORE FAIL if L1, U2 or L do not read back.
+Decision: OK -> build S6b (banked mmap + dual-window copyarea, SR06 locked
+in steady state). NOT HELD -> option B or C+D.

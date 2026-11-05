@@ -223,6 +223,31 @@ def main():
         check("fake s6=1: ZERO port accesses", len(acc) == 0, f"{len(acc)}")
         out, acc = step(g, "rmmod wd24adv_qemufake; echo RC=$?")
         check("fake s6=1: rmmod clean, zero accesses", "RC=0" in out and len(acc) == 0)
+
+        # S6c: PR31 b7 held across the SR06 relock
+        out, acc = step(g, "insmod /wd24/wd24adv.ko s6=1 s6c=1; echo RC=$?; dmesg -c")
+        pl, _ = g.run("cat /proc/wd24adv/s6")
+        seqlog.append("\n# s6=1 s6c=1 dry-run (model)\n" + out + "\n" + pl)
+        check("s6c dry-run: OK, held locked, zero accesses", "RC=0" in out and len(acc) == 0 and
+              "result: OK" in pl and "L1 held: SR06 0f locked" in pl and "U2 re-unlock: PR31 dd (b7 held)" in pl
+              and "P4 PR31 readback 5d" in pl and "regions restored: 0 bytes differ" in pl)
+        g.run("rmmod wd24adv")
+        t0 = tr.settle()
+        out, _ = g.run("insmod /wd24/wd24adv.ko s6c=1; echo RC=$?; dmesg -c")
+        check("refused: s6c=1 without s6=1", "RC=0" not in out and "s6c=1 needs s6=1" in out and not loaded(g))
+        out, acc = step(g, "insmod /wd24/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s6=1 s6c=1; echo RC=$?; dmesg -c")
+        check("real .ko live s6c: ZERO 23Cxh, ZERO VGA data writes", not [x for x in acc if x[1] in EXT]
+              and not vga_data_writes(acc) and ("S6" not in out or "not run" in out))
+        if loaded(g):
+            g.run("rmmod wd24adv")
+        out, acc = step(g, "insmod /wd24/wd24adv-qemufake.ko dryrun=0 s6=1 s6c=1; echo RC=$?; dmesg -c", 300)
+        res, _ = g.run("cat /proc/wd24adv/s6")
+        seqlog.append("\n# TEST-ONLY fake: s6=1 s6c=1\n" + out + "\n" + res)
+        check("fake s6c: OK, D2 locked verified, zero accesses", "RC=0" in out and "result: OK" in res and
+              "L1 held" in res and "D2 rw: read X+1000 0 bad; after write, read still X 0 bad" in res
+              and len(acc) == 0)
+        out, acc = step(g, "rmmod wd24adv_qemufake; echo RC=$?")
+        check("fake s6c: rmmod clean", "RC=0" in out and len(acc) == 0)
     except (TimeoutError, EOFError) as e:
         check("guest responded", False, str(e))
     finally:

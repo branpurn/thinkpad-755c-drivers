@@ -294,6 +294,10 @@ static ssize_t s3_read(struct file *f, char __user *b, size_t n, loff_t *p)
 static const struct proc_ops s3_ops = {
 	.proc_read = s3_read, .proc_lseek = default_llseek };
 
+static bool s6c;
+module_param(s6c, bool, 0444);
+MODULE_PARM_DESC(s6c, "with s6=1: S6c, set PR31 b7, relock SR06 and run the dual-window copy test while LOCKED, then re-unlock, PR31 back to BIOS, relock");
+
 static struct wd24s6 *s6st;
 static u8 *s6_save;
 
@@ -1219,7 +1223,7 @@ static int s6_model_run(void)
 	}
 	wd24s6_model_init(mdl, vr);
 	io.priv = mdl;
-	wd24s6_run(s6st, &io, s6_save);
+	wd24s6_run2(s6st, &io, s6_save, s6c);
 	pr_info("S6 (model, no port access): %s\n", wd24s6_res_name(s6st->res));
 	vfree(mdl);
 	vfree(vr);
@@ -1283,8 +1287,9 @@ static void s6_live(const struct wd24_mode *m)
 	}
 	console_lock();
 	hw->be->begin(hw);
-	hw->tag = "S6: dual window (PR0B, PR1 b3, SR06 unlock, PR31 b7)";
-	wd24s6_run(s6st, &s6_live_io, s6_save);
+	hw->tag = s6c ? "S6c: PR31 b7 held across SR06 relock" :
+			"S6: dual window (PR0B, PR1 b3, SR06 unlock, PR31 b7)";
+	wd24s6_run2(s6st, &s6_live_io, s6_save, s6c);
 	hw->dual_open = false;
 	hw->s6_lock_open = false;
 	hw->s6_active = false;
@@ -1295,6 +1300,11 @@ static void s6_live(const struct wd24_mode *m)
 		s6st->sr06, s6st->rb_sr06_unl, s6st->lk_unl, s6st->rb_sr06_rel, s6st->lk_rel,
 		s6st->pr31, s6st->rb_pr0b, s6st->rb_pr1_on, s6st->rb_pr1_off, s6st->rb_pr31_on,
 		s6st->rb_pr31_off, s6st->nwr);
+	if (s6c)
+		pr_info("S6c: held SR06 %02x/%d PR31(locked) %02x, re-unlock PR31 %02x (%s); D2 rd %u noecho %u V2 %u/%u/%u\n",
+			s6st->rb_sr06_hold, s6st->lk_hold, s6st->rb_pr31_lk, s6st->rb_pr31_reunl,
+			s6st->cleared ? "b7 cleared" : "b7 held", s6st->d_rd, s6st->d_wr_noecho,
+			s6st->v_wr, s6st->v_copy, s6st->v_x);
 }
 
 /* live: claim the ports, map A0000, save the text state */
@@ -1359,6 +1369,10 @@ static int __init wd24adv_init(void)
 	}
 	if (sx && (s1 || s2)) {
 		pr_err("s3=1 / s4=1 / s5 are separate stages: s1=1 / s2=1 refused with them\n");
+		return -EINVAL;
+	}
+	if (s6c && !s6) {
+		pr_err("s6c=1 needs s6=1\n");
 		return -EINVAL;
 	}
 	if (s6 && (s1 || s2 || sx)) {
