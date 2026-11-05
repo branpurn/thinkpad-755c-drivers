@@ -56,7 +56,7 @@ Built by `make oot` / `make wd24adv`. There is still **no `ext/*.ext`**, so no
 |---|---|---|
 | `dryrun` | 1 | Record only. 0 needs `live=1` (else `-EOPNOTSUPP`). |
 | `live` | 0 | With `dryrun=0`: drive the hardware. With `dryrun=1`: `-EINVAL`. |
-| `trial` | 15 | Live: seconds before a mode set reverts to text unless confirmed. 5..120; 0 (off) and anything outside are refused (`-EINVAL`). |
+| `trial` | 15 | Live: seconds before a mode set reverts to text unless confirmed. 5..600; 0 (off) and anything outside are refused (`-EINVAL`). |
 | `mode` | "" | Live: a PROVEN mode (`640x480-8`, `640x400-8`, `320x200-8`) to set right after load (the trial applies). Refused in dry-run and for UNPROVEN/unknown names. |
 | `pattern` | 1 | Live: draw 16 colour bars over the whole frame after a mode set: packed 8 bpp through PR0A banks 0-4; `320x200-8` straight through the A0000 window (64000 bytes, 20 px bars, no register write). |
 | `allow_routing` | 0 | Removed. Any value other than 0 is refused. |

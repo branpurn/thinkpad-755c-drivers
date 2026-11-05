@@ -8,7 +8,7 @@ vga_std_read_io / vga_std_write_io trace events.  It checks:
 
   * dry-run load (the default): loads, /proc/wd24adv/{plan,modes,selftest},
     selftest ok, ZERO VGA port accesses of any kind, rmmod clean;
-  * parameter gates: live=1 alone, dryrun=0 alone, trial=0, trial=600,
+  * parameter gates: live=1 alone, dryrun=0 alone, trial=0, trial=601,
     allow_routing=1, allow_crt=1, mode=<unproven>, mode= in dry-run: refused;
   * dryrun=0 live=1 on QEMU std VGA: refused by the read-only entry check
     (not a WD90C24: CR34 does not read A0, PR18/PR19 do not read C7/54),
@@ -181,7 +181,7 @@ def main():
         t0 = len(settle())
         for args, want in [("live=1", "needs dryrun=0"), ("dryrun=0", "without live=1"),
                            ("dryrun=0 live=1 trial=0", "trial=0 refused"),
-                           ("dryrun=0 live=1 trial=600", "trial=600 refused"),
+                           ("dryrun=0 live=1 trial=601", "trial=601 refused"),
                            ("allow_routing=1", "refused"), ("allow_crt=1", "refused"),
                            ("dryrun=0 live=1 mode=nosuchmode", "not a PROVEN"),
                            ("mode=640x480-8", "needs dryrun=0 live=1")]:

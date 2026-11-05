@@ -632,10 +632,13 @@ relock with PR31 b7 set", "re-unlock failed"), any SR06 readback other than
 BUSY, LOCKED, garbled screen not back to text at expiry, or no prompt: stop;
 no rmmod, no reload; power off.
 
-### S6b (prepared 2026-11-05 UTC, box only, not run live): dual-window mmap + PR31 b7 copy
+### S6b (prepared 2026-11-05 UTC; live attempts same day: trial expired / trial=300 refused by 5..120 clamp; X restored; re-staged after TRIAL_MAX=600): dual-window mmap + PR31 b7 copy
 
-`s6b=1` with `dryrun=0 live=1 mode=640x480-8 trial=60`; then the user tool
+`s6b=1` with `dryrun=0 live=1 mode=640x480-8 trial=300`; then the user tool
 `wd24s6b-test` opens /dev/wd24s6b. See WD24ADV-NEXT-STAGE.md for the design.
+Trial range is 5..600 (cannot be disabled). Use 300 so serial typing of the
+arm+run line cannot eat the window (the first live attempt expired at 60 s
+before `run`; a second attempt with trial=300 was refused by the old clamp).
 
 | step | what | writes |
 |---|---|---|
@@ -656,30 +659,32 @@ A0000 behaves as the kernel ioremap; a b7 that reads back but has no effect
 is only caught by the data checks (`S6B FAIL kernel COPY`).
 
 Build: tc755x (kobj-vm86), vermagic `6.18.57-tc755x mod_unload 486`, module
-sha256 `c8137d98ebf73280e7889867088d4bb1ed64de15a2a4cf6b990daa42c5d4529a`,
-tool sha256 `398ce9447a1644e78db770d64f07311d1dbfd98d8269af5e5400b7ea35618ba6`.
-Tests: host test_s6b 61/0, test_s6 140/0, all suites; QEMU
-qemu-wd24adv-s6b.py 24/24, qemu-wd24adv-s6.py 24/24, qemu-wd24adv-s3.py 34/34.
+sha256 `f73f8e1c728e16124357d8c7303efde725a31de5fb29a1d8914e3b47dcc1c822`,
+tool sha256 `de6a9b34c9855fec53508a2e3859d0c77c1296c2dfad549942b408e6690f44f7`.
+Tests: host test_s6b + all suites; QEMU qemu-wd24adv-s6b.py,
+qemu-wd24adv.py (trial=601 refused), qemu-wd24adv-s6.py, qemu-wd24adv-s3.py.
 
 Copy route: box -> grok-bot-server -> Pop ~/wd24adv-s6b.ko and
 ~/wd24s6b-test, check both shas on Pop, then
 `~/755c-install/xkit/send1.sh ~/wd24adv-s6b.ko /tmp/wd24adv.ko` and
 `~/755c-install/xkit/send1.sh ~/wd24s6b-test /tmp/wd24s6b-test`; on the
-755C `sha256sum /tmp/wd24adv.ko /tmp/wd24s6b-test` must start c8137d98 /
-398ce944.
+755C `sha256sum /tmp/wd24adv.ko /tmp/wd24s6b-test` must start f73f8e1c /
+de6a9b34.
 
 Lines (separate approval; plog each; one per call, wait for the prompt; no
-overlap, no retries; interrupted -> check commands.log, never re-send):
+overlap, no retries; interrupted -> check commands.log, never re-send).
+L5 is the G gate only. L6 is one combined arm+run line (<400 chars) so the
+trial clock starts only when run is about to execute. Send L6 only if GATE=OK:
 
 ```
 pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
 kill <the Xfbdev PID printed above>
 echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo RM=$?
 dmesg -n 1; printf '\033[9;0]' > /dev/tty1; chmod 755 /tmp/wd24s6b-test; echo Q=$?
-S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); T=$(sha256sum /tmp/wd24s6b-test|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$T$N$F$X; [ $S$T$N$F$X = c8137d98398ce944001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s6b=1 trial=60; echo RC=$?; }
-[ -c /dev/wd24s6b ] || mknod /dev/wd24s6b c $(sed -n 's/.*major \([0-9]*\).*/\1/p' /proc/wd24adv/s6b | head -1) 0; dmesg | grep wd24adv | tail -4; /tmp/wd24s6b-test run | grep -vE "^S6B ok"; echo T=$?
+S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); T=$(sha256sum /tmp/wd24s6b-test|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$T$N$F$X; [ $S$T$N$F$X = f73f8e1cde6a9b34001 ] && echo GATE=OK || echo GATE=FAIL
+dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s6b=1 trial=300; echo RC=$?; [ -c /dev/wd24s6b ] || mknod /dev/wd24s6b c $(sed -n 's/.*major \([0-9]*\).*/\1/p' /proc/wd24adv/s6b | head -1) 0; /tmp/wd24s6b-test run | grep -vE "^S6B ok"; echo T=$?
 /tmp/wd24s6b-test hold & sleep 3; kill -9 $!; sleep 2; tail -6 /proc/wd24adv/s6b
-sleep 60; cat /proc/wd24adv/s6b > /tmp/s6brun.txt; cat /proc/wd24adv/live > /tmp/s6blive.txt; tail -4 /tmp/s6brun.txt; dmesg | grep wd24adv | tail -6
+sleep 300; cat /proc/wd24adv/s6b > /tmp/s6brun.txt; cat /proc/wd24adv/live > /tmp/s6blive.txt; tail -4 /tmp/s6brun.txt; dmesg | grep wd24adv | tail -6
 rmmod wd24adv; echo RM=$?
 insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?
 ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & )
@@ -687,26 +692,28 @@ i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); d
 pidof Xfbdev >/dev/null && { dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u; }
 ```
 
-WAIT: the `run` line up to 60 s (a 486 with UC ISA VRAM; expect under 20 s);
-the `sleep 60` line up to 75 s; others as S6c.
+WAIT: the arm+run line up to 60 s after RC=0 (a 486 with UC ISA VRAM; expect
+under 20 s for `run`); the `sleep 300` line up to 320 s; others as S6c.
 
-Expected: G=c8137d98398ce944001, RC=0, `S6b: armed`, the run line prints
-only `S6B copy ...: err 0` x4 and `S6B-RESULT OK 18/18 ...`, T=0; hold line
-`S6B-HOLD setwin 0`, then `release (close / munmap / exit) -> 0; state OFF`,
+Expected: G=f73f8e1cde6a9b34001 and GATE=OK, RC=0, `S6b: armed`, the run
+prints only `S6B copy ...: err 0` x4 and `S6B-RESULT OK 18/18 ...`, T=0; hold
+line `S6B-HOLD setwin 0`, then `release (close / munmap / exit) -> 0; state OFF`,
 `restore: PR1 c5 PR0A 00 PR0B 00 SR06 0f locked, PR31 b7 clear, 0 bad`,
 `restore-bad 0`; after expiry text is back, the log ends with
 `trial expiry` and SR06 locked; RM=0, RC=0, X-UP, baseline RC=19 result=ok
 restore_fail=0x00 SR06=0f SR11=5d.
 
-Stop rules: G mismatch -> send none of the S6b lines, go to the wd90c24fb/X
-lines. `S6B-RESULT FAIL` with state 1 (data only, session still ON) or open
-refused (`No such device`, entry refused, no write): continue with the
-sleep/expiry line, rmmod and X, report. Session DEAD (dmesg `S6b: session
-DEAD`, INFO state 2), `restore-bad` not 0, `SR06 ... not locked` in the log,
-a restore line other than `SR06 0f locked, PR31 b7 clear, 0 bad`, a run line that does not return within 60 s, kill -9 not followed by
+Stop rules: GATE=FAIL / G mismatch -> send none of the S6b lines, go to the
+wd90c24fb/X lines. `S6B-RESULT FAIL` with state 1 (data only, session still
+ON) or open refused (`No such device`, entry refused, no write): continue
+with the sleep/expiry line, rmmod and X, report. Session DEAD (dmesg `S6b:
+session DEAD`, INFO state 2), `restore-bad` not 0, `SR06 ... not locked` in
+the log, a restore line other than `SR06 0f locked, PR31 b7 clear, 0 bad`, a
+run line that does not return within 60 s, kill -9 not followed by
 `release ... -> 0`, mismatch in /tmp/s6blive.txt, TIMEOUT, STILL BUSY,
 LOCKED, RESTORE FAIL, garbled screen not back to text at expiry, or no
 prompt: stop; no rmmod, no reload; power off.
+
 
 ### S6 v2 (run 2026-11-04: OK, writes 31, SR06 relocked 0f; L7-L8 overlapped by operator error, stopped with wd24adv loaded in text, X not restored, baseline not run; see docs/s6v2-live-2026-11-04.txt)
 

@@ -17,3 +17,17 @@ Text restore was clean. Fix for the rerun: a longer trial (e.g. trial=300) or st
 the tool in the same line as insmod.
 Baseline wd24probe3 (under X): RC=19 result=ok restore_fail=0x00 wrote_sr06=0,
   SR06=0f SR11=5d GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 idx 11/09/01: unchanged.
+
+---
+
+## Attempt 2 (2026-11-05 ~08:40 America/New_York): trial=300 refused, X restored
+
+Operator sat; same staged binaries (c8137d98 / 398ce944). L1-L4 OK.
+L5 used trial=300 (typed to beat the 60 s window); G matched
+c8137d98398ce944001; insmod RC=22. dmesg:
+  wd24adv: live: trial=300 refused (5..120 s; it cannot be disabled)
+No /proc/wd24adv; wd24adv never loaded. Skipped L6-L9.
+L10-L12: wd90c24fb RC=0, startx, X-UP (Xfbdev 536). Owner: X back, no bars.
+L13: wd24probe3.ko missing on /tmp after the earlier reboot (RC=254); not
+re-sent; stop. Clamp 5..120 is the root cause; raise TRIAL_MAX and rerun
+with trial=300 + combined arm/run (no live re-run in this change).

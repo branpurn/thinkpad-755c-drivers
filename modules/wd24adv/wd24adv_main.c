@@ -16,7 +16,7 @@
  * standard VGA registers, DAC and all four 64 KiB planes as Linux vgastate
  * does) and restored on unload.  A mode is set only on request (mode= at
  * load or "mode NAME" written to /proc/wd24adv/control) and is reverted to
- * text after trial= seconds (5..120, default 15, cannot be disabled) unless
+ * text after trial= seconds (5..600, default 15, cannot be disabled) unless
  * "confirm" is written first.  Every write is read back; a difference stops
  * and restores.  Requires the VGA text console (vgacon) with no
  * framebuffer console and no X server: see README.md "Live test".
@@ -125,7 +125,7 @@ MODULE_PARM_DESC(allow_clock, "permit PR68 b4:3 / PR69 clock writes; no table mo
 
 static unsigned int trial = 15;
 module_param(trial, uint, 0444);
-MODULE_PARM_DESC(trial, "live: revert a mode to text after N s unless confirmed (5..120, default 15; 0 refused)");
+MODULE_PARM_DESC(trial, "live: revert a mode to text after N s unless confirmed (5..600, default 15; 0 refused)");
 
 static char *also_conflict = "";
 module_param(also_conflict, charp, 0444);
@@ -165,7 +165,7 @@ static const struct wd24s3_prog *sprog = &wd24s3_prog3;
 #define TXT_MAX	(160 * 1024)
 
 #define TRIAL_MIN	5
-#define TRIAL_MAX	120
+#define TRIAL_MAX	600
 #define VGA_PORTS	0x3c0
 #define VGA_NPORTS	0x20
 
