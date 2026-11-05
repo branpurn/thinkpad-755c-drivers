@@ -45,6 +45,7 @@ Doom), direct mapping and, later, page flipping on the **internal panel only**.
 | `tests/test_s6b.c` | S6b against the S6 model: memmove/scroll vs reference, 200 random copies, locked/b3-xor-b7 asserts on every VRAM access, unlock counts, refusals, faults (PR1 stuck, relock clears b7, lock ignored, relock stuck, re-unlock refused, b7 preset). |
 | `tests/wd24s6b-test.c` | User tool for /dev/wd24s6b (static i486): `run` (save, SETWIN refusals, cross-bank memmove through the mmap, 4 kernel COPYs, frame scroll, restore, `S6B-RESULT`), `hold` (kill -9 test). |
 | `tests/qemu-wd24adv-s6b.py` | QEMU: S6b dry-run model session, refusals, real .ko zero 23Cxh / VGA data writes, fake build running the tool (OK, exclusive open, kill -9 teardown, rmmod pinned while held). |
+| `wd24adv_s6d_fault.h`, `tests/test_s6d_fault.c`, `tests/wd24s6d-mmap.c` | Fault plan and cleanup order (host). `wd24s6d-mmap` is the later live mmap exercise; it was not run here. |
 
 Built by `make oot` / `make wd24adv`. There is still **no `ext/*.ext`**, so no
 `.tcz` is produced. Uses only symbols the trimmed tc755 kernel exports
@@ -66,6 +67,9 @@ Built by `make oot` / `make wd24adv`. There is still **no `ext/*.ext`**, so no
 | `s1` | 0 | The S1 read-only 23C0h probe. Dry-run: `/proc/wd24adv/s1` shows the plan only. With `dryrun=0` (and **without** `live=1` / `mode=`): runs once at load in text mode with no fb driver, after the wd24adv entry check; result in `/proc/wd24adv/s1` and dmesg. insmod returns 0 either way (the result is held); no port region is kept, so rmmod touches nothing. |
 | `s1_echo` | 1 | S1: require the 23C2h b15:12 index echo (DS 17.1, UNPROVEN). 0 only records it. Needs `s1=1`. |
 | `s6b` | 0 | S6b: /dev/wd24s6b (chrdev; ioctls `'W'` 0x37 SETWIN, 0x38 COPY, 0x39 INFO in `wd24adv_ioctl.h`). dryrun=1: one model session, no device. dryrun=0 needs `live=1 mode=640x480-8`; the device arms after the mode set and the session ends at close/exit/kill -9, text, mode, trial expiry or rmmod. Refused with s1-s6. |
+| `s6d` | 0 | S6d fault-banked fbdev after `mode=640x480-8`. See `s6d_fbcon` and `s6d_bind`. Refused with `s6b=1`. |
+| `s6d_fbcon` | 1 | `0`: arm the dual window and do **not** call `register_framebuffer` (no `/dev/fbN`). `1`: register. This flag does not by itself stop fbcon. |
+| `s6d_bind` | 1 | With `s6d_fbcon=1`: `1` allows `fb_open(info, 0)` (fbcon can take the VT). `0` returns `-EBUSY` from that open so `fbcon_startup` fails and the VT is not taken over. Ignored when `s6d_fbcon=0`. Requires `/proc/fb` empty. Not `skip_vt_switch`. |
 | `also_conflict` | "" | Test aid: also refuse to load while the named module is loaded. |
 
 ## /proc/wd24adv/
@@ -91,6 +95,7 @@ Built by `make oot` / `make wd24adv`. There is still **no `ext/*.ext`**, so no
     earlier readback mismatch (`-EBUSY` / `-EIO`). Starts the trial timer.
   - `confirm`: keep the current mode (stops the auto-revert).
   - `text`: restore the saved text state now.
+- **`s6d`** (with `s6d=1`): one trylock status line (armed, fb_reg, faults, switches, thrash). Not a directory wildcard.
 
 ## Live backend
 

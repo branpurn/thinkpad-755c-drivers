@@ -253,20 +253,26 @@ ko sha256 `63dc2654…`; commit `9ad254f`. See `docs/s6d-live-2026-11-05.txt`.
 pattern=0 vs expected bars; fbcon wipe-to-white; restore hang / serial overlap /
 fbcon bind strategy.
 
-### Box follow-up 2026-11-05 ~19:20 UTC (755C untouched) — root cause + safer path
+### Box follow-up 2026-11-05 ~19:20 UTC (755C untouched) — notes, later corrected
+
+The pattern bool is right. The proc-lock hang and the DAC colour were not established. See the hang audit at the end.
 
 **pattern=0 is not a wrong id.** `pattern` is a **bool** (default 1):
 `1` = draw 16 roll-up colour bars via `wd24_pattern()` after the mode set;
 `0` = skip bars. The READY line used `pattern=0` on purpose ("avoid colour-bar
 path"). No bars on that run was correct.
 
-**Green line-by-line roll** = fbcon bind after `register_framebuffer` →
-`s6d_fillrect`/`s6d_imageblit` painting pixel-by-pixel (banked `writeb`) under
-`hw_lock`. BIOS text DAC still loaded (no `fb_setcolreg` yet) → clear colour
-often reads green; then white; then the 80x30 TTY line.
+**Line-by-line roll:** the owner saw a green roll, then white, then fbcon text.
+The redraw is inside `register_framebuffer` (`update_screen` →
+`s6d_fillrect` / `s6d_imageblit`, one `writeb` per pixel). That part matches
+the code and the switching printk. The green hue being the leftover BIOS DAC
+is a hypothesis: there is no `fb_setcolreg`, and no DAC read was logged.
 
-**Serial hang** = overlapping POST `head` of `/proc/wd24adv/*` while fbcon
-paint held `hw_lock` on the blocking `live_read` path.
+**Serial hang — earlier note, not established.** A blocking `live_read` plus
+a wildcard `/proc` read was suggested. The commands were sent before `insmod`
+returned, so the shell had not run them. See "S6d hang audit" at the end of
+this file. The green-roll colour (BIOS DAC) is still a hypothesis; the
+`pattern=0` skip and the "Console: switching" line are facts.
 
 **Code changes (rebuild staged):**
 | Change | Effect |
@@ -287,9 +293,15 @@ After any `s6d=1` visual insmod (especially with `s6d_fbcon=1`):
 3. Prefer: `sleep 2; cat /proc/wd24adv/live` once; if "hw busy", sleep and retry.
 4. One serial line at a time; no overlapping POST.
 
-#### Recommended next LIVE (Brandon watching — do NOT run until then)
+#### Recommended next LIVE — superseded
 
-755C idle until Brandon OK. Prefer the **pattern-visible** prove first:
+The bars command below (`s6d_fbcon=0`) was run at ~14:35 America/New_York.
+See `docs/s6d-live-2026-11-05.txt`. Do not repeat it as the next step.
+The `s6d_fbcon=1` command is the path that bound fbcon; do not run it.
+The next candidate is `s6d_fbcon=1 s6d_bind=0` plus `wd24s6d-mmap`, in
+"Next live candidate" at the end of this file, and only with a separate OK.
+
+755C idle until that OK. Historical lines, already used or withdrawn:
 
 ```
 # A. Bars stay (no fbcon wipe) — expect 16 colour bars for trial window
@@ -310,5 +322,111 @@ echo RC=$?
 ```
 
 Stop on: thrash latch, register mismatch, restore fail, panel/routing oddity.
-Still open (not this patch): `fb_setcolreg` so fbcon colours match; faster
-fillrect; optional vtcon unbind after register.
+Still open: `fb_setcolreg` (would be new DAC writes; not in this stage);
+faster fillrect. vtcon unbind-after-register is not the exclusion method:
+`update_screen` has already painted by then.
+
+## S6d hang audit (commit 9ad254f visual)
+
+Detail and the 14:35 bars result: `docs/s6d-live-2026-11-05.txt`.
+
+What is established:
+
+- `pattern=0` skips the bars. The roll was not a mis-numbered pattern.
+- `Console: switching to colour frame buffer device 80x30` is `do_bind_con_driver`, and the redraw is `update_screen` inside `register_framebuffer`, before the armed printk. Pixel `writeb` in `s6d_fillrect` / `s6d_imageblit` is the paint path. Green-then-white is the owner's report. "BIOS text DAC" is a hypothesis (`fb_setcolreg` is absent, so the DAC was not programmed by this driver).
+- `skip_vt_switch` does not stop the bind. Deferred takeover needs `FB=y` and is compiled out for `FB=m`. The switching line shows this boot bound immediately.
+- The armed `pr_info` ran with `hw_lock` held, after fbcon was the VT. With `console=tty0` (documented for this machine; the S6d floppy APPEND file is not in this repo), printk re-enters `s6d_imageblit` and locks `hw_lock` again. That mutex does not nest. `insmod` does not return, the typed `/proc` lines never run, and `trial_fn` cannot take `hw_lock`, so there is no restore. Serial echo without execution and a dead VT keyboard match a task asleep in that lock while holding `console_lock`.
+
+Not established: the earlier "wildcard proc read blocked on the mutex" cause. SysRq configuration was not checked. The floppy cmdline was not re-read from the image.
+
+This is not a PASS of restore, mmap, or a quiet fbdev. It is evidence the node was registered and fbcon bound.
+
+## What changed for the next stage
+
+`s6d_fbcon=0` is unchanged: no `register_framebuffer`.
+
+`s6d_fbcon=1 s6d_bind=0` (new) still registers. `fb_open(info, 0)` returns `-EBUSY`. On a boot with `/proc/fb` empty, fbcon's console driver is not registered yet, `fbcon_startup` returns NULL, and `do_take_over_console` does not bind. `register_framebuffer` then returns `-ENODEV` with `info->node >= 0`; that pair is the success case. Any other result unregisters and ends the session (fail closed), including a 0 return. If dmesg shows `Console: switching`, the bind was not refused: stop.
+
+`s6d_bind=1` still allows the open. The armed printk is now outside `hw_lock`, and fill/blit nest if printk hits them on the same task, so the 9ad254f self-deadlock is closed. It is still the path that paints the console. It is not the next live.
+
+Stop order when a node exists: refuse new faults, `unmap_mapping_range`, end the dual-window session, `unregister_framebuffer`, then the existing text restore. A readback mismatch in that restore returns `-EIO` and leaves `in_text` false (`test_vga`). rmmod still finishes after logging that; a non-zero text/expiry line means the text state was not confirmed.
+
+The last 64 KiB window is only partly inside the 307200-byte frame (11 pages, not 16). The fault plan maps and zaps that prefix only. A full-window zap would miss `range_in_vma` and leave stale PTEs.
+
+## Host results (this workspace)
+
+No kernel tree and no `Module.symvers` here. `scripts/build-oot.sh` will not build a `.ko`. No module artifact was produced. `wd24s6d-mmap` was compiled with the host cc as a link check; it is not an i486 binary and it was not run.
+
+`make -C modules/wd24adv/tests test`:
+
+- existing suite, including `test_vga` 70/0 with the restore-mismatch `in_text` checks
+- `test_s6d_bank` 15/15, `test_s6d_thrash` 54/54
+- `test_s6d_fault` 2025/0: probe faults 6 / switches 6, tool read-back totals faults 10 / switches 10 / thrash 0, a latched fault does not move the window, cleanup order for expiry, death (fd close), munmap-only, unload, and `-EIO` leaving `in_text` clear
+
+QEMU was not run (no qemu binary in this environment). The cleanup figures are the contract test of that order, not a loaded module.
+
+## Next live candidate — do not run without a separate OK
+
+Owner watching. One line, then wait for a real prompt. No `/proc/wd24adv/*`. No second command until `RC=` or `RM=` is printed. Hardware, CF, MBR stay untouched.
+
+Build the module on the machine that has the 6.18.57-tc755x tree (not this workspace). Record the new sha256. Cross-build `tests/wd24s6d-mmap.c` for the 486 userspace there. This repo does not contain that binary.
+
+Gate, before insmod:
+
+```
+cat /proc/fb
+```
+
+Empty. If not, stop.
+
+```
+dmesg | grep -F 'Console: switching'
+```
+
+No hit from this boot. If there is one, stop.
+
+Then:
+
+```
+dmesg -c >/dev/null
+insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=120 s6d=1 pattern=1 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
+echo RC=$?
+```
+
+Expect `RC=0`, an armed/registered line that says `WITHOUT fbcon bind` and `register -19`, and no `Console: switching`. Bars stay (same picture as the 14:35 run). If the switching line appears, or `RC` is not 0, stop. Do not start the mmap tool.
+
+```
+cat /proc/wd24adv/s6d
+```
+
+Expect `armed 1`, `fb_reg 1`, `bind_param 0`, `faults 0`, `node 0` (or another small node). One file, once.
+
+```
+/tmp/wd24s6d-mmap /dev/fb0
+```
+
+Expect `WD24S6D-MMAP ok stamps 5 tail 1`. Then:
+
+```
+cat /proc/wd24adv/s6d
+```
+
+Expect `faults 10 switches 10 thrash 0 latched 0`.
+
+Wait for the trial-expiry printk: result 0, `in_text` 1, mismatches 0, and an S6d end line. Then:
+
+```
+cat /proc/fb
+rmmod wd24adv
+echo RM=$?
+```
+
+`/proc/fb` empty, `RM=0`, shell still answers.
+
+What the panel should show: the 16 bars, plus five 8×8 blocks at pixel (0,0), (256,102), (512,204), (128,307), (384,409), written as indices 1, 2, 4, 14 and 15. One more byte, index `0x3c`, at (639,479). This driver does not program the DAC, so the on-panel hue of those indices is not a pass criterion. There should be no full-screen roll and no fbcon text. After the tool exits, the banking session ends and the picture may shift until the trial restores text.
+
+Stop if: `Console: switching` appears, bars vanish into a text console, thrash is non-zero, a register mismatch is logged, the expiry line is non-zero or `in_text` is not 1, the shell stops answering, or the mmap tool prints `bad`.
+
+Not this sitting: `--hold` (prints `WD24S6D-MMAP hold`, mapping stays up; `kill -9` of that pid, or the 60 s alarm `_exit`, then the trial restore) and a repeat whose only difference is letting the alarm fire. Those are separate OKs. Do not background the tool on the first run.
+
+`s6d_bind=1` is not scheduled. Xfbdev is not scheduled.

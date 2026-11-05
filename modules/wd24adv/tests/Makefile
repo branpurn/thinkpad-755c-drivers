@@ -9,7 +9,7 @@ CFLAGS ?= -O2 -g -Wall -Wextra -Werror -std=gnu11
 CORE = ../wd24adv_core.c ../wd24adv_modes.c ../wd24adv_port.c
 HW = ../../wd90c24fb/wd90c24_hw.c
 
-test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test_s5 test_s6 test_s6b test_s6d_bank test_dead
+test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test_s5 test_s6 test_s6b test_s6d_bank test_s6d_thrash test_s6d_fault test_dead
 	./test_core
 	./xcheck
 	./test_vga
@@ -22,6 +22,8 @@ test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test
 	./test_s6
 	./test_s6b
 	./test_s6d_bank
+	./test_s6d_thrash
+	./test_s6d_fault
 	./test_dead
 
 test_core: test_core.c $(CORE) ../wd24adv_core.h
@@ -63,7 +65,16 @@ test_s6b: test_s6b.c ../wd24adv_s6b.c ../wd24adv_s6b.h ../wd24adv_s6.c ../wd24ad
 test_s6d_bank: test_s6d_bank.c ../wd24adv_s6d_bank.h ../wd24adv_s6b.h
 	$(CC) $(CFLAGS) -o $@ test_s6d_bank.c
 
+test_s6d_thrash: test_s6d_thrash.c ../wd24adv_s6d_thrash.h
+	$(CC) $(CFLAGS) -o $@ test_s6d_thrash.c
+
+test_s6d_fault: test_s6d_fault.c ../wd24adv_s6d_fault.h ../wd24adv_s6d_bank.h ../wd24adv_s6d_thrash.h
+	$(CC) $(CFLAGS) -o $@ test_s6d_fault.c
+
+wd24s6d-mmap: wd24s6d-mmap.c ../wd24adv_s6d_fault.h ../wd24adv_s6d_bank.h ../wd24adv_s6d_thrash.h
+	$(CC) $(CFLAGS) -o $@ wd24s6d-mmap.c
+
 clean:
-	rm -f test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test_s5 test_s6 test_s6b test_s6d_bank test_dead
+	rm -f test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test_s5 test_s6 test_s6b test_s6d_bank test_s6d_thrash test_s6d_fault test_dead wd24s6d-mmap
 
 .PHONY: test clean

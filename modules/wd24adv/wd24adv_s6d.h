@@ -11,11 +11,6 @@
 #include <linux/string.h>
 #else
 #include <string.h>
-#ifdef __KERNEL__
-struct vm_area_struct;
-int wd24s6d_map_win(struct wd24s6d *s, struct vm_area_struct *vma, u32 off);
-#endif
-
 #endif
 #include "wd24adv_s6b.h"
 #include "wd24adv_s6d_bank.h"
@@ -37,7 +32,8 @@ struct wd24s6d {
 	u32 nswitch;
 	u32 nthrash;
 	bool active;			/* begin() succeeded; end() owed */
-	bool fb_reg;			/* register_framebuffer done */
+	bool fb_reg;			/* register_framebuffer linked a node */
+	bool stopping;			/* faults and new mmaps refused */
 	const char *why;
 };
 

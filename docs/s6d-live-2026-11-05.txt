@@ -133,12 +133,13 @@ What Brandon saw instead:
      DAC — often reads as green on this panel).
   4. Further fbcon clear → white; then imageblit of the TTY line (80x30).
 
-### Why serial/keyboard died
+### Why serial/keyboard died — NOT ESTABLISHED (see the audit below)
 
-`/proc/wd24adv/live` took `mutex_lock(&hw_lock)`. During/after fbcon bind,
-fillrect holds that lock for a long paint. Overlapping POST `head` of
-`/proc/wd24adv/*` blocked on the mutex → serial shell hung. Keyboard shell
-also non-functional after the fbcon switch; power cycle needed.
+An earlier note blamed a blocking `/proc/wd24adv/live` `mutex_lock` while
+fillrect held `hw_lock`, plus the POST `head` of `/proc/wd24adv/*`. That is
+not shown. Those reads were typed before `insmod` returned, so the shell
+had not executed them. The hang audit later in this file is the current
+account. Do not treat the proc-lock story as the cause.
 
 ### Box fixes (this follow-up)
 
@@ -151,3 +152,53 @@ also non-functional after the fbcon switch; power cycle needed.
     steps in WD24ADV-NEXT-STAGE.md (Brandon watching required).
 
 ko (restore-safe) sha256 d8b06a80695cb8bf47ad5b00ec628e8ce653b723c720303205e959f8a0c5b06c
+
+---
+
+## Bars + clean restore, no framebuffer — 2026-11-05 ~14:35 America/New_York
+
+Fact (owner-confirmed). S6d floppy, same boot family as above. Module sha256
+`d8b06a80695cb8bf47ad5b00ec628e8ce653b723c720303205e959f8a0c5b06c` (commit
+`5b75c66`). One command:
+
+  insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=1 fix_sr06=1 s6d_fbcon=0
+
+  RC=0
+  Owner: colour bars looked fine.
+  Trial expiry printk: faults 0, switches 0, thrash 0; live trial expiry 0; in_text=1
+  rmmod RM=0
+  /proc/fb empty afterwards
+  Text serial shell stayed responsive
+
+`s6d_fbcon=0` does not register a framebuffer. It skips `register_framebuffer`
+entirely. This run is bars plus text restore. It is not a registered fbdev
+and not an mmap test. faults/switches 0 matches that: nothing faulted.
+
+`pattern=1` is the bool that draws the 16 bars. `pattern=0` on the earlier
+visual skipped them on purpose.
+
+---
+
+## Hang audit (the ~13:50 visual, commit 9ad254f) — 2026-11-05
+
+Observed, and only this:
+
+- printk: load 0, mode 0, then `Console: switching to colour frame buffer device 80x30`, then `S6d: armed + registered fb0`.
+- `echo RC=$?` never returned.
+- Owner: green line-by-line roll, then a white screen with fbcon text. No colour bars (`pattern=0`).
+- Later serial input echoed and was not executed. Keyboard shell unavailable. No automatic text restore. Power cycle required.
+- POST lines that read `/proc/wd24adv/*` were sent before the insmod prompt returned.
+
+Not a PASS beyond the registration printk. Mode set and `register_framebuffer` returning far enough to print "armed + registered" are what that printk shows. Restore was not observed.
+
+Code at 9ad254f, checked against Linux 6.18.7 (same line as 6.18.57; fbcon/vt sources are not in this repo, they were read from the stable tree):
+
+1. `pattern` is a bool. `pattern=0` skips `wd24_pattern`. No bars on that command is what the code does.
+2. `do_bind_con_driver` prints `Console: switching to ...` and then calls `update_screen`, which is the fbcon redraw. That runs inside `register_framebuffer`, before `s6d_arm` prints "armed + registered". The line-by-line roll is the timing of that redraw through `s6d_fillrect` / `s6d_imageblit` (one `writeb` per pixel). Calling the green colour "the BIOS DAC" is a hypothesis: this driver has no `fb_setcolreg`, so the DAC is whatever was already loaded, and the owner saw green then white. The hue is not proven from the registers.
+3. There is no per-fb flag that skips the bind. `fb_info.skip_vt_switch` only calls `pm_vt_switch_required`. `CONFIG_FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER` depends on `FB=y`; this kernel is `FB=m`, so `deferred_takeover` is compiled out. The switching printk shows the bind ran.
+4. After register returns, `s6d_arm` takes `hw_lock` and `pr_info`s the armed line while still holding it. The 755C boot line in WD24ADV-LIVE-TEST is `console=tty0 console=ttyS0`. The S6d floppy APPEND file is not in this repo, so that exact cmdline was not re-read here. If tty0 is a printk console, the flush calls `fbcon_putcs` → `s6d_imageblit` → `mutex_lock(hw_lock)` on the same task. The mutex is not recursive. The task sleeps holding `hw_lock` and `console_lock`. `insmod` never returns, so the shell never runs the typed proc reads. `trial_fn` also needs `hw_lock`, so the 30 s restore does not run. That matches: armed line visible on serial (serial console flushed, then the VT console re-entered), no RC, no restore, keyboard dead (VT needs `console_lock`), serial bytes echoed by the tty and not read.
+5. The proc-lock story does not explain this. The reads were not executed.
+
+Unresolved: the floppy cmdline is not in this tree. If that boot had dropped `console=tty0`, the printk would not enter fbcon and this deadlock would not be the hang. The documented machine boot line includes it, and the symptoms match the deadlock. SysRq was ignored; whether `CONFIG_MAGIC_SYSRQ` is on for this floppy was not checked.
+
+`5b75c66` made `/proc` reads trylock and added `s6d_fbcon=0`. Trylock does not fix the armed-line deadlock. `s6d_fbcon=0` avoids it by never registering. The next stage registers and refuses the fbcon open instead.

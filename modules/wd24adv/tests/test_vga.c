@@ -209,7 +209,8 @@ int main(void)
 	RUN(wd24_plan_mode(&c, m480));
 	m.stuck_rf = WD24_GR; m.stuck_idx = 0x06; m.stuck = 0x05;
 	err = RUN(wd24_plan_text(&c));
-	T(err == -EIO && c.nmismatch >= 1, "mismatch during restore: reported -EIO");
+	T(err == -EIO && c.nmismatch >= 1 && !c.in_text,
+	  "mismatch during restore: -EIO and in_text stays false");
 	m.stuck_rf = -1;
 	m.gr[6] = snap.gr[6];
 	T(vm_cmp(&m, &snap, "restore with stuck GR06") == 0,
@@ -222,7 +223,8 @@ int main(void)
 	RUN(wd24_pattern(&c, m480));	/* chain-4 writes hit planes 0-3 */
 	m.ro_plane = 2;
 	err = RUN(wd24_plan_text(&c));
-	T(err == -EIO && c.nmismatch >= 1, "plane 2 not restored: readback reports -EIO");
+	T(err == -EIO && c.nmismatch >= 1 && !c.in_text,
+	  "plane 2 not restored: -EIO and in_text stays false");
 	m.ro_plane = -1;
 	memcpy(m.vram[2], snap.vram[2], WD24_PLANE);
 	T(vm_cmp(&m, &snap, "ro plane") == 0, "plane 2 not restored: everything else restored");
