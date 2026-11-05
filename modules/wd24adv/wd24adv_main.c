@@ -46,6 +46,13 @@
  *   s6d_fbcon=1 s6d_bind=0 — register a real fb, but fb_open(info, 0)
  *     returns -EBUSY so fbcon_startup fails and the VT is not taken over.
  *     This is not skip_vt_switch and not DEFERRED_TAKEOVER (that needs FB=y).
+ *   s6d_cmap=0 (default) — no fb_setcmap. FBIOGETCMAP stays -EINVAL.
+ *   s6d_cmap=1 — refused unless s6d=1 s6d_fbcon=1 s6d_bind=0 dryrun=0
+ *     live=1 mode=640x480-8 and no other stage. Userspace open reads the
+ *     DAC with the vgastate sequence and publishes it only when it
+ *     matches the load snapshot. FBIOPUTCMAP then writes 3C8/3C9 and
+ *     returns 0 only after a 3C9 readback. fbcon cannot call it: bind
+ *     is 0, and the hook also refuses while busy is 0.
  * pattern is a bool (1=bars, 0=skip), not a pattern id.
  * Do not printk while holding hw_lock unless the fb draw path can nest:
  * after fbcon binds, printk on console=tty0 re-enters imageblit.
@@ -105,6 +112,7 @@
 #include "wd24adv_s6b.h"
 #include "wd24adv_s6d.h"
 #include "wd24adv_ioctl.h"
+#include "wd24adv_dac_entry.h"
 #include <linux/fb.h>
 #include <linux/fs.h>
 #include <linux/device.h>
@@ -398,6 +406,10 @@ MODULE_PARM_DESC(s6d_fbcon, "S6d: 1 (default) call register_framebuffer; 0 arm d
 static bool s6d_bind = true;
 module_param(s6d_bind, bool, 0444);
 MODULE_PARM_DESC(s6d_bind, "S6d with s6d_fbcon=1: 1 (default) allow fb_open(info,0) so fbcon can bind; 0 return -EBUSY from that open so fbcon_startup fails and the VT stays put. Ignored when s6d_fbcon=0. Not skip_vt_switch. Requires /proc/fb empty (no fbcon driver already registered)");
+
+static bool s6d_cmap;
+module_param(s6d_cmap, bool, 0444);
+MODULE_PARM_DESC(s6d_cmap, "S6d RAMDAC fb_setcmap, default 0 (no hook, baseline palette). 1 requires s6d=1 s6d_fbcon=1 s6d_bind=0 dryrun=0 live=1 mode=640x480-8 and no other stage. No colour write at register, in text, or while frozen");
 
 static struct wd24s6 *s6st;
 static u8 *s6_save;
@@ -1797,6 +1809,7 @@ static struct wd24s6d *s6d_st;
 static struct wd24s6b *s6d_b;
 static struct fb_info *s6d_info;
 static bool s6d_armed, s6d_busy;
+static bool s6d_cmap_published, s6d_cmap_frozen;
 static struct vm_area_struct *s6d_vma;	/* exclusive single mapper */
 
 /* Drop every userspace PTE before the aperture is reprogrammed or the
@@ -1874,6 +1887,9 @@ static void s6d_stop(const char *why)
 {
 	bool need_unreg = false;
 
+	/* Before any lock drop. A SET waiting on hw_lock must see this
+	 * and return without a 3C9 write. Text restore follows s6d_stop. */
+	s6d_cmap_frozen = true;
 	/* quiesce + unmap, end-session, then unregister. text-restore is
 	 * hw_run's next step (trial expiry, "text", rmmod), not here. */
 	s6d_armed = false;
@@ -1980,6 +1996,133 @@ static int s6d_fb_mmap(struct fb_info *info, struct vm_area_struct *vma)
 	return 0;
 }
 
+static void s6d_cmap_out(void *p, u8 v, u16 port)
+{
+	struct wd24_ctx *c = p;
+
+	c->io->outb(c->io->priv, v, port);
+	if (port == WD24_DAC_RI || port == WD24_DAC_WI)
+		c->hw_index++;
+	else
+		c->hw_data++;
+}
+
+static u8 s6d_cmap_in(void *p, u16 port)
+{
+	struct wd24_ctx *c = p;
+
+	return c->io->inb(c->io->priv, port);
+}
+
+static void s6d_cmap_view(struct wd24_cmap_view *v)
+{
+	memset(v, 0, sizeof(*v));
+	v->param = s6d_cmap;
+	v->dryrun = dryrun;
+	v->live = live;
+	v->bind = s6d_bind;
+	v->fbcon = s6d_fbcon;
+	v->armed = s6d_armed;
+	v->active = s6d_st && s6d_st->active;
+	v->stopping = s6d_st && s6d_st->stopping;
+	v->busy = s6d_busy;
+	v->registering = s6d_registering;
+	v->in_text = !hw || hw->in_text;
+	v->hw_dead = hw_dead || !hw;
+	v->have_cmap = hw && (hw->have & WD24_HAVE_CMAP);
+	v->bad = !hw || hw->nmismatch || hw->failed;
+	v->published = s6d_cmap_published;
+	v->frozen = s6d_cmap_frozen;
+}
+
+/* Caller holds info->lock and hw_lock. Reads the DAC (3C6=FF, 3C7=0,
+ * 768 x 3C9). Publishes <<10 only when that read matches c->cmap.
+ * Does not write 3C9. */
+static int s6d_cmap_publish(struct fb_info *info)
+{
+	u8 live_dac[768];
+	int err;
+
+	BUILD_BUG_ON(EPERM != 1 || EIO != 5 || EBUSY != 16 ||
+		     ENODEV != 19 || EINVAL != 22);
+	if (!s6d_cmap)
+		return 0;
+	if (s6d_cmap_frozen || !hw || hw_dead || !hw->io || !hw->be->dac_read ||
+	    !(hw->have & WD24_HAVE_CMAP) || hw->in_text || hw->nmismatch ||
+	    hw->failed)
+		return -ENODEV;
+	hw->be->dac_read(hw, 0xff, live_dac);
+	if (wd24_dac_diff6(live_dac, hw->cmap)) {
+		s6d_cmap_published = false;
+		fb_dealloc_cmap(&info->cmap);
+		return -EIO;
+	}
+	err = fb_alloc_cmap(&info->cmap, 256, 0);
+	if (err) {
+		s6d_cmap_published = false;
+		return err;
+	}
+	wd24_dac_expand_image(hw->cmap, info->cmap.red, info->cmap.green,
+			      info->cmap.blue);
+	s6d_cmap_published = true;
+	return 0;
+}
+
+/* FBIOPUTCMAP holds info->lock, then this takes hw_lock. It does not
+ * take console_lock. Faults take console_lock, then hw_lock. */
+static int s6d_fb_setcmap(struct fb_cmap *cmap, struct fb_info *info)
+{
+	struct wd24_cmap_view view;
+	struct wd24_dac_io dio;
+	unsigned int i;
+	int err;
+
+	if (!cmap || !cmap->red || !cmap->green || !cmap->blue ||
+	    cmap->start > 255 || cmap->len == 0 ||
+	    cmap->len > 256 - cmap->start)
+		return -EINVAL;
+	hw_acq();
+	s6d_cmap_view(&view);
+	err = wd24_cmap_allow(&view);
+	if (err || !hw || !hw->io || !hw->io->outb || !hw->io->inb) {
+		hw_rel();
+		return err ? err : -ENODEV;
+	}
+	dio.outb = s6d_cmap_out;
+	dio.inb = s6d_cmap_in;
+	dio.p = hw;
+	wd24_dac_mask_ff(&dio);
+	for (i = 0; i < cmap->len; i++) {
+		struct wd24_dac_entry ent;
+
+		err = wd24_dac_entry(cmap->start + i, cmap->red[i],
+				     cmap->green[i], cmap->blue[i], &ent);
+		if (!err)
+			err = wd24_dac_put_entry(&dio, ent.index,
+						 ent.rgb[0], ent.rgb[1],
+						 ent.rgb[2]);
+		if (err)
+			break;
+	}
+	if (err) {
+		int rst = wd24_restore_cmap(hw);
+
+		if (!rst && info->cmap.len == 256 && info->cmap.red) {
+			wd24_dac_expand_image(hw->cmap, info->cmap.red,
+					      info->cmap.green, info->cmap.blue);
+			s6d_cmap_published = true;
+		} else {
+			s6d_cmap_published = false;
+			fb_dealloc_cmap(&info->cmap);
+		}
+		hw_rel();
+		pr_err("S6d: cmap put failed %d (snapshot restore %d)\n", err, rst);
+		return err;
+	}
+	hw_rel();
+	return 0;
+}
+
 static int s6d_fb_open(struct fb_info *info, int user)
 {
 	int err = 0;
@@ -2037,6 +2180,14 @@ static int s6d_fb_open(struct fb_info *info, int user)
 	} else {
 		s6d_busy = true;
 	}
+	if (!err && s6d_cmap) {
+		int perr = s6d_cmap_publish(info);
+
+		if (perr) {
+			s6d_busy = false;
+			err = perr;
+		}
+	}
 	hw_rel();
 	if (err)
 		pr_err("S6d: fb open failed %d\n", err);
@@ -2050,6 +2201,7 @@ static int s6d_fb_release(struct fb_info *info, int user)
 	if (!user)
 		return 0;
 	hw_acq();
+	s6d_cmap_frozen = true;
 	s6d_yield_ender();
 	/* munmap already ran on process exit; this also covers close()
 	 * while a VMA still exists. */
@@ -2216,6 +2368,17 @@ static const struct fb_ops s6d_fbops = {
 	.fb_imageblit	= s6d_imageblit,
 };
 
+static const struct fb_ops s6d_fbops_cmap = {
+	.owner		= THIS_MODULE,
+	.fb_open	= s6d_fb_open,
+	.fb_release	= s6d_fb_release,
+	.fb_mmap	= s6d_fb_mmap,
+	.fb_fillrect	= s6d_fillrect,
+	.fb_copyarea	= s6d_copyarea,
+	.fb_imageblit	= s6d_imageblit,
+	.fb_setcmap	= s6d_fb_setcmap,
+};
+
 static void s6d_free(void)
 {
 	bool took = !hw_nested();
@@ -2257,7 +2420,7 @@ static int s6d_setup(void)
 		return -ENOMEM;
 	s6d_info = info;
 	info->node = -1;		/* 0 would look linked before register */
-	info->fbops = &s6d_fbops;
+	info->fbops = s6d_cmap ? &s6d_fbops_cmap : &s6d_fbops;
 	info->flags = FBINFO_VIRTFB;
 	info->screen_base = NULL;	/* no linear/shadow; mmap is fault-banked */
 	info->screen_size = WD24S6D_MMAP_LEN;
@@ -2307,6 +2470,8 @@ static void s6d_arm(const struct wd24_mode *m)
 	}
 	if (!s6d_info || !s6d_st)
 		return;
+	s6d_cmap_frozen = false;
+	s6d_cmap_published = false;
 	s6d_armed = true;
 	S6B_HW_BEGIN();
 	err = wd24s6b_begin(s6d_b, s6b_io ? s6b_io : &s6_live_io);
@@ -2422,13 +2587,15 @@ static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 			"s6d: armed %d active %d stopping %d busy %d fb_reg %d node %d\n"
 			"fbcon_param %d bind_param %d\n"
 			"faults %u switches %u thrash %u latched %u mapped_base 0x%x\n"
-			"why %s\n",
+			"why %s\n"
+			"cmap_param %d published %d frozen %d\n",
 			s6d_armed, s6d_st->active, s6d_st->stopping, s6d_busy,
 			s6d_st->fb_reg, s6d_info ? s6d_info->node : -1,
 			s6d_fbcon, s6d_bind,
 			s6d_st->nfault, s6d_st->nswitch, s6d_st->nthrash,
 			s6d_st->thrash.latched, s6d_st->mapped_base,
-			s6d_st->why ? s6d_st->why : "-");
+			s6d_st->why ? s6d_st->why : "-",
+			s6d_cmap, s6d_cmap_published, s6d_cmap_frozen);
 	}
 	hw_rel();
 	if (len < 0)
@@ -2564,6 +2731,13 @@ static int __init wd24adv_init(void)
 #endif
 	if (!s1_echo && !s1) {
 		pr_err("s1_echo= needs s1=1\n");
+		return -EINVAL;
+	}
+	if (wd24_cmap_param_refuse(s6d_cmap, s6d, dryrun, live, s6d_bind,
+				   s6d_fbcon,
+				   mode && !strcmp(mode, "640x480-8"),
+				   s1 || s2 || s3 || s4 || s5 || s6 || s6b || s6c)) {
+		pr_err("s6d_cmap=1 refused: needs s6d=1 s6d_fbcon=1 s6d_bind=0 dryrun=0 live=1 mode=640x480-8 and no other stage\n");
 		return -EINVAL;
 	}
 #ifdef WD24S1_QEMU_FAKE

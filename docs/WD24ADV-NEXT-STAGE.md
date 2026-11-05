@@ -404,7 +404,7 @@ The loaded module is still `7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc08
 
 `read()` on the fb returns `-EINVAL` because there is no `fb_read`. A second mmap returns `-EBUSY` while X holds the only mapping. After release, `stopping` refuses another open. The stamp tool's own read-back does not show X's pixels.
 
-S6d live mode is `640x480-8` only. `640x400-8` and `320x200-8` are marked proven in the mode table and have not been seen live. `320x240-8x` and `640x480-8-v800` are unproven. `fb_setcolreg` is absent, so colormap get and put fail. `modules/wd24adv/wd24adv_dac_entry.h` plans one 6-bit entry and is not called by the loaded module. Full DAC restore still writes the snapshot taken at load and compares the low 6 bits. Wiring the plan in would be new `3C8`/`3C9` traffic and stays gated. Thrash bound stays 32.
+S6d live mode is `640x480-8` only. `640x400-8` and `320x200-8` are marked proven in the mode table and have not been seen live. `320x240-8x` and `640x480-8-v800` are unproven. The baseline module has no colormap hook, so get and put fail. A separate candidate adds `fb_setcmap` behind `s6d_cmap=0` by default. The contract, the model tests, and the file hash are in `docs/s6d-cmap.txt`. That candidate is not a request to load it. Thrash bound stays 32.
 
 `Can't deallocate console 3 Resource busy` is Xfbdev `LinuxFini` when `VT_DISALLOCATE` returns `-EBUSY`. The kernel returns that when the VT is in use, is foreground, or has a selection. The log does not say which. It is not `FatalError`. The watched repeat still restored text.
 

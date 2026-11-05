@@ -1,0 +1,146 @@
+# S6d RAMDAC colormap candidate
+
+The baseline module stays
+`7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36`.
+This document describes a different file. Nothing here was loaded on the
+755C. The VGA model is not that machine, and it is not an emulator proof.
+
+## Candidate
+
+`/opt/cursor/artifacts/wd24adv-cmap-candidate.ko`
+
+sha256 `30415e508e2757f008210233bd9d2610a160fbbf132b4df9e8d674109375b19a`
+size 132620
+
+vermagic `6.18.57-tc755x mod_unload 486`
+Built with Debian gcc 14.2.0-19 and GNU ld 2.44 against the 6.18.57-tc755x
+tree (`CONFIG_LOCALVERSION="-tc755x"`, `CONFIG_X86_32=y`, `CONFIG_M486=y`,
+`CONFIG_FB=m`, `CONFIG_FRAMEBUFFER_CONSOLE=y`, `CONFIG_MODULE_UNLOAD=y`).
+`Module.symvers` sha256
+`e3639030b7c05f5d3880ac97fbff387cfc571ad473e7d9c34953778dc8869587`.
+objdump of this file and of the baseline shows no `cmov`, `cpuid`,
+`syscall`, `sysenter`, `sysexit`, `rdtscp`, `lfence`, `mfence`, or
+`prefetch`. The module name is still `wd24adv`. It is a different binary
+from the baseline. The baseline file's hash was checked again after this
+build and is unchanged.
+
+`s6d_cmap` defaults to 0. With that default the fb_ops pointer has no
+`fb_setcmap`, userspace open does not read the DAC for a colormap, and
+`FBIOGETCMAP` stays `-EINVAL` because `info->cmap` is never allocated.
+`/proc/wd24adv/s6d` gains one line, `cmap_param 0 published 0 frozen 0`.
+Release and stop set the frozen flag even then. With the parameter off,
+open does not look at that flag.
+
+## Why GET and PUT are one hook
+
+`FBIOGETCMAP` in linux 6.18.57 `fb_chrdev.c` copies `info->cmap`. It does
+not call the driver. The current `-EINVAL` is `fb_cmap_to_user` seeing
+`len == 0`. There is no `fb_getcolreg` on that ioctl.
+
+`FBIOPUTCMAP` calls `fb_set_user_cmap`, which holds `info->lock` and then
+`fb_set_cmap`. If the driver provides `fb_setcmap`, that return value is
+the ioctl result, and `fb_copy_cmap` into `info->cmap` runs only when the
+return is 0. `fb_setcolreg` is a different path: the loop can stop early
+while `rc` stays 0, and the copy still happens. This candidate implements
+`fb_setcmap` and leaves `fb_setcolreg` unset, so a failed program does not
+update the cache.
+
+Xfbdev 1.14.7 on `FB_VISUAL_PSEUDOCOLOR` creates the X colormap with
+`fbInitializeColormap`. It does not read the DAC there. `KdEnableColormap`
+does: `getColors` for all 256 entries, then `putColors` of the X colormap.
+`KdDisableColormap` writes back whatever `getColors` stored. The screen
+private data is calloc'd, so a failed GET leaves those channels at 0 and
+the later disable PUT would program black. Publishing a real image before
+that GET is what keeps the disable PUT on the saved colours.
+
+The publish step runs from userspace `fb_open` (`user == 1`), which already
+holds `info->lock`. It calls the existing `dac_read`: write `3C6=FFh`,
+write `3C7=00`, read `3C9` 768 times. That is the vgastate save sequence.
+It writes the pixel mask and the read index. It does not write colour RAM.
+The 768 bytes must match `c->cmap` in the low 6 bits, the snapshot taken
+at load and never overwritten by this hook. On a match, `fb_alloc_cmap`
+of 256 entries is filled with `pel << 10`. `FBIOGETCMAP` then returns
+that image. On a mismatch, or if the session is frozen, the cmap is
+dropped, `published` stays clear, and the open fails. A failed open does
+not leave `busy` set.
+
+A later `FBIOPUTCMAP` is allowed only when `wd24_cmap_allow` is 0:
+
+- `s6d_cmap=1`, `dryrun=0`, `live=1`, `s6d_bind=0`, `s6d_fbcon=1`
+- armed, active, userspace `busy`, not stopping, not registering, not frozen
+- not in text, hardware not dead, snapshot present, no prior mismatch, published
+
+Anything else returns `-EPERM` (`-1`), `-EBUSY` (`-16`), or `-ENODEV`
+(`-19`) and writes no colour. `3C6` is not written on that refuse.
+`do_register_framebuffer` does not call `fb_set_cmap`. With `s6d_bind=0`,
+`fbcon_startup` calls `fb_open(info, 0)`, gets `-EBUSY`, and returns
+before `fbcon_set_palette`. The hook also refuses `bind` and `registering`
+and `!busy`, so a fbcon reentry does not program the RAMDAC. Init refuses
+`s6d_cmap=1` together with `s6d_bind=1`, `s6d_fbcon=0`, dry-run, a mode
+other than `640x480-8`, or any of `s1` `s2` `s3` `s4` `s5` `s6` `s6b`
+`s6c`, and it does that before any port access.
+
+The PUT sequence, under `hw_lock` and not under `console_lock`:
+
+1. Reject `start+len` outside 0..255, or a missing red/green/blue pointer,
+   with `-EINVAL`, before any port write.
+2. Write `3C6=FFh` once.
+3. For each entry, `channel >> 10` masked to 6 bits, then `3C8=index`,
+   three `3C9` writes, `3C7=index`, three `3C9` reads. The component
+   counter in the model is one counter. Each index write sets it to red.
+   The three data cycles are not split. `3C6` is never read.
+4. Return 0 only when every read matches. The kernel then copies the
+   caller's 16-bit channels into `info->cmap`. A following GET returns
+   those 16-bit values. It does not read the DAC again. The check that
+   the `>> 10` bytes matched is the readback above.
+5. On any failure after the mask write, `wd24_restore_cmap` writes the
+   whole load snapshot and readback-compares it. The snapshot itself is
+   not modified. If that restore returns 0, `info->cmap` is rewritten
+   from the snapshot with `<< 10` and stays published. If the restore
+   fails, the cmap is dropped and later GET and PUT fail closed. A
+   failed PUT restores the load snapshot, including entries an earlier
+   successful PUT had changed.
+
+`fb_setcmap` takes `hw_lock` only. The ioctl already holds `info->lock`.
+Faults take `console_lock`, then `hw_lock`. This hook does not take
+`console_lock`, so it does not invert that order. Stop sets `frozen`
+before it drops `hw_lock`, then unregisters. Text restore runs after that
+return and writes the snapshot with the existing `wd24_restore_cmap`.
+The fb node is already gone, so GET is not served across that restore.
+Release of the userspace fd also sets `frozen` before it ends the banking
+session. It does not itself restore the DAC. The next arm clears `frozen`
+and `published`.
+
+The attribute-controller palette (`3C0`) is untouched. This is the RAMDAC
+only. The model stores `3C9` as `v & 0x3f` and treats a read of `3C6` as
+a violation. Both are asserted by the host test. That is the model. It
+does not measure the 755C DAC.
+
+## Tests
+
+`make -C modules/wd24adv/tests test` with system gcc completed, 0 failed.
+`test_vga` is 112 passed, 0 failed. The new checks cover the parameter
+matrix, every allow/refuse gate, an empty span that writes nothing, two
+entries (`3C6` written once, `3C6` never read, six `3C9` writes, six
+reads), 6-bit masking, unchanged neighbour bytes, unchanged planes and
+indexed registers, an unchanged snapshot, `<< 10` expanding the snapshot
+rather than the bytes just written, full restore back to the load image,
+and a forced bad `3C9` read that fails the span after the first entry was
+stored and then restores the snapshot. The bad read is injected by the
+test. The model itself returns the byte it stored.
+
+The module build checks `EPERM==1`, `EIO==5`, `EBUSY==16`, `ENODEV==19`,
+and `EINVAL==22`.
+
+## Live gate
+
+No load of this candidate is approved. The line that would exercise it,
+when a later approval names this hash, is the existing S6d line plus
+`s6d_cmap=1`:
+
+`dryrun=0 live=1 mode=640x480-8 s6d=1 s6d_fbcon=1 s6d_bind=0 s6d_cmap=1`
+
+`/proc/fb` must be empty. One attempt. If the userspace open fails, stop.
+A successful open has published a DAC read that matched the load snapshot.
+That is still not a panel reading of hue, a fifth square, a glyph, or
+the keyboard. The baseline hash stays the module that has already run.

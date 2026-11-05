@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 #include "vgamodel.h"
 #include "../wd24adv_dac_entry.h"
 
@@ -315,8 +316,7 @@ int main(void)
 	RUN(wd24_trial_expire(&c));
 
 	/* One DAC entry on a copy of the image. The saved snapshot stays.
-	 * Full restore writes that snapshot and readback-compares 6 bits.
-	 * This does not add the call to the loaded module. */
+	 * Full restore writes that snapshot and readback-compares 6 bits. */
 	setup(VM_WD24, 80);
 	err = RUN(wd24_plan_load(&c));
 	T(err == 0 && !memcmp(c.cmap, m.dac, 768), "dac entry: load snapshot matches");
@@ -346,6 +346,195 @@ int main(void)
 		T(err == 0 && c.nmismatch == 0 && m.violations == 0 &&
 		  !memcmp(m.dac, snap.dac, 768),
 		  "dac entry: full restore puts the snapshot back");
+	}
+
+	/* Port sequence on the model: one mask write, no 3C6 read, snapshot
+	 * immutable, neighbours and non-DAC state unchanged, then restore.
+	 * A lying 3C9 read must fail the entry and the full restore must
+	 * put the snapshot back. The lie is not the model's own compare. */
+	{
+		struct lie {
+			struct wd24_io *real;
+			unsigned pel_w, idx_w, data_w, pel_r, nread, lie_at;
+		} L;
+		struct wd24_dac_io dio;
+		struct wd24_dac_span sp[2];
+		struct vgamodel before;
+		u8 saved[768];
+		u16 er[256], eg[256], eb[256];
+
+		void lie_out(void *p, u8 v, u16 port)
+		{
+			struct lie *lp = p;
+
+			if (port == 0x3c6)
+				lp->pel_w++;
+			else if (port == 0x3c7 || port == 0x3c8)
+				lp->idx_w++;
+			else if (port == 0x3c9)
+				lp->data_w++;
+			lp->real->outb(lp->real->priv, v, port);
+		}
+		u8 lie_in(void *p, u16 port)
+		{
+			struct lie *lp = p;
+			u8 v = lp->real->inb(lp->real->priv, port);
+
+			if (port == 0x3c6)
+				lp->pel_r++;
+			if (port == 0x3c9) {
+				lp->nread++;
+				if (lp->lie_at && lp->nread == lp->lie_at)
+					v ^= 0x01;
+			}
+			return v;
+		}
+
+		T(EINVAL == 22 && EIO == 5 && EPERM == 1 && EBUSY == 16 &&
+		  ENODEV == 19, "dac errno numbers are the Linux values");
+		T(wd24_cmap_param_refuse(0, 0, 1, 0, 1, 0, 0, 1) == 0,
+		  "cmap param off is not a refuse");
+		T(wd24_cmap_param_refuse(1, 1, 0, 1, 0, 1, 1, 0) == 0,
+		  "cmap param accepts the one live combination");
+		T(wd24_cmap_param_refuse(1, 0, 0, 1, 0, 1, 1, 0) == -22 &&
+		  wd24_cmap_param_refuse(1, 1, 1, 1, 0, 1, 1, 0) == -22 &&
+		  wd24_cmap_param_refuse(1, 1, 0, 0, 0, 1, 1, 0) == -22 &&
+		  wd24_cmap_param_refuse(1, 1, 0, 1, 1, 1, 1, 0) == -22 &&
+		  wd24_cmap_param_refuse(1, 1, 0, 1, 0, 0, 1, 0) == -22 &&
+		  wd24_cmap_param_refuse(1, 1, 0, 1, 0, 1, 0, 0) == -22 &&
+		  wd24_cmap_param_refuse(1, 1, 0, 1, 0, 1, 1, 1) == -22,
+		  "cmap param refuses every other combination");
+		{
+			struct wd24_cmap_view v;
+			unsigned int *fields[14];
+			unsigned int n;
+
+			memset(&v, 0, sizeof(v));
+			v.param = v.live = v.fbcon = 1;
+			v.armed = v.active = v.busy = v.have_cmap = v.published = 1;
+			T(wd24_cmap_allow(&v) == 0, "cmap allow: live user session");
+			T(wd24_cmap_allow(NULL) == -1, "cmap allow: no view");
+			fields[0] = &v.param; fields[1] = &v.live; fields[2] = &v.fbcon;
+			for (n = 0; n < 3; n++) {
+				unsigned int old = *fields[n];
+
+				*fields[n] = 0;
+				T(wd24_cmap_allow(&v) == -1, "cmap allow: missing opt-in");
+				*fields[n] = old;
+			}
+			v.dryrun = 1;
+			T(wd24_cmap_allow(&v) == -1, "cmap allow: dry-run");
+			v.dryrun = 0;
+			v.bind = 1;
+			T(wd24_cmap_allow(&v) == -1, "cmap allow: fbcon bind");
+			v.bind = 0;
+			fields[0] = &v.armed; fields[1] = &v.active; fields[2] = &v.busy;
+			for (n = 0; n < 3; n++) {
+				unsigned int old = *fields[n];
+
+				*fields[n] = 0;
+				T(wd24_cmap_allow(&v) == -16, "cmap allow: not in a user session");
+				*fields[n] = old;
+			}
+			v.stopping = 1;
+			T(wd24_cmap_allow(&v) == -16, "cmap allow: stopping");
+			v.stopping = 0;
+			v.registering = 1;
+			T(wd24_cmap_allow(&v) == -16, "cmap allow: registering");
+			v.registering = 0;
+			v.frozen = 1;
+			T(wd24_cmap_allow(&v) == -16, "cmap allow: frozen");
+			v.frozen = 0;
+			v.in_text = 1;
+			T(wd24_cmap_allow(&v) == -19, "cmap allow: text");
+			v.in_text = 0;
+			v.hw_dead = 1;
+			T(wd24_cmap_allow(&v) == -19, "cmap allow: dead");
+			v.hw_dead = 0;
+			v.have_cmap = 0;
+			T(wd24_cmap_allow(&v) == -19, "cmap allow: no snapshot");
+			v.have_cmap = 1;
+			v.bad = 1;
+			T(wd24_cmap_allow(&v) == -19, "cmap allow: prior mismatch");
+			v.bad = 0;
+			v.published = 0;
+			T(wd24_cmap_allow(&v) == -19, "cmap allow: unpublished");
+			v.published = 1;
+			T(wd24_cmap_allow(&v) == 0, "cmap allow: restored");
+		}
+
+		setup(VM_WD24, 81);
+		err = RUN(wd24_plan_load(&c));
+		T(err == 0, "dac span: load");
+		memcpy(saved, c.cmap, 768);
+		before = m;
+		memset(&L, 0, sizeof(L));
+		L.real = &io;
+		dio.outb = lie_out;
+		dio.inb = lie_in;
+		dio.p = &L;
+		T(wd24_dac_put_span(&dio, NULL, 0) == -22 && L.pel_w == 0,
+		  "dac span: empty request writes nothing");
+		sp[0].index = 4;
+		sp[0].r = 0xff;
+		sp[0].g = 0x20;
+		sp[0].b = 0x01;
+		sp[1].index = 255;
+		sp[1].r = 0x3f;
+		sp[1].g = 0x00;
+		sp[1].b = 0x02;
+		err = wd24_dac_put_span(&dio, sp, 2);
+		T(err == 0 && L.pel_w == 1 && L.pel_r == 0 && L.idx_w == 4 &&
+		  L.data_w == 6 && L.nread == 6 && m.violations == 0,
+		  "dac span: one mask write, no 3C6 read, two entries");
+		T(m.dac[12] == 0x3f && m.dac[13] == 0x20 && m.dac[14] == 0x01 &&
+		  m.dac[765] == 0x3f && m.dac[766] == 0x00 && m.dac[767] == 0x02,
+		  "dac span: 6-bit bytes land on those indices");
+		T(memcmp(m.dac, before.dac, 12) == 0 &&
+		  memcmp(m.dac + 15, before.dac + 15, 750) == 0,
+		  "dac span: every other colour byte stays");
+		T(!memcmp(c.cmap, saved, 768), "dac span: snapshot immutable");
+		T(memcmp(m.vram, before.vram, sizeof(m.vram)) == 0 &&
+		  memcmp(m.sr, before.sr, sizeof(m.sr)) == 0 &&
+		  memcmp(m.gr, before.gr, sizeof(m.gr)) == 0 &&
+		  memcmp(m.cr, before.cr, sizeof(m.cr)) == 0 &&
+		  memcmp(m.ar, before.ar, sizeof(m.ar)) == 0 &&
+		  m.misc == before.misc,
+		  "dac span: planes and indexed registers stay");
+		wd24_dac_expand_image(c.cmap, er, eg, eb);
+		T((er[4] >> 10) == (c.cmap[12] & 0x3f) &&
+		  (eg[4] >> 10) == (c.cmap[13] & 0x3f) &&
+		  (eb[4] >> 10) == (c.cmap[14] & 0x3f) &&
+		  (er[255] >> 10) == (c.cmap[765] & 0x3f),
+		  "dac expand: <<10 round-trips the snapshot, not the new bytes");
+		err = RUN(wd24_restore_cmap(&c));
+		T(err == 0 && c.nmismatch == 0 && !memcmp(m.dac, snap.dac, 768) &&
+		  !memcmp(c.cmap, saved, 768),
+		  "dac span: restore writes the untouched snapshot");
+
+		setup(VM_WD24, 82);
+		err = RUN(wd24_plan_load(&c));
+		memcpy(saved, c.cmap, 768);
+		memset(&L, 0, sizeof(L));
+		L.real = &io;
+		L.lie_at = 4;
+		dio.p = &L;
+		sp[0].index = 1;
+		sp[0].r = 1;
+		sp[0].g = 2;
+		sp[0].b = 3;
+		sp[1].index = 2;
+		sp[1].r = 4;
+		sp[1].g = 5;
+		sp[1].b = 6;
+		err = wd24_dac_put_span(&dio, sp, 2);
+		T(err == -5 && m.dac[3] == 1 && m.dac[4] == 2 && m.dac[5] == 3,
+		  "dac span: a bad readback fails after the earlier entry was written");
+		T(!memcmp(c.cmap, saved, 768), "dac span: failed readback leaves the snapshot");
+		err = RUN(wd24_restore_cmap(&c));
+		T(err == 0 && c.nmismatch == 0 && m.violations == 0 &&
+		  !memcmp(m.dac, snap.dac, 768),
+		  "dac span: restore after the lie matches the load snapshot");
 	}
 
 	printf("wd24adv vga model test: %d passed, %d failed\n", passes, fails);
