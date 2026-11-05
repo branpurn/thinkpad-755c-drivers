@@ -119,3 +119,55 @@ acrhtox  X)- U<P/ d|e|v /encuhlol  N>O/-tXm
 user@host:~# p/xautostart.log 2>&1 & )
 /bin/sh: syntax error: unexpected ")"
 user@host:~# 
+FOLLOW-UP (owner approval t377u, 2026-11-05 02:3x UTC): L9 then L10 each sent ALONE
+- L9 startx returned to the prompt; L10: Xfbdev 938, X-UP.
+- Baseline wd24probe3: RC=19, 3CC=E3 GR0F=05 GR0E=01 CR11=8C CR29=85 CR34=A0 PR18=C7 PR19=54 SR06=0F, result=ok restore_fail=0. Matches S4 baseline.
+
+2026-11-04 21:33:35 EST  S5 L9 (resend, approved t377u, alone): startx
+2026-11-04 21:33:35 EST  slow: ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & ) CR
+2026-11-04 21:34:15 EST  S5 L10 (alone): wait X
+2026-11-04 21:34:15 EST  slow: i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X CR
+2026-11-04 21:36:07 EST  S5 baseline: wd24probe3
+2026-11-04 21:36:07 EST  slow: pidof Xfbdev >/dev/null && { dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u; } CR
+====
+changes 1920; idle polls 0; busy seen, polls 0; CNTRL1 after 010e; host words 1024/1024 VERIFIED
+restore: wrote 1002, read 1002 (equal)
+23C0h writes 200, 23C2h writes 116 (starts 8), PR0A writes 15, 23C4h 2408, refusals 0, reads 2819 (polls 2424), restore fails 0
+<6>wd24adv: live load: 0 (port data writes 46, index writes 224, mismatches 0)
+<6>wd24adv: LIVE: text state saved (4 planes, DAC, VGA + ext regs); trial 15 s; control: /proc/wd24adv/control
+<6>wd24adv: live mode 640x480-8: 0 (port data writes 93, index writes 263, mismatches 0)
+<6>wd24adv: 640x480-8 set: write "confirm" to /proc/wd24adv/control within 15 s or it reverts to text
+<6>wd24adv: S5 MONO: OK; ops verified 8; 23C2h writes 116 (starts 8), PR0A writes 15; details: /proc/wd24adv/s5
+<6>wd24adv: live trial expiry: 0 (port data writes 896, index writes 336, mismatches 0)
+user@host:~# rmmod wd24adv; echo RM=$?
+RM=0
+user@host:~# insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; ech
+o RC=$?
+RC=0
+user@host:~# ( PATH=i/=u0s;r /wlhoiclael /!s bpiind:o/fu sXrf/bldoecva l>//bdienv
+://nuuslrl/ s&b&i n[: /$uis r-/lbti n6:0/ s]b;i nd:o/ bsilne;e pH O1M;E =i/=r$o(
+o(ti;+ 1e)x)p;o rdto nPeA;T Hs lHeOeMpE ;5 ;(  psildeoefp  X5f;b deexve c& &s te
+acrhtox  X)- U<P/ d|e|v /encuhlol  N>O/-tXm
+/bin/sh: syntax error: unexpected "(" (expecting ")")
+user@host:~# p/xautostart.log 2>&1 & )
+/bin/sh: syntax error: unexpected ")"
+user@host:~# ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;
+ HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautost
+art.log 2>&1 & )
+user@host:~# i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i
+=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X
+938
+X-UP
+user@host:~# pidof Xfbdev >/dev/null && { dmesg -c >/dev/null; insmod /tmp/wd24pr
+obe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u; }
+insmod: can't insert '/tmp/wd24probe3.ko': No such device
+RC=19
+<6>wd24probe3: 3C4test pre=11 SR06again=00 wrote=00 rb=00 post=00 restored-rb=00 after=11
+<6>wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
+<6>wd24probe3: CR34 L=a0 again=a0 wrote=a0 rb=a0 restored-rb=a0
+<6>wd24probe3: GR0F=05 GR0E=01 SR06=0f CR11=8c CR29=85
+<6>wd24probe3: PR18(CR31)=c7 PR19(CR32)=54 PR1A(CR33)=00 PR36(CR3B)=ef PR37(CR3C)=9a PR39(CR3E)=20
+<6>wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
+<6>wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
+<6>wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+user@host:~# 
