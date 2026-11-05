@@ -369,7 +369,8 @@ wd90c24fb; save the files and power off.
 One sequence, each PROVEN mode as its own load with the 15 s auto-revert
 (no confirm), then optional S3 last. Any non-OK result touches /tmp/ru.stop
 and every later step prints SKIP/STOPPED. Same preparation (no X,
-wd90c24fb text=1 + rmmod), build d9c0884 / sha above. Log each line with
+wd90c24fb text=1 + rmmod, then `dmesg -n 1` and no console blanking as in step 3
+of the main plan; added after the 2026-11-04 run, which ran without it), build d9c0884 / sha above. Log each line with
 plog.sh first. Pause ~10 s on the text console between steps.
 
 What to see (pattern=1, wd24adv_core.c wd24_pattern/pattern_direct; panel
@@ -388,6 +389,7 @@ After each: the text console comes back unchanged, then STEPn-OK.
 pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt"
 kill <the Xfbdev PID printed above>
 echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; rm -f /tmp/ru.stop
+dmesg -n 1; printf '\033[9;0]' > /dev/tty1
 gt(){ S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 9c77fe90001 ]; }
 ru(){ [ -e /tmp/ru.stop ] && { echo SKIP; return 1; }; gt && dmesg -c >/dev/null && insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=$1 $2 && sleep 20 && grep -q "mismatches 0; in_text 1" /proc/wd24adv/live && echo OK-$1 $2 || { touch /tmp/ru.stop; echo STOP-$1; dmesg | grep wd24adv; return 1; }; }
 ru 640x480-8 && { rmmod wd24adv && echo STEP1-OK || touch /tmp/ru.stop; }
