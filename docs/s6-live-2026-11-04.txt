@@ -1,0 +1,59 @@
+S6 s6=1 (dual window) live run, 2026-11-04 22:23-22:32 EST
+Approval: the owner, card t383s1217 (this S6 run only).
+Module: wd24adv.ko sha256 e84364a8f5f8d2263bac6d15efb426fa78b3d52186eda4e12e36e03299891a11
+(commit 09bc0f4), sent with send1.sh (tc32-gfx send-file.sh, logger SIGSTOP/SIGCONT);
+remote sha matched. Lines: docs/WD24ADV-LIVE-TEST.md "S6" L1-L10, one per call, each
+after the prompt returned. No interruptions, no retries.
+
+RESULT: REGISTER READBACK (restored by design), stopped at P3
+  E read-only: PR0A 00 PR0B 00 PR1 c5 PR31 00 GR06 05
+  saved 7 x 4 KiB: Y+0000 Y+1000 Y+2000 X+8000 X+1000 X+0000 X+2000
+  prefill: 4 x 4 KiB verified (single window)
+  P1 PR0B readback 70                     -> PR0B (GR0A) read/write: PROVEN
+  P2 PR1 readback cd                      -> PR1 b3 latches: PROVEN
+  D1 split read: A0000 (Y+0000) 0 bad, A8000 (X+8000) 0 bad; wrote Y+0000', X+8000'
+                                          -> PR1 b3 window-half split: PROVEN (read side)
+  stop: register error -5 (P3: PR31 |= 80h did not read back)
+  P4 restore: PR31 00 PR1 c5
+  regions restored: 0 bytes differ
+  register writes 23; live trial expiry mismatches 0
+L7 RM=0, L8 RC=0, L10 X-UP (Xfbdev 1065).
+Baseline wd24probe3: RC=19, result=ok restore_fail=0x00, SR11=5d with SR06=0f.
+
+Finding: in the trial mode the PR31 (SR11) window read 00 at entry and ignored the
+write; the baseline (SR06=0f, unlocked) reads SR11=5d. So in the trial mode the
+sequencer extension registers are most likely locked (SR06/PR10 not unlocked),
+not "PR31 b7 unimplemented". The entry check tested only b7=0, so 00 passed.
+Open (box work, not run): the entry check must require PR31 == 5d (lock state), and
+the S6 program must unlock/relock SR06 around P3 (guarded), or test b7 in a state
+where SR11 is readable. The D1 write half (Y+0000', X+8000') was not verified
+because V is skipped on a stop.
+
+== commands.log ==
+2026-11-04 22:23:43 EST  S6 s6=1: send-file wd24adv-s6.ko -> /tmp/wd24adv.ko (approval t383s1217)
+2026-11-04 22:23:43 EST  host: SIGSTOP logger 64434; send-file.sh /home/branpurn/wd24adv-s6.ko -> /tmp/wd24adv.ko (38400)
+2026-11-04 22:24:46 EST  host: SIGCONT logger 64434
+2026-11-04 22:24:53 EST  S6 s6=1: send-file done, sha e84364a8 match
+2026-11-04 22:24:53 EST  S6 s6=1 L1
+2026-11-04 22:24:53 EST  slow: pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt" CR
+2026-11-04 22:25:11 EST  S6 s6=1 L2
+2026-11-04 22:25:11 EST  slow: kill 1002 CR
+2026-11-04 22:25:25 EST  S6 s6=1 L3
+2026-11-04 22:25:26 EST  slow: echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo RM=$? CR
+2026-11-04 22:25:51 EST  S6 s6=1 L4
+2026-11-04 22:25:51 EST  slow: dmesg -n 1; printf '\033[9;0]' > /dev/tty1; echo Q=$? CR
+2026-11-04 22:26:12 EST  S6 s6=1 L5
+2026-11-04 22:26:12 EST  slow: S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = e84364a8001 ] && { dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 s6=1; echo RC=$?; } CR
+2026-11-04 22:27:43 EST  S6 s6=1 L6
+2026-11-04 22:27:43 EST  slow: sleep 20; cat /proc/wd24adv/s6 > /tmp/s6run.txt; cat /proc/wd24adv/live > /tmp/s6live.txt; grep -vE "^  write" /tmp/s6run.txt; dmesg | grep wd24adv CR
+2026-11-04 22:28:50 EST  S6 s6=1 L6 result REGISTER READBACK at P3 (PR31 read 00), restored, mismatches 0; continue L7-L10 per stop rule
+2026-11-04 22:28:50 EST  S6 s6=1 L7
+2026-11-04 22:28:50 EST  slow: rmmod wd24adv; echo RM=$? CR
+2026-11-04 22:29:07 EST  S6 s6=1 L8
+2026-11-04 22:29:07 EST  slow: insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$? CR
+2026-11-04 22:29:49 EST  S6 s6=1 L9
+2026-11-04 22:29:50 EST  slow: ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & ) CR
+2026-11-04 22:30:29 EST  S6 s6=1 L10
+2026-11-04 22:30:29 EST  slow: i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X CR
+2026-11-04 22:31:24 EST  S6 s6=1 baseline: wd24probe3
+2026-11-04 22:31:24 EST  slow: pidof Xfbdev >/dev/null && { dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u; } CR

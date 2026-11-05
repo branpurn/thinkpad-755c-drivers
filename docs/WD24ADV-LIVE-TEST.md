@@ -559,7 +559,7 @@ with L7-L10 (restored, not dead); the format is then redesigned on the box.
 TIMEOUT: read the idle re-check line; IDLE seen: carry on. STILL BUSY / LOCKED:
 stop; no rmmod, no wd90c24fb load; save the files and power off.
 
-## S6: dual window, PR0A read / PR0B write (prepared 2026-11-04, box only, not run)
+## S6: dual window, PR0A read / PR0B write (run 2026-11-04: REGISTER READBACK at P3, PR31 locked in trial mode; PR0B + PR1 b3 split read OK; restored, X + baseline OK, see docs/s6-live-2026-11-04.txt)
 
 Design doc section 7, stage S6 (the RAM-shadow S6 is parked). One load:
 `insmod wd24adv.ko dryrun=0 live=1 mode=640x480-8 s6=1`. Right after the
