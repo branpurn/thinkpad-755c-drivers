@@ -64,3 +64,44 @@ No CF writes.
 No XMODEM / no 755C insmod (Brandon away).
 ko sha256 63dc2654e6ecc10dc996f09b258474cf4738ae38ef23bf7b12924140bb6b1595
 Host test_vga 70/0. Retry lines when he returns: see WD24ADV-NEXT-STAGE.md.
+
+---
+
+## Attempt (fix_sr06): 2026-11-05 ~13:50–14:05 America/New_York — S6d floppy
+
+Build: commit 9ad254f on wd24adv (fix_sr06); vermagic 6.18.57-tc755x; S6d floppy boot.
+Module sha256 63dc2654e6ecc10dc996f09b258474cf4738ae38ef23bf7b12924140bb6b1595.
+Do not re-touch the 755C for this log (no XMODEM / insmod / graphics from the logger).
+
+### Text prove (no mode / no s6d)
+
+  insmod /tmp/wd24adv.ko dryrun=0 live=1 trial=15 fix_sr06=1
+  → RC=0; live load 0 (47 data / 231 index); then rmmod OK.
+
+### Visual
+
+  insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0 fix_sr06=1
+  → live load 0 (46/224); mode 640x480-8 0 (87/251)
+  → S6d: armed + registered fb0 (VISUAL: fbcon may bind); thrash bound 32
+  → Console: switching to colour frame buffer device 80x30
+  → echo RC=$? never returned on serial after fbcon switch
+
+Owner visual (photo confirmed): green line-by-line roll quickly (NOT color bars);
+then white blank; then fbcon TTY line on black strip with cursor. No color bars
+at any point. pattern=0 did not show roll-up color bars; fbcon bind wiped the
+pattern to white.
+
+### After fbcon
+
+Serial shell hung (overlapping POST headed /proc/wd24adv/*); keyboard shell
+also non-functional; SysRq not honored; power cycle required. Serial recovered
+AT-ROOT after power cycle.
+
+### Verdict
+
+S6d PASS for arm/register + mode set.
+Open issues (box-only follow-ups; leave 755C idle):
+- pattern=0 did not show expected roll-up color bars
+- fbcon bind wiped pattern to white
+- restore path needs fix (avoid serial overlap / hanging head on proc;
+  consider fbcon bind strategy)

@@ -234,6 +234,19 @@ prior wd24adv relock). S6d floppy never had that path — latch left unlocked.
 - Built vs kobj-vm86; sha256 `63dc2654e6ecc10dc996f09b258474cf4738ae38ef23bf7b12924140bb6b1595`
   (`modules/wd24adv/wd24adv.ko`, also `out-s6d-exports/xfer/wd24adv-s6d.ko`).
 
-**When Brandon returns (XMODEM new .ko first, then):**
-1. Text prove: `insmod /tmp/wd24adv.ko dryrun=0 live=1 trial=15 fix_sr06=1`
-2. Visual: `insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0 fix_sr06=1`
+### Live result 2026-11-05 ~13:50–14:05 America/New_York — fix_sr06 on S6d floppy
+
+ko sha256 `63dc2654…`; commit `9ad254f`. See `docs/s6d-live-2026-11-05.txt`.
+
+1. Text prove `trial=15 fix_sr06=1`: RC=0; live load 0 (47/231); rmmod OK.
+2. Visual `mode=640x480-8 trial=30 s6d=1 pattern=0 fix_sr06=1`:
+   live load 0 (46/224); mode 0 (87/251); S6d armed + fb0 registered;
+   thrash bound 32; fbcon switched to colour frame buffer 80x30.
+3. Owner visual (photo): green line-by-line roll (NOT color bars) → white →
+   fbcon TTY line on black strip with cursor. No color bars at any point.
+4. After fbcon: serial hung (POST overlap on `/proc/wd24adv/*`); keyboard
+   shell dead; SysRq ignored; power cycle required. Serial recovered AT-ROOT.
+
+**Verdict:** S6d PASS for arm/register + mode set. Open (box-only; leave 755C idle):
+pattern=0 vs expected bars; fbcon wipe-to-white; restore hang / serial overlap /
+fbcon bind strategy.
