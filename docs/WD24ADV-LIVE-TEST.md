@@ -491,6 +491,75 @@ Safe next fixes (box first, then one approved live run):
    shows black, and in 13h clear 64000-65535; add CR0C/0D/CR09 readback to
    /proc/wd24adv/live at expiry so the next log shows whether they moved.
 
+### Re-run of #1 and #3 with quiet console, 2026-11-05 UTC
+
+Build d9c0884 (wd24adv.ko 9c77fe90, wd24probe3.ko eb0a36e2), prep from
+1c40faf (adds `dmesg -n 1; printf '\033[9;0]' > /dev/tty1`). Raw log:
+docs/rerun-1-3-live-2026-11-05.txt. One line at a time, each sent only after
+the previous returned to the prompt.
+
+| Step | UTC | Result |
+|---|---|---|
+| read-only check | 01:01:43 | Xfbdev 727, wd90c24fb only, no ru.stop |
+| kill 727 | 01:02:07 | X gone (usual `apm: set display` line) |
+| text=1 + rmmod wd90c24fb | 01:02:24 | RM=0, Console VGA+ 80x25 |
+| dmesg -n 1 + tty1 blank-off | 01:02:51 | Q=0 |
+| #1 ru 640x480-8 + rmmod | 01:04:47 | G=9c77fe90001, OK-640x480-8, STEP1-OK |
+| #3 ru 320x200-8 + rmmod | 01:05:49 | G=9c77fe90001, OK-320x200-8, STEP3-OK |
+| insmod wd90c24fb | 01:06:41 | RC=0 |
+| startx, wait | 01:07:31 / 01:08:06 | X-UP (Xfbdev 798) |
+| wd24probe3 | 01:09:43 | RC=19, result=ok, 3CC=E3 GR0F=05 GR0E=01 CR11=8C CR29=85 CR34=A0 PR18=C7 PR19=54 SR06=0F (X baseline) |
+
+The agent's Shell call for the insmod line was interrupted after the line had
+already returned (RC=0 and the prompt are in the log). commands.log was
+checked before the next line was sent.
+
+Owner observations (verbatim): "#1, two sets of bars, almost imperceptible
+defect where on bottom orange bar and rightward, bottom bars shifted up maybe
+1 pixel ... #2 [= the 320x200 step], 16 bars, no second set on bottom,
+letterboxed top and bottom". "Really looked very good."
+
+**1-px shift (#1): this is how the test pattern is drawn, not a hardware fault.** wd24_pattern()
+(wd24adv_core.c 1074-1110) picks the bar line per chunk with
+`line[L >= 4 * WD24_PLANE]`, so the switch to the reversed set falls at
+byte 262144 exactly, not at a row start. 262144 / 640 = 409.6: row 409 is
+normal order for x < 384 and reversed for x >= 384. x = 384 is inside
+reversed bar 15-9 = 6, which is AR06 (brown, which looks orange). So from the
+orange bar rightward the bottom set starts one row higher (row 409, not 410).
+That matches the observation exactly. The CRTC did not wrap at 256 KiB:
+normal-order bars at the bottom would have meant a wrap.
+#3 is as designed: 16 bars of 20 px, 320x200 doubled to 400 lines on the
+480-line panel, which gives the letterbox.
+
+**tty1 garble photo (after the re-run): from the 2026-11-04 run, not this
+one.** The photo shows two garbled blocks, each directly above a `wd24adv:
+live text: 0 (896, 336, mismatches 0)` line. Wide-spaced characters, roughly
+every other one missing. Everything after (wd90c24fb found ..., text=1,
+Console switching to colour VGA+ 80x25) is clean. Evidence:
+- `live text` is pr_info (level 6, wd24adv_main.c 496). In this re-run
+  `dmesg -n 1` was set at 01:02:51, before either insmod, so no wd24adv line
+  could reach the console. The last level-6 lines printed to tty1 before the
+  quieting are the `text=1` and `Console: switching` lines at 01:02:24. Those
+  are the clean lines below the garble.
+- The 2026-11-04 roll-up ran without quieting. There, the lines directly above
+  each `live text: 0` are `live mode ...`, `... set: write "confirm" ... 15 s`
+  and `live trial expiry: 0`. Those were printed while the chip was in the
+  packed graphics mode (docs/rollup-live-2026-11-04.txt 39-44). The
+  `confirm`/`control` text fits the fragments.
+- Likely mechanism (inferred from the code; not tested on the device): vgacon writes
+  char/attr words to B8000 while the chip is in chain-4/packed mode. There is
+  no odd/even, so the bytes go to the wrong planes and offsets. Plane 0
+  (chars) and plane 1 (attrs) end up interleaved, which shows as every other
+  character. wd24adv's text restore rewrites the 4 saved planes, but vgacon
+  lines printed during the trial are drawn over the saved image after the
+  save. vgacon writes straight into VRAM, so the bad cells stay there. When
+  fbcon (wd90c24fb) takes over and later hands back, the VRAM content is copied
+  to and from the vc buffer, so the garble carries over to later switches. The
+  exact point where it was baked in (during the trial vs. at restore) is
+  UNKNOWN.
+- Consequence: with `dmesg -n 1` there is no new garble. A fresh screen (clear
+  tty1, or reboot) is needed to confirm. Not done (no device experiments).
+
 ## Abort and revert
 
 1. Picture wrong / panel blank after a mode set: **do nothing for 15 s**;
