@@ -1074,7 +1074,7 @@ bool wd24_has_pattern(const struct wd24_mode *m)
 int wd24_pattern(struct wd24_ctx *c, const struct wd24_mode *m)
 {
 	static u8 line[2][640];
-	u32 x, size, bank, L, end;
+	u32 x, size, bank, L, end, rev;
 
 	if (c->in_text || c->no_vram)
 		return -EINVAL;
@@ -1087,6 +1087,9 @@ int wd24_pattern(struct wd24_ctx *c, const struct wd24_mode *m)
 		line[1][x] = c->vga.attr[15 - ((x / 40) & 15)] & 0x3f;
 	}
 	size = m->xres * m->yres;
+	/* reversed bars from the first whole row at or above 256 KiB (still
+	 * proves no CRTC wrap there; no switch in the middle of a row) */
+	rev = (4 * WD24_PLANE + m->xres - 1) / m->xres;
 	if (!c->be->mem_write) {
 		ev_bulk(c, 0, "pattern: (dry-run: memory not written)");
 		return 0;
@@ -1101,12 +1104,12 @@ int wd24_pattern(struct wd24_ctx *c, const struct wd24_mode *m)
 			if (n > end - L)
 				n = end - L;
 			c->be->mem_write(c, L - bank * WD24_PLANE,
-					 line[L >= 4 * WD24_PLANE] + x0, n);
+					 line[L / m->xres >= rev] + x0, n);
 			L += n;
 		}
 	}
 	TRY(wd24_write(c, WD24_GR, WD24_GR_PR0A, 0x00));
-	ev_bulk(c, 0, "pattern: 16 colour bars, whole frame (banks 0-4), reversed from 256 KiB");
+	ev_bulk(c, 0, "pattern: 16 colour bars, whole frame (banks 0-4), reversed from the first row >= 256 KiB");
 	return 0;
 }
 

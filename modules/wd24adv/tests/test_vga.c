@@ -202,7 +202,7 @@ int main(void)
 
 	/* 7. pattern covers the whole 640x480 frame (banks 0-4, 300 KiB): every
 	 * packed pixel (scanout: linear L = plane L&3, offset L>>2) is a bar,
-	 * order reversed from 256 KiB; PR0A back to 0; trial revert identical */
+	 * order reversed from row 410, the first whole row >= 256 KiB; PR0A back to 0; trial revert identical */
 	setup(VM_WD24, 60);
 	RUN(wd24_plan_load(&c));
 	RUN(wd24_plan_mode(&c, m480));
@@ -212,7 +212,7 @@ int main(void)
 
 		for (L = 0; L < 640 * 480; L++) {
 			u32 b = (L % 640) / 40;
-			u8 want = c.vga.attr[L >> 18 ? 15 - b : b] & 0x3f;
+			u8 want = c.vga.attr[L / 640 >= 410 ? 15 - b : b] & 0x3f;
 			u8 got = L >> 18 ? m.vram_hi[L & 3][(L >> 2) & 0xffff]
 					 : m.vram[L & 3][L >> 2];
 
