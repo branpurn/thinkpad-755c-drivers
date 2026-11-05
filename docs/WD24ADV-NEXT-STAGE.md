@@ -337,7 +337,7 @@ What is established:
 - `skip_vt_switch` does not stop the bind. Deferred takeover needs `FB=y` and is compiled out for `FB=m`. The switching line shows this boot bound immediately.
 - The armed `pr_info` ran with `hw_lock` held, after fbcon was the VT. With `console=tty0` (documented for this machine; the S6d floppy APPEND file is not in this repo), printk re-enters `s6d_imageblit` and locks `hw_lock` again. That mutex does not nest. `insmod` does not return, the typed `/proc` lines never run, and `trial_fn` cannot take `hw_lock`, so there is no restore. Serial echo without execution and a dead VT keyboard match a task asleep in that lock while holding `console_lock`.
 
-Not established: the earlier "wildcard proc read blocked on the mutex" cause. SysRq configuration was not checked. The floppy cmdline was not re-read from the image.
+Not established: the earlier "wildcard proc read blocked on the mutex" cause. SysRq configuration was not checked. A later read-only preflight on this boot did record `console=tty0` and `console=ttyS0,9600n8` together. That makes the tty0 printk path real for this boot. It does not replay the earlier hang.
 
 This is not a PASS of restore, mmap, or a quiet fbdev. It is evidence the node was registered and fbcon bound.
 
@@ -367,7 +367,22 @@ Source: stock linux-6.18.57 from kernel.org, sha256 `5bd9acdc82ec5efc3790ae840e5
 
 `wd24adv.ko` vermagic `6.18.57-tc755x mod_unload 486`, ELF 80386, sha256 `7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36`. `wd24s6d-mmap` is a static i486 musl PIE (no dynamic interpreter) built with gcc 11.2.1 20211120, sha256 `93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8`. Neither file is committed. They were not loaded and not run.
 
-Unresolved: this does not prove the running 755C kernel image is the one that emitted the supplied `Module.symvers`. Load still depends on that. The whitelist path string differs; it does not by itself change this module's exports or the structure offsets that matched.
+The whitelist path string differs. It does not by itself change this module's exports or the structure offsets that matched. `uname -r` on the target is `6.18.57-tc755x`. `/proc/version` reports the same compiler string and `#1 @1767225600` as the packaged `compile.h` (account names were not copied here). `CONFIG_M486=y` and `CONFIG_MODULE_UNLOAD=y` are what put `486` and `mod_unload` on the module vermagic. `uname` does not print those tokens. `insmod` still refuses a vermagic mismatch before any driver code runs. The supplied `Module.symvers` was not regenerated from this machine's vmlinux.
+
+## Read-only preflight (2026-11-05 15:49 America/New_York)
+
+No insmod, no graphics, no deployment. The shell stayed at a root prompt.
+
+Observed:
+
+- `uname -r` is `6.18.57-tc755x`.
+- Command line includes `console=tty0` and `console=ttyS0,9600n8`, plus `initrd=core.xz floppy=thinkpad atkbd.xlate=2 noswap BOOT_IMAGE=vmlinuz`.
+- `/proc/modules`: `fb` loaded, used by 0; `font` loaded, used by `fb`. No display driver.
+- `/proc/fb` empty.
+- Only `vtcon0`: name `(S) VGA+`, bind `1`. No vtcon name contains `frame buffer`.
+- The current dmesg ring has one matching wd24adv line, the earlier `s6d_fbcon=0` arm that skipped registration. No panic or oops in that ring. The ring had been cleared, so a missing `Console: switching` line is not a history of the whole boot.
+
+Gate for `s6d_bind=0`: the live vtcon and `/proc/fb` checks pass. fbcon's console driver is not registered now, which is the condition that keeps `fb_open(info, 0)` failure on the startup path instead of the `-EBUSY` bind path. The cleared dmesg does not add history. Registration, mmap, and restore with a registered node remain untested. This preflight is not an insmod approval. The tool alarm still does not interrupt an uninterruptible kernel lock.
 
 `test_s6d_fault` is a userspace simulator of the pure plan and a hand-written stop order. It does not load the module. Its OK line says SIMULATOR. The host `make -C modules/wd24adv/tests test` (system gcc) covers `test_vga` restore mismatch (`in_text` stays false) and that simulator. QEMU was not run. The cleanup figures are not kernel execution.
 
@@ -377,7 +392,7 @@ Owner watching. One line, then wait for a real prompt. No `/proc/wd24adv/*`. No 
 
 The module and the i486 `wd24s6d-mmap` from the Debian chroot build are transfer artifacts, not files in the repo. Check sha256 before use: module `7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36`, tool `93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8`. `modinfo` must show `vermagic: 6.18.57-tc755x mod_unload 486`. This is still not approval to insmod. The alarm on the tool does not interrupt an uninterruptible kernel lock.
 
-Gate, before insmod. One command at a time. The module cannot do the vtcon check itself.
+Gate, immediately before insmod. One command at a time. The module cannot do the vtcon check itself. The 15:49 read-only pass met it; repeat it, because a later load can change it.
 
 ```
 cat /proc/fb
