@@ -98,39 +98,39 @@ change.
    without a new plan.
 5. Xfbdev only after the controlled live paints are OK (separate approval).
 
-### Separate S6d floppy (box, 2026-11-05) — inventory only, pending drop OK
+### Separate S6d floppy (box, 2026-11-05) — **BUILT** (Tier1+2+3)
 
-Brandon OK for a **separate** S6d floppy path (pt426u); CF boot stays off this
-path. Recovery `out/tc755.img` kept. **No** core rebuild / mcopy / media burn
-this turn.
+Brandon OK: separate floppy path (pt426u) + Tier1+2+3 drops (widget t426s1393).
+CF boot stays OFF. Recovery `tinycore-32-ram/out/{tc32.img,core.xz,busybox}`
+**untouched** (not replaced by S6d artifacts). Box did **not** burn media or
+touch the 755C / MBR.
 
-`core.xz` is ~218 KiB compressed / ~395 KiB busybox; overlay scripts are tiny.
-Drop proposal (Tier1 editors → Tier2 archival → Tier3 mkfs/swap → Tier4 extras),
-est. ≥60 KiB xz if Tier1+2(+3) approved:
-`/workspace/755c-research/out-s6d-exports/floppy/CORE-DROP-PROPOSAL.txt`
-(+ `CORE-INVENTORY.txt`). Must keep getty/rx/sha256sum/dmesg/mknod/ash. Awaiting
-Brandon approve-list before busybox-s6d rebuild.
+| Artifact | Size | sha256 (prefix…) |
+|---|---|---|
+| `tc755-s6d.img` | 1474560 | `e96f5e08…ff08b1e4` |
+| `core-s6d.xz` | 165264 | `92a389cc…b979d36e` |
+| recovery `core.xz` | 217900 | `e62caf59…1b42e4d6` (unchanged) |
+| vmlinuz in img | 1249792 | `a37c48e9…3a413512` (bzImage-6.18.57-tc755x) |
+| FAT free | **3584** | prior shortfall was 49664 B |
 
-### Floppy image (box, 2026-11-05) — **mkfloppy FAILED (size)**
+Drops (`config/busybox-s6d.applets`): Tier1 vi/awk/fdisk/less; Tier2
+gzip/gunzip/unxz/tar/cpio + seamless helpers; Tier3 mke2fs/mkfs.vfat/mkswap/
+swapon/swapoff/blockdev. Kept getty/rx/sha256sum/dmesg/mknod/ash/init/stty/
+mount/umount/losetup/find + basic shell. Swap: `noswap` APPEND +
+`rootfs-s6d/etc/init.d/rcS` (no fdisk probe). Tier4 **not** taken.
 
-Brandon OK to build floppy (pt417u); burn on Pop-GNOME only (pt418u). Box did
-**not** burn media or touch the 755C.
+Build scripts (tinycore-32-ram, separate from recovery mkfloppy):
+`build-busybox-s6d.sh`, `mkrootfs-s6d.sh`, `mkfloppy-s6d.sh`,
+`boot/syslinux-s6d.cfg`.
 
-Attempt: copy S6d-export `bzImage-6.18.57-tc755x` (1249792 B) → `out/bzImage`,
-run `scripts/mkfloppy.sh`. **mcopy Disk full** — short **49664** bytes vs prior
-FAT free 130560 (delta vs old 1069568 vmlinuz = +180224). `core.xz` not
-stripped (needs separate OK). Partial broken img discarded; `out/tc755.img`
-restored to last-good (old vmlinuz). `out/bzImage` remains the S6d-export
-kernel for a later retry.
+QEMU smoke (isapc/486/32M/nographic): kernel `6.18.57-tc755x`; rcS
+`tc32-s6d: noswap path` / `ready.`; ttyS0 getty → ash `root@box`.
 
-Stage for Pop-GNOME (no bootable new img yet):
-`/workspace/755c-research/out-s6d-exports/floppy/` — bzImage, Module.symvers,
-SIZE-FAILURE.txt, SERIAL-MATRIX.txt, README, SHA256SUMS.
-
-Serial without CF boot (verified): COM1 9600 syslinux + getty autologin,
-busybox `rx` + sha256sum/dmesg/mknod in core.xz; insmod via XMODEM’d
-`modutils.tcz` / second floppy / read-only CF *data* tce — not CF boot.
-Blocked solely on fitting the 1.25 MiB vmlinuz onto the 1.44 MB FAT.
+Stage for Pop-GNOME burn (later):
+`/workspace/755c-research/out-s6d-exports/floppy/` —
+`tc755-s6d.img`, `core-s6d.xz`, `SHA256SUMS`, `README.md`, `SERIAL-MATRIX.md`,
+`SIZES.txt`, prior inventory/proposal notes. **ready-for-Pop-GNOME: YES**
+(burn from Pop only when Brandon asks; CF boot OFF).
 
 ### Kernel rebuild (box, 2026-11-05) — exports kept, **not installed**
 
@@ -172,6 +172,6 @@ read-only font-plane compare.
 
 | Ready on box (no 755C) | Needs Brandon OK |
 |---|---|
-| Docs + ksyms-keep + S6d bank tests; kernel rebuilt (exports OK); **mkfloppy Disk full (−49664 B)** — no S6d-export tc755.img yet | Free ≥49664 B on floppy (core shrink OK) or alternate medium; Pop burns; then S6d live |
+| Docs + ksyms-keep + S6d bank tests; kernel rebuilt (exports OK); **tc755-s6d.img staged** (FAT free 3584; recovery core intact) | Pop-GNOME burn of `tc755-s6d.img`; then S6d live on 755C (CF boot OFF) |
 | Later: S6d fbdev code once KDIR has exports | Any S6d live run; any Xfbdev on 755C |
 | S7 ioctl surface design (after S6d) | Live ioctl / accel runs |
