@@ -364,7 +364,7 @@ If the result is TIMEOUT, read the "idle re-check" line. IDLE seen: carry on
 (rmmod, wd90c24fb back). STILL BUSY / LOCKED: stop; do not rmmod, do not load
 wd90c24fb; save the files and power off.
 
-## Roll-up visual test (prepared 2026-11-04, not run)
+## Roll-up visual test (prepared 2026-11-04, run live 2026-11-04)
 
 One sequence, each PROVEN mode as its own load with the 15 s auto-revert
 (no confirm), then optional S3 last. Any non-OK result touches /tmp/ru.stop
@@ -410,6 +410,84 @@ STOP-<mode>: that step failed and the module may still be loaded; read dmesg
 and /proc/wd24adv/live and go no further; cold boot if the text console
 looks wrong. S3 TIMEOUT: as in the S3 section (STILL BUSY: power off,
 nothing else).
+
+### Roll-up live run 2026-11-04: all four steps OK, S3 OK; visual artifacts open
+
+Build d9c0884 (sha256 `9c77fe90…`), sequence exactly as above. Raw log:
+[rollup-live-2026-11-04.txt](rollup-live-2026-11-04.txt). Times are UTC (when the
+line was sent from the serial host; the 755C starts it a few seconds later).
+
+| step | sent (UTC) | log result |
+|---|---|---|
+| 0 state check | 22:41:41 | as expected: wd90c24fb loaded, fb0 WD90C24, Xfbdev 597, shas 9c77fe90 / eb0a36e2 |
+| prep | 22:42:43 | kill 597, text=1, rmmod wd90c24fb RM=0, no fb |
+| 1 640x480-8 | 22:46:06 | mode 93/263, expiry 896/336, mismatches 0, OK, STEP1-OK |
+| 2 640x400-8 | 22:47:32 | mode 92/261, expiry 896/336, mismatches 0, OK, STEP2-OK |
+| 3 320x200-8 | 22:48:59 | mode 90/258, expiry 896/336, mismatches 0, OK, STEP3-OK |
+| 4 640x480-8 s3=1 | 22:50:27 | OK; `S3 result: OK`, 3 ops verified, 23C2h writes 46, PR0A 15, op2 busy 21 polls, op3 busy 75 polls, no timeout |
+| restore line | 22:52:02 | interrupted while being typed; a following check was typed into it (garbled line, `>` prompt); nothing in it ran |
+| Ctrl-C | 23:48:57 | one 0x03: normal prompt; check: wd24adv loaded, no ru.stop, no fb, no X |
+| rmmod wd24adv | 23:49:54 | RM=0, `live text: 0 (896, 336, mismatches 0)` |
+| insmod wd90c24fb | 23:50:17 | RC=0, BITBLT self-test passed, fb0 WD90C24 |
+| startx, wait | 23:50:52 | X-UP (Xfbdev 727) |
+| wd24probe3 | 23:53:04 | RC=19, result=ok, 3CC=E3 GR0F=05 GR0E=01 CR11=8C CR29=85 CR34=A0 PR18=C7 PR19=54 SR06=0F (X baseline) |
+
+Panel (owner, verbatim as relayed; with his correction):
+- #1: "looks pretty good, just a few (3?) pixel high row of artifacting at very
+  bottom". Correction: #1 DID show the bar-order flip near the bottom.
+- #2: "same bars but no bar order flipping near bottom; letterboxed".
+- #3: "two sets of bars, small row of artifacting between the two sets of bars,
+  letterboxed".
+- #4: "more artifacting at bottom than in first one, maybe 10ish pixels row
+  across" (S3 OK in the log).
+- Between tests: "some strange output on TTY between tests (weird spacing
+  gobbledy gook)".
+
+So the bar flip (#1 yes, #2 no) matches the design. Open: bottom rows in
+#1/#4, the doubled picture in #3, the tty between tests. Analysis (box only,
+no device experiment):
+
+- **Not in this sequence: `dmesg -n 1`.** Step 3 of the main plan sets it;
+  the roll-up does not. The 755C boots with `console=tty0 console=ttyS0`
+  and the serial capture shows every KERN_INFO wd24adv line on the console,
+  so 4-6 printk lines reached vgacon during each graphics trial. vgacon
+  hard-scrolls by writing CR0C/0D (start address) and the cursor CR0E/0F;
+  its text writes go to B8000h, which GR06=05 does not decode. **L** (log,
+  cmdline) / **U** (that vgacon scrolled during the trials).
+- **#1/#4 bottom rows: UNKNOWN; leading hypothesis vgacon start-address
+  scroll.** The pattern fills the whole 307200-byte frame (banks 0-4, PR0A in
+  4 KiB units, flip from 256 KiB = line ~409; owner saw the flip, so no CRTC
+  wrap). S3 ops start at 60000h/60100h/60200h (384 KiB+; 32 rows end below 68000h for any pitch <= 1 KiB), beyond the frame end at
+  4B000h (300 KiB), so by address the S3 ops are not on visible rows. A
+  start address moved up by vgacon would show memory past 4B000h (never
+  written by the pattern) at the bottom; #4 printed one more long line (the
+  S3 summary), consistent with "more" but not proven.
+- **#3 two sets + row between: UNKNOWN; geometry fits "no effective double
+  scan + 64 KiB wrap".** The pattern writes rows of 320 bytes, 64000 bytes.
+  If each of the 400 scan lines fetched a new row, rows 0-199 are the bars,
+  rows 200-204.8 the 1536 unwritten bytes 64000-65535 (the artifact row),
+  then the plane address wraps at 64 KiB and rows 205-399 repeat the bars.
+  The mode writes std 13h CR09=41h (2 lines/row) and read back 0 mismatches;
+  why it did not double here (5f275b4 on 2026-11-02, separate session, was
+  fine) is unknown: a WD ext bit left by 640x400-8, or the vgacon scroll.
+  Need from owner: were the two sets stacked vertically?
+- **TTY garble: UNKNOWN; leading hypothesis vgacon out of sync.** `mismatches
+  0` covers register readback (rb_mask), DAC (768 bytes) and all four planes
+  (64 KiB each, byte compare): font (plane 2), characters and attributes are
+  restored exactly to the load-time save, CR0A-0F to saved values. Not
+  covered: vgacon's own origin/cursor/screen buffer. Lines printed during a
+  trial never reached memory and a hard-scrolled origin is set back by the
+  restore, so vgacon's state no longer matches the screen.
+
+Safe next fixes (box first, then one approved live run):
+1. Add `dmesg -n 1` (and `printf '\033[9;0]' > /dev/tty1`) to the roll-up
+   preparation; it changes no driver code. Repeat #1 and #3 only.
+2. In wd24adv, block console output during a mode (console_lock across the
+   trial or `vt` KD_GRAPHICS via do_blank / con_is_visible) and redraw tty1
+   after restore (`redraw_screen`/`update_screen`): QEMU model first.
+3. pattern: also clear memory from the frame end to 512 KiB so a start shift
+   shows black, and in 13h clear 64000-65535; add CR0C/0D/CR09 readback to
+   /proc/wd24adv/live at expiry so the next log shows whether they moved.
 
 ## Abort and revert
 

@@ -1,0 +1,188 @@
+# Roll-up visual test, live 2026-11-04 (module d9c0884, sha256 9c77fe90...)
+# Raw 755C serial (ttyS0) capture, CR and ANSI escapes stripped; wd24probe3 'tr' trace lines omitted.
+# Includes the interrupted restore line (garbled by an overlapping typed command), the single Ctrl-C and the restore.
+
+root@box:~# uptime; sha256sum /tmp/wd24adv.ko /tmp/wd24probe3.ko | cut -c1-8; cu
+t -d" " -f1,3 /proc/modules | tr "\n" " "; echo; cat /proc/fb; pidof Xfbdev; ps 
+| grep -E "startx|Xfbdev|jwm|rxvt" | grep -v grep
+ 18:41:46 up  2:24,  load average: 0.13, 0.20, 0.13
+9c77fe90
+eb0a36e2
+wd90c24fb 2 evdev 0 mousedev 1 psmouse 0 syscopyarea 1 sysfillrect 1 vgastate 1 sysimgblt 1 fb_sys_fops 1 fb 70 font 1 serial_cs 0 pata_pcmcia 1 pcmcia 2 firmware_class 1 i82365 0 pcmcia_rsrc 1 pcmcia_core 3 
+0 WD90C24
+597
+  587 root       580 S    {startx} /bin/sh /usr/local/bin/startx
+  597 root      1664 S    Xfbdev :0 -mouse /dev/input/mice -2button
+  599 root      2128 S    jwm
+  600 root      1924 S    rxvt -fn fixed -geometry 80x24+8+8
+root@box:~# kill 597; sleep 3; pidof Xfbdev; echo 1 > /sys/module/wd90c24fb/para
+meters/text; sleep 2; rmmod wd90c24fb; echo RM=$?; rm -f /tmp/ru.stop; cut -d" "
+ -f1 /proc/modules | grep -E "wd90|vga16|wd24"; wc -l </proc/fb
+apm: set display: Unrecognized device ID
+wd90c24fb: text=1: back to text mode (now rmmod wd90c24fb can unload)
+Console: switching to colour VGA+ 80x25
+RM=0
+0
+root@box:~# gt(){ S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90
+c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/de
+v/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 9c77fe90001 ]; }
+root@box:~# ru(){ [ -e /tmp/ru.stop ] && { echo SKIP; return 1; }; gt && dmesg -
+c >/dev/null && insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=$1 $2 && sleep 20 &&
+ grep -q "mismatches 0; in_text 1" /proc/wd24adv/live && echo OK-$1 $2 || { touc
+h /tmp/ru.stop; echo STOP-$1; dmesg | grep wd24adv; return 1; }; }; type ru | he
+ad -1
+ru is a function
+root@box:~# ru 640x480-8 && { rmmod wd24adv && echo STEP1-OK || touch /tmp/ru.st
+op; }
+G=9c77fe90001
+wd24adv: live load: 0 (port data writes 46, index writes 224, mismatches 0)
+wd24adv: LIVE: text state saved (4 planes, DAC, VGA + ext regs); trial 15 s; control: /proc/wd24adv/control
+wd24adv: live mode 640x480-8: 0 (port data writes 93, index writes 263, mismatches 0)
+wd24adv: 640x480-8 set: write "confirm" to /proc/wd24adv/control within 15 s or it reverts to text
+wd24adv: live trial expiry: 0 (port data writes 896, index writes 336, mismatches 0)
+OK-640x480-8
+wd24adv: live text: 0 (port data writes 896, index writes 336, mismatches 0)
+STEP1-OK
+root@box:~# ru 640x400-8 && { rmmod wd24adv && echo STEP2-OK || touch /tmp/ru.st
+op; }
+G=9c77fe90001
+wd24adv: live load: 0 (port data writes 46, index writes 224, mismatches 0)
+wd24adv: LIVE: text state saved (4 planes, DAC, VGA + ext regs); trial 15 s; control: /proc/wd24adv/control
+wd24adv: live mode 640x400-8: 0 (port data writes 92, index writes 261, mismatches 0)
+wd24adv: 640x400-8 set: write "confirm" to /proc/wd24adv/control within 15 s or it reverts to text
+wd24adv: live trial expiry: 0 (port data writes 896, index writes 336, mismatches 0)
+OK-640x400-8
+wd24adv: live text: 0 (port data writes 896, index writes 336, mismatches 0)
+STEP2-OK
+root@box:~# ru 320x200-8 && { rmmod wd24adv && echo STEP3-OK || touch /tmp/ru.st
+op; }
+G=9c77fe90001
+wd24adv: live load: 0 (port data writes 46, index writes 224, mismatches 0)
+wd24adv: LIVE: text state saved (4 planes, DAC, VGA + ext regs); trial 15 s; control: /proc/wd24adv/control
+wd24adv: live mode 320x200-8: 0 (port data writes 90, index writes 258, mismatches 0)
+wd24adv: 320x200-8 set: write "confirm" to /proc/wd24adv/control within 15 s or it reverts to text
+wd24adv: live trial expiry: 0 (port data writes 896, index writes 336, mismatches 0)
+OK-320x200-8
+wd24adv: live text: 0 (port data writes 896, index writes 336, mismatches 0)
+STEP3-OK
+root@box:~# ru 640x480-8 s3=1; cat /proc/wd24adv/s3 > /tmp/rus3.txt; grep -E "S3
+ result|DEAD|idle" /tmp/rus3.txt; grep -q "S3 result: OK" /tmp/rus3.txt || touch
+ /tmp/ru.stop
+G=9c77fe90001
+wd24adv: live load: 0 (port data writes 46, index writes 224, mismatches 0)
+wd24adv: LIVE: text state saved (4 planes, DAC, VGA + ext regs); trial 15 s; control: /proc/wd24adv/control
+wd24adv: live mode 640x480-8: 0 (port data writes 93, index writes 263, mismatches 0)
+wd24adv: 640x480-8 set: write "confirm" to /proc/wd24adv/control within 15 s or it reverts to text
+wd24adv: S3: OK; ops verified 3; 23C2h writes 46 (starts 3), PR0A writes 15; details: /proc/wd24adv/s3
+wd24adv: live trial expiry: 0 (port data writes 896, index writes 336, mismatches 0)
+OK-640x480-8 s3=1
+wd24adv S3 result: OK
+  op 1 FILL 8x8 @60000h c=3Ch         model changes 64; idle polls 0; busy not seen, polls 0; CNTRL1 after 0108 VERIFIED
+  op 2 FILL 32x32 @60200h c=C3h       model changes 1024; idle polls 0; busy seen, polls 21; CNTRL1 after 0108 VERIFIED
+  op 3 COPY 32x32 60200h->60100h fwd  model changes 1024; idle polls 0; busy seen, polls 75; CNTRL1 after 0100 VERIFIED
+root@box:~# [ -e /tmp/ru.stop ] && echo "STOPPED: check before rmmod" || { rmmod
+ wd24adv && echo STEP4-OK || touch /tmp/ru.stop; }; [ -e /tmp/ru.stop ] && echo 
+"STOPPED: do not load wd90c24fb until checked" || { insmod /usr/local/leicbh/om 
+oQd1u;l elss/ 6/.t1m8p./5r7u-.tsct7o5p5;x /gerxetpr a-/Ew d"9^0(cw2d49f0bc.2k4of
+;b |ewcdh2o4 aRdCv=|$v?g;a 1}6
+> fb) " /proc/modules | cut -d" " -f1,3; cat /proc/fb; dmesg | tail -5; echo Q2
+> ^C
+
+root@box:~# echo Q1; ls /tmp/ru.stop; grep -E "^(wd90c24fb|wd24adv|vga16fb) " /p
+roc/modules | cut -d" " -f1,3; cat /proc/fb; pidof Xfbdev; dmesg | tail -4; echo
+ Q2
+Q1
+ls: /tmp/ru.stop: No such file or directory
+wd24adv 0
+<6>wd24adv: live mode 640x480-8: 0 (port data writes 93, index writes 263, mismatches 0)
+<6>wd24adv: 640x480-8 set: write "confirm" to /proc/wd24adv/control within 15 s or it reverts to text
+<6>wd24adv: S3: OK; ops verified 3; 23C2h writes 46 (starts 3), PR0A writes 15; details: /proc/wd24adv/s3
+<6>wd24adv: live trial expiry: 0 (port data writes 896, index writes 336, mismatches 0)
+Q2
+root@box:~# rmmod wd24adv; echo RM=$?; dmesg | tail -1
+wd24adv: live text: 0 (port data writes 896, index writes 336, mismatches 0)
+RM=0
+<6>wd24adv: live text: 0 (port data writes 896, index writes 336, mismatches 0)
+root@box:~# insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; ech
+o RC=$?; cat /proc/fb
+wd90c24fb: found WD90C24 (CR36/37 "24"), 1024 KiB video memory
+wd90c24fb: panel: PR18=0xc7 PR19=0x54: LCD on, CRT off
+wd90c24fb: extended register blocks (BITBLT, cursor) present: WD90C24A/A2
+Console: switching to colour frame buffer device 80x30
+wd90c24fb: BITBLT self-test passed: acceleration on
+wd90c24fb: colour expansion: var 0 works but is not faster (1.0x), off
+wd90c24fb: fb0: WD90C24, 640x480x8 via PR0(A) banking, 300 KiB shadow, BITBLT
+RC=0
+0 WD90C24
+root@box:~# ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;
+ HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautost
+art.log 2>&1 & )
+root@box:~# i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i
+=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X
+727
+X-UP
+root@box:~# pidof Xfbdev >/dev/null && { dmesg -c >/dev/null; insmod /tmp/wd24pr
+obe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u; }
+wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
+wd24probe3: GR0F=05 GR0E=01 SR06=0f CR11=8c CR29=85
+wd24probe3: CR34 L=a0 again=a0 wrote=a0 rb=a0 restored-rb=a0
+wd24probe3: PR18(CR31)=c7 PR19(CR32)=54 PR1A(CR33)=00 PR36(CR3B)=ef PR37(CR3C)=9a PR39(CR3E)=20
+wd24probe3: 3C4test pre=11 SR06again=00 wrote=00 rb=00 post=00 restored-rb=00 after=11
+wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
+wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
+wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
+wd24probe3: GR0F=05 GR0E=01 SR06=0f CR11=8c CR29=85
+wd24probe3: CR34 L=a0 again=a0 wrote=a0 rb=a0 restored-rb=a0
+wd24probe3: PR18(CR31)=c7 PR19(CR32)=54 PR1A(CR33)=00 PR36(CR3B)=ef PR37(CR3C)=9a PR39(CR3E)=20
+wd24probe3: 3C4test pre=11 SR06again=00 wrote=00 rb=00 post=00 restored-rb=00 after=11
+wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
+wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
+insmod: can't insert '/tmp/wd24probe3.ko': No such device
+RC=19
+<6>wd24probe3: 3C4test pre=11 SR06again=00 wrote=00 rb=00 post=00 restored-rb=00 after=11
+<6>wd24probe3: 3CC=e3 idx 3D4=11 3CE=09 3C4=01
+<6>wd24probe3: CR34 L=a0 again=a0 wrote=a0 rb=a0 restored-rb=a0
+<6>wd24probe3: GR0F=05 GR0E=01 SR06=0f CR11=8c CR29=85
+<6>wd24probe3: PR18(CR31)=c7 PR19(CR32)=54 PR1A(CR33)=00 PR36(CR3B)=ef PR37(CR3C)=9a PR39(CR3E)=20
+<6>wd24probe3: SR11=5d SR19=35 SR21=15 SR35=00 rb50=50 SR31=0d SR35rb=00
+<6>wd24probe3: final GR0F=05 GR0E=01 CR11=8c CR29=85 CR34=a0 SR06=0f idx 11/09/01
+<6>wd24probe3: result=ok restore_fail=0x00 trace=78 seq_state=2 wrote_sr06=0
+root@box:~# 
+
+# Command log on the serial host (local time EST = UTC-5)
+2026-11-04 17:41:41 EST  RU step0: read-only state check
+2026-11-04 17:41:41 EST  slow: uptime; sha256sum /tmp/wd24adv.ko /tmp/wd24probe3.ko | cut -c1-8; cut -d" " -f1,3 /proc/modules | tr "\n" " "; echo; cat /proc/fb; pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt" | grep -v grep CR
+2026-11-04 17:42:43 EST  RU prep start 22:42:43 UTC: kill 597, text=1, rmmod wd90c24fb, rm ru.stop
+2026-11-04 17:42:43 EST  slow: kill 597; sleep 3; pidof Xfbdev; echo 1 > /sys/module/wd90c24fb/parameters/text; sleep 2; rmmod wd90c24fb; echo RM=$?; rm -f /tmp/ru.stop; cut -d" " -f1 /proc/modules | grep -E "wd90|vga16|wd24"; wc -l </proc/fb CR
+2026-11-04 17:44:07 EST  RU define gt
+2026-11-04 17:44:08 EST  slow: gt(){ S=$(sha256sum /tmp/wd24adv.ko|cut -c1-8); N=$(grep -cE "^(wd90c24fb|vga16fb|wd24adv) " /proc/modules); F=$(wc -l </proc/fb); pidof Xfbdev >/dev/null; X=$?; echo G=$S$N$F$X; [ $S$N$F$X = 9c77fe90001 ]; } CR
+2026-11-04 17:44:55 EST  RU define ru
+2026-11-04 17:44:55 EST  slow: ru(){ [ -e /tmp/ru.stop ] && { echo SKIP; return 1; }; gt && dmesg -c >/dev/null && insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=$1 $2 && sleep 20 && grep -q "mismatches 0; in_text 1" /proc/wd24adv/live && echo OK-$1 $2 || { touch /tmp/ru.stop; echo STOP-$1; dmesg | grep wd24adv; return 1; }; }; type ru | head -1 CR
+2026-11-04 17:46:06 EST  RU step1 640x480-8 start 22:46:06 UTC
+2026-11-04 17:46:06 EST  slow: ru 640x480-8 && { rmmod wd24adv && echo STEP1-OK || touch /tmp/ru.stop; } CR
+2026-11-04 17:47:33 EST  RU step2 640x400-8 start 22:47:32 UTC
+2026-11-04 17:47:33 EST  slow: ru 640x400-8 && { rmmod wd24adv && echo STEP2-OK || touch /tmp/ru.stop; } CR
+2026-11-04 17:48:59 EST  RU step3 320x200-8 start 22:48:59 UTC
+2026-11-04 17:49:00 EST  slow: ru 320x200-8 && { rmmod wd24adv && echo STEP3-OK || touch /tmp/ru.stop; } CR
+2026-11-04 17:50:27 EST  RU step4 640x480-8 s3=1 start 22:50:27 UTC
+2026-11-04 17:50:27 EST  slow: ru 640x480-8 s3=1; cat /proc/wd24adv/s3 > /tmp/rus3.txt; grep -E "S3 result|DEAD|idle" /tmp/rus3.txt; grep -q "S3 result: OK" /tmp/rus3.txt || touch /tmp/ru.stop CR
+2026-11-04 17:52:03 EST  RU step4 rmmod + wd90c24fb restore 22:52:02 UTC
+2026-11-04 17:52:03 EST  slow: [ -e /tmp/ru.stop ] && echo "STOPPED: check before rmmod" || { rmmod wd24adv && echo STEP4-OK || touch /tmp/ru.stop; }; [ -e /tmp/ru.stop ] && echo "STOPPED: do not load wd90c24fb until checked" || { insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?; } CR
+2026-11-04 17:52:36 EST  RU read-only check after interrupted step4 call
+2026-11-04 17:52:36 EST  slow: echo Q1; ls /tmp/ru.stop; grep -E "^(wd90c24fb|wd24adv|vga16fb) " /proc/modules | cut -d" " -f1,3; cat /proc/fb; dmesg | tail -5; echo Q2 CR
+2026-11-04 18:48:57 EST  RU send ONE Ctrl-C (0x03, nocr) to clear > prompt
+2026-11-04 18:48:57 EST  slow:  nocr
+2026-11-04 18:49:05 EST  RU read-only check after Ctrl-C
+2026-11-04 18:49:06 EST  slow: echo Q1; ls /tmp/ru.stop; grep -E "^(wd90c24fb|wd24adv|vga16fb) " /proc/modules | cut -d" " -f1,3; cat /proc/fb; pidof Xfbdev; dmesg | tail -4; echo Q2 CR
+2026-11-04 18:49:55 EST  RU restore: rmmod wd24adv 23:49:54 UTC
+2026-11-04 18:49:55 EST  slow: rmmod wd24adv; echo RM=$?; dmesg | tail -1 CR
+2026-11-04 18:50:17 EST  RU restore: insmod wd90c24fb 23:50:17 UTC
+2026-11-04 18:50:17 EST  slow: insmod /usr/local/lib/modules/6.18.57-tc755x/extra/wd90c24fb.ko; echo RC=$?; cat /proc/fb CR
+2026-11-04 18:50:52 EST  RU restore: startx 23:50:52 UTC
+2026-11-04 18:50:52 EST  slow: ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & ) CR
+2026-11-04 18:51:23 EST  RU restore: wait X-UP
+2026-11-04 18:51:23 EST  slow: i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X CR
+2026-11-04 18:53:04 EST  RU baseline: wd24probe3 23:53:04 UTC
+2026-11-04 18:53:04 EST  slow: pidof Xfbdev >/dev/null && { dmesg -c >/dev/null; insmod /tmp/wd24probe3.ko; echo RC=$?; dmesg | grep wd24probe3 | grep -v " tr " | sort -u; } CR
