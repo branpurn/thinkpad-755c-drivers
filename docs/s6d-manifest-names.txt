@@ -1,0 +1,27 @@
+# Which checksum file is which
+
+These names are deliberate. A file called SHA256SUMS at the top of the
+artifact directory is not the cold-boot payload.
+
+`wd24-cold.tgz`
+sha256 `f2fd0bb1e68633fc49ff86c2d4c2d6d21a3c4410a3593bd4208408ff3632c093`
+size 2355343
+The archive. Extracting it does not insmod.
+
+`wd24-cold.tgz.sha256`
+One line: that archive hash, the size, and the name `wd24-cold.tgz`.
+This is the checksum of the tar file, not of its members.
+
+`wd24-cold-payload.sha256`
+Byte-identical to `wd24-cold/SHA256SUMS` inside the tar. Each line is
+one member of the payload. It does not list itself. Its own sha256 is
+`5d1d8e16bea0d4fa2cbcc89a3aa5d19245ece7e347ef5ffe2e9f8437e5f0d8e0`,
+size 1652. That identity hash is not a payload member.
+
+`s6d-pr14/SHA256SUMS`
+sha256 `a56a60f8752420934ccaa6771b767e74fbf0b946b61a1a1b8412050e267a87e8`
+size 749
+Baseline build evidence from the earlier module package: autoconf,
+config, and `wd24adv-6.18.57-tc755x.ko`. It is not the cold payload.
+The only hash it shares with the cold payload is the baseline module
+`7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36`.

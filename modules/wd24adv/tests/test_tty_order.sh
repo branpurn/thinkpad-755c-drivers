@@ -48,20 +48,22 @@ grep -q "WD24X-TTY-ACCEPT done" "$M/ok.out" && ok || bad "armed done"
 grep -q "WD24X-TTY-ACCEPT key 1" "$M/ok.out" && ok || bad "key"
 grep -q "kd 0 fg 1" "$M/ok.out" && ok || bad "snapshot"
 [ "$rc" = 0 ] && ok || bad "armed rc"
-mkdir -p "$M/bin"
-cat > "$M/bin/dd" <<'EOF'
+cat > "$M/tmp/wd24x-tty-key" <<'EOF'
 #!/bin/sh
-exit 0
+echo "WD24X-TTY-KEY timeout"
+exit 1
 EOF
-chmod 755 "$M/bin/dd"
-# empty key stops and does not print done. dd is the mock, not /dev/tty0.
+chmod 755 "$M/tmp/wd24x-tty-key"
+# Timeout keeps the after snapshot and does not print done.
 WD24X_TTY_ACCEPT=keystroke WD24X_MOCK=$M WD24X_TTY_BIN=$M/tmp/wd24x-tty-read \
-	PATH="$M/bin:$PATH" WD24X_TTY_KEY= \
+	WD24X_TTY_KEYBIN=$M/tmp/wd24x-tty-key WD24X_TTY_KEY= \
 	dash "$ROOT/docs/s6d-tty-accept.sh" >"$M/nk.out"
-# empty assignment still sets the variable; the script treats empty as no key
 rc=$?
 grep -q "stop no key" "$M/nk.out" && ok || bad "no key"
 grep -q "done" "$M/nk.out" && bad "no key done" || ok
+[ -f "$M/tmp/wd24x-tty-before.out" ] && ok || bad "timeout before kept"
+[ -f "$M/tmp/wd24x-tty-after.out" ] && ok || bad "timeout after kept"
+grep -v '^#' "$ROOT/docs/s6d-tty-accept.sh" | grep -q 'dd ' && bad "dd" || ok
 rm -rf "$M" /tmp/wd24x-order "$FIX"
 echo "test_tty_order: $pass passed, $fail failed"
 [ "$fail" = 0 ]

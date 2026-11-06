@@ -8,9 +8,9 @@ would need the default-off regression again. `wd90c24fb` is untouched.
 
 Host `make -C modules/wd24adv/tests test` with
 `CFLAGS='-O2 -g -Wall -Wextra -Werror -std=gnu11'` completed with 0
-failed, including `test_cmap_abi` (54), `test_cmap_audit.py`,
-`test_cmap_p23_run` (55), `test_tty_order` (17), and `test_doom_pick`
-(11). That make is not the 755C.
+failed, including `test_cmap_abi` (54), `test_cmap_p23_run` (55),
+`test_tty_order` (20), `test_doom_present` (38), and `test_tty_own`
+(12). That make is not the 755C.
 
 ## Userspace built here
 
@@ -26,11 +26,12 @@ objdump mnemonic column: no `cmov`, `cpuid`, `syscall`, `sysenter`,
 | `/opt/cursor/artifacts/wd24x-cmap-set` | `1a26c1c92e6c36d50175cbfce164506482495d3a1f2bc5a81192f5d1044a8c1f` | 13844 |
 | `/opt/cursor/artifacts/wd24x-tty-read` | `7847d2de4578b820407bd1eac93a38081120fd0bf37824a315c13b5efb8da31d` | 21876 |
 | `/opt/cursor/artifacts/wd24x-order` | `609effb8ab73d0f4bad10f1bb7d48268391c5dd631aeb8899b7f53001f2f32a0` | 30228 |
-| `/opt/cursor/artifacts/wd24x-doom` | `9e3c6d90fc7d3d408a304954cf7b9fe04784b52381c4c74d2f31ba97331f8ef9` | 435064 |
+| `/opt/cursor/artifacts/wd24x-doom` | `e735b3fdb770780bc8ac4c97f7239cafb63103aae310f5b43d5c0e6bbd8a3164` | 435064 |
+| `/opt/cursor/artifacts/wd24x-tty-key` | `ff64e7fb10150e8e93106c1107f63c6f1fa0ff2e391ae332ace492bbef424dc0` | 13684 |
 | `/opt/cursor/artifacts/wd24x-cmap-p2-run.sh` | `308d36d1d7ff14310ae87cabe84abc22a4b1dc232ddaa56ac88a418c167ab446` | 6801 |
 | `/opt/cursor/artifacts/wd24x-cmap-p3-run.sh` | `6ae8245c2a0c054420052f82817383db5c542759ab71497fc254013b3cb47ca9` | 6852 |
 | `/opt/cursor/artifacts/wd24x-cmap-batch-run.sh` | `ba58c660a2adab9e3536d5c3e3f2ccd3804062b32d4dabe6fbd411d1ea01fab4` | 783 |
-| `/opt/cursor/artifacts/wd24x-tty-accept.sh` | `c01f38e4703e3394d4c639890450ab6038488752cd1e92b8d2564b68c0607c24` | 1203 |
+| `/opt/cursor/artifacts/wd24x-tty-accept.sh` | `2288246346cba17a184c09420e736204712f227354f37756985ae4061c72ab1e` | 1583 |
 
 Sources: `modules/wd24adv/tests/wd24x-cmap-get.c`, `wd24x-cmap-set.c`,
 `wd24x-tty-read.c`, and `docs/s6d-cmap-p2-run.sh`, `s6d-cmap-p3-run.sh`,
@@ -146,8 +147,13 @@ fields are stripped so the report is one line. It does not call
 `session ON`, `end (`, `trial expiry`, and the deallocate line in the
 order they occur. It does not name a cause. `docs/s6d-tty-accept.sh`
 is the later keystroke check. It is off unless
-`WD24X_TTY_ACCEPT=keystroke`. Text and keyboard recovery are not
-called validated.
+`WD24X_TTY_ACCEPT=keystroke`. The key helper
+`wd24x-tty-key` saves the whole termios, waits at most 15 seconds,
+and puts that struct back on success, timeout, and caught signals.
+The before and after snapshots are kept if the wait times out.
+`SIGKILL` cannot run the restore. Text and keyboard recovery are not
+called validated. `VT_ACTIVATE` with `-1` is still not a cause, and
+no KD mode is written to hide the failure.
 
 ## Modes
 
@@ -159,18 +165,38 @@ claim those two unproven lines.
 
 ## Doom
 
-The backend is `tools/wd24-doom/`. Full X is not used. The i486 binary,
-the Freedoom pin, and the qemu checks are in that README. Two qemu
-runs of Freedoom `demo1` both reported 7117 gametics and frame sum
-`0x9f415cb5`. A two-frame run reported sum `0xb298c9c0`. Those sums are
-`qemu-i386-static -cpu 486` on this host. They are not 755C frames per
-second and they are not a Windows 98 comparison.
+The backend is `tools/wd24-doom/`. It renders 320x200 indices and
+composes a private 640x480 frame. Letterbox is the default: 2x2 pixels
+at rows 40..439, index 0 above and below, 8:5 in a square-pixel frame.
+`WD24X_DOOM_PRESENT=fill` uses the row pattern 2,3,2,2,3 so the same
+buffer covers 640x480, the integer form of the CRT 4:3 stretch. Copies
+stop at each 64 KiB edge and do not write at or past `0x4b000`. The
+host test counted 4 forward window changes and no span that crosses a
+window. `test_doom_present` is 38 passed.
 
-Render is 320x200. The S6d scanout that has been watched is 640x480.
-This binary does not scale one into the other. Detail is the engine
-default. The bench passes `-nosound`. `WD24X_DOOM_FB=mmap` is the only
-switch that opens `/dev/fb0`, and it copies luminance, not PLAYPAL.
-`WD24X_DOOM_PALETTE=1` exits before that open. The bench sets neither.
+PLAYPAL channels become `(byte >> 2) << 10`. For all 256 bytes that
+matches the fbcon value the colormap candidate shifts back down.
+`WD24X_DOOM_PALETTE=put` sends those 256 entries with `FBIOPUTCMAP`
+only after a successful mmap. Any other value does not. The default
+binary opens neither `/dev/fb0` nor a tty.
+
+`WD24X_DOOM_INPUT=tty` saves termios and restores it. A PTY test checks
+the saved flags after a normal end and after `SIGTERM`. A tty byte has
+no key-up, so each byte is one tap. Sound stays off in the bench.
+Detail stays the engine default. Those are not a matched Windows 98
+setup. The qemu frames-per-second figure is not stable across two runs
+and is not a 755C number.
+
+Two qemu runs of Freedoom `demo1`: 7117 gametics, 7156 frames, index
+`0x3ac75f8d`, present `0x506f4d2d`, playpal0 `1 32 1`. Two frames:
+index `0x00e988bb`, present `0x807cd9bd`, playpal0 `1 1 1`. Native peak
+`VmHWM` on this host was 8988 KiB. The Freedoom file is 28795076 bytes.
+It is larger than MemAvailable recorded on the machine (19876, 19816,
+20916 KiB), so that file does not fit in the free RAM of those
+sessions. Adding the file to the RSS double-counts zone copies and is
+above 36 MiB. There is no 12 MiB guarantee. A shareware wad mirror
+returned 404. A later session needs a wad the operator already has
+whose file fits in the free RAM.
 
 ## Cold boot — copy these, then stop
 
@@ -194,20 +220,30 @@ Do not copy the rejected module onto the machine.
 | `/tmp/wd24x-cmap-set` | `1a26c1c92e6c36d50175cbfce164506482495d3a1f2bc5a81192f5d1044a8c1f` |
 | `/tmp/wd24x-tty-read` | `7847d2de4578b820407bd1eac93a38081120fd0bf37824a315c13b5efb8da31d` |
 | `/tmp/wd24x-order` | `609effb8ab73d0f4bad10f1bb7d48268391c5dd631aeb8899b7f53001f2f32a0` |
-| `/tmp/wd24x-doom` | `9e3c6d90fc7d3d408a304954cf7b9fe04784b52381c4c74d2f31ba97331f8ef9` |
+| `/tmp/wd24x-doom` | `e735b3fdb770780bc8ac4c97f7239cafb63103aae310f5b43d5c0e6bbd8a3164` |
+| `/tmp/wd24x-tty-key` | `ff64e7fb10150e8e93106c1107f63c6f1fa0ff2e391ae332ace492bbef424dc0` |
 | `/tmp/wd24x-cmap-p2-run.sh` | `308d36d1d7ff14310ae87cabe84abc22a4b1dc232ddaa56ac88a418c167ab446` |
 | `/tmp/wd24x-cmap-p3-run.sh` | `6ae8245c2a0c054420052f82817383db5c542759ab71497fc254013b3cb47ca9` |
 | `/tmp/wd24x-cmap-batch-run.sh` | `ba58c660a2adab9e3536d5c3e3f2ccd3804062b32d4dabe6fbd411d1ea01fab4` |
-| `/tmp/wd24x-tty-accept.sh` | `c01f38e4703e3394d4c639890450ab6038488752cd1e92b8d2564b68c0607c24` |
+| `/tmp/wd24x-tty-accept.sh` | `2288246346cba17a184c09420e736204712f227354f37756985ae4061c72ab1e` |
 
 Rejected, do not stage:
 `30415e508e2757f008210233bd9d2610a160fbbf132b4df9e8d674109375b19a`.
 
 The same bytes are in `/opt/cursor/artifacts/wd24-cold.tgz`
-sha256 `7bfda51b7309c914668042e72b2c3423550b445eac39d1d0304efa2f0ff3c979`
-size 2350158. Inside it, scripts and binaries are mode 755 and the
-modules are mode 644. Extracting it does not insmod. SHA256SUMS is
-in the archive. Freedoom is not in it.
+sha256 `f2fd0bb1e68633fc49ff86c2d4c2d6d21a3c4410a3593bd4208408ff3632c093`
+size 2355343. That checksum is also the one line in
+`wd24-cold.tgz.sha256`. Inside the tar, scripts and binaries are mode
+755 and the modules are mode 644. `wd24-cold/SHA256SUMS` is the payload
+manifest. The exported file `wd24-cold-payload.sha256` is those same
+bytes (its own sha256 is
+`5d1d8e16bea0d4fa2cbcc89a3aa5d19245ece7e347ef5ffe2e9f8437e5f0d8e0`,
+size 1652). `s6d-pr14/SHA256SUMS` is a different file: sha256
+`a56a60f8752420934ccaa6771b767e74fbf0b946b61a1a1b8412050e267a87e8`,
+size 749, the baseline build-evidence list. The only hash those two
+lists share is the baseline module. Extracting the tar does not
+insmod. Freedoom is not in it. The names are written out in
+`docs/s6d-manifest-names.txt`.
 
 Install on a normal filesystem keeps those modes. The artifact
 directory itself forces mode 666 on loose files, so the tar is the
@@ -230,16 +266,20 @@ them.
    expiry restores colour RAM. The client does not observe the restore.
 3. A watched panel for hue, and for whether index 0 and index 15 differ.
    Digits 1..5 were seen on the baseline. Hue was not.
-4. A physical key on the 755C keyboard. `docs/s6d-tty-accept.sh` reads
-   one byte only when `WD24X_TTY_ACCEPT=keystroke`, and it records
-   `wd24x-tty-read` before and after. It does not call `KDSETMODE`.
+4. A physical key on the 755C keyboard. `docs/s6d-tty-accept.sh` runs
+   only when `WD24X_TTY_ACCEPT=keystroke`. `wd24x-tty-key` waits at
+   most 15 seconds and restores termios. The before and after
+   snapshots are kept if it times out. It does not call `KDSETMODE`.
    Serial and VGA+ bind are not that byte.
 5. Any mode other than the watched S6d `640x480-8`, if it is attempted
    at all. `320x240-8x` and `640x480-8-v800` are still unproven.
-6. A Doom timedemo on the 755C. The qemu gametic count above is not
-   that run. Correct 8-bit colour still needs the unvalidated palette
-   path, which this binary refuses. Scanout scaling to 640x480 is not
-   in the binary.
+6. Running the built Doom path on the 755C with `WD24X_DOOM_FB=mmap`
+   and, separately, `WD24X_DOOM_PALETTE=put`. The index present, the
+   64 KiB split, and the PLAYPAL encoding are host-tested. The DAC and
+   the fault handler are not. Freedoom phase 1 does not fit in the
+   free RAM recorded on the machine. The wad has to be one the
+   operator supplies that does fit. Sound and detail are not a
+   Windows 98 mix.
 
 ## Review leftovers
 
