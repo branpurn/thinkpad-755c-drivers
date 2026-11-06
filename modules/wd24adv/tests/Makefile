@@ -28,6 +28,7 @@ test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test
 	./test_cmap_life
 	ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:log_path=/tmp/wd24-cmap-asan ./test_cmap_life_asan
 	./test_glyph_bank
+	dash ./test_glyph_run.sh
 
 test_core: test_core.c $(CORE) ../wd24adv_core.h
 	$(CC) $(CFLAGS) -o $@ test_core.c $(CORE)

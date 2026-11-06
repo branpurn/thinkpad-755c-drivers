@@ -82,17 +82,47 @@ The alarm is 15 seconds. A later target script, if one is written,
 must keep `-noreset`, must not pass `-ac`, and must not start a second
 X after a nonzero client status.
 
-## Later target, only if a person names this hash
+## Trigger script
 
-Do not start that from this note. One sitting, the baseline module,
-the existing Xfbdev line:
+`docs/s6d-glyph-run.sh`
+Artifact `/opt/cursor/artifacts/wd24x-glyph-run.sh`
+
+Copying it does not run it. Do not set `WD24X_MOCK`. The rectangle
+client is not on its command line and is not removed.
+
+On the target, after the files are already in `/tmp` and a person says
+to trigger:
 
 ```
-Xfbdev :1 -nolisten tcp -noreset -fb /dev/fb0
+sh /tmp/wd24x-glyph-run.sh
 ```
 
-Then this client on :1. Pass text is the marks line above, with ctrl 1.
-Then the usual single SIGTERM, reap, and text restore. faults may rise.
-thrash must stay 0. The panel is a separate look: five digit shapes,
-not a keyboard test. If the shapes are not visible, stop. Do not change
-the palette and do not raise the thrash bound.
+It checks the baseline module hash and the glyph hash, empty `/proc/fb`,
+vtcon0 `(S) VGA+` bind 1, no vtcon1, and no `/tmp/.X1-lock` or
+`/tmp/.X11-unix/X1`. It does not delete a stale X1 socket. A failed
+check does not insmod.
+
+insmod parameters are `dryrun=0 live=1 mode=640x480-8 trial=180 s6d=1
+pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=0`. X is
+`Xfbdev :1 -nolisten tcp -noreset -fb /dev/fb0`. No `-ac`.
+
+Timing on the success path: 15 s for X to stay up, 20 s to watch the
+client, then X is reaped, then 150 s so the 180 s trial can expire,
+then `/proc/wd24adv/live` must show `trial expiry`, `mismatches 0`, and
+`in_text 1`. Then rmmod. The pass line is exactly
+
+```
+WD24X-GLYPH shadow 640x480x8 marks 5 match 5 ctrl 1
+```
+
+as the only stdout line, and `CL=0`. Anything else stops the series.
+
+A client failure, a client still running at 20 s, or a dead X does not
+take the 150 s wait. Those paths still TERM the recorded pid, one
+KILL, and rmmod when the pid is gone. If that pid is still alive after
+the KILL and 5 s, the script does not rmmod and does not remove the X1
+socket. The executor finishes that. Logs, the glyph binary, the module,
+and the archives are left in place.
+
+This script does not prove the panel or the keyboard. thrash must stay
+0. Do not raise the bound and do not load the colormap candidate.
