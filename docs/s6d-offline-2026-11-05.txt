@@ -1,0 +1,217 @@
+# Offline package after the default-off pass
+
+Nothing in this file is a request to power the 755C on, to insmod, or to
+run a script when a serial line returns. `/tmp` on that machine does not
+survive power off. A file that was staged earlier is not still there.
+The candidate module is unchanged. A driver edit would be a new file and
+would need the default-off regression again. `wd90c24fb` is untouched.
+
+Host `make -C modules/wd24adv/tests test` with
+`CFLAGS='-O2 -g -Wall -Wextra -Werror -std=gnu11'` completed with 0
+failed, including `test_cmap_check` (11) and `test_cmap_p23_run` (49).
+That make is not the 755C.
+
+## Userspace built here
+
+Compiler `/tmp/src/i486-linux-musl-cross/bin/i486-linux-musl-gcc` 11.2.1.
+Flags `-static -march=i486 -mtune=i486 -Os -Wall -Wextra -Werror`, then
+`i486-linux-musl-strip`. ELF32 Intel 80386, static-pie, no INTERP.
+objdump mnemonic column: no `cmov`, `cpuid`, `syscall`, `sysenter`,
+`sysexit`, `rdtscp`.
+
+| file | sha256 | size |
+| --- | --- | --- |
+| `/opt/cursor/artifacts/wd24x-cmap-get` | `71b3eccfccfc88b8ef3bc14c333bbf6c08801ee2e7bade58edcfc6097fcd2d20` | 13844 |
+| `/opt/cursor/artifacts/wd24x-cmap-set` | `afa3da3f154f5896809be1a27bdbbb2e76f84eb31eb86c62ac32d918e6b325d3` | 13844 |
+| `/opt/cursor/artifacts/wd24x-tty-read` | `c4f5d3881d11d9d3135f6e89d463a3f7125676df47da30445768368a678aaa5e` | 21876 |
+| `/opt/cursor/artifacts/wd24x-cmap-p2-run.sh` | `adf9b84a40e7f8d6825e2bf9e941ffb2acc29230d185033ecdf422330724d610` | 6702 |
+| `/opt/cursor/artifacts/wd24x-cmap-p3-run.sh` | `aecb5b8c93fac50b483213393c7e79a8a67a231e6ecdb98de575120e8e1b3bef` | 6753 |
+| `/opt/cursor/artifacts/wd24x-cmap-batch-run.sh` | `ba58c660a2adab9e3536d5c3e3f2ccd3804062b32d4dabe6fbd411d1ea01fab4` | 783 |
+
+Sources: `modules/wd24adv/tests/wd24x-cmap-get.c`, `wd24x-cmap-set.c`,
+`wd24x-tty-read.c`, and `docs/s6d-cmap-p2-run.sh`, `s6d-cmap-p3-run.sh`,
+`s6d-cmap-batch-run.sh`. The script hashes match those docs.
+
+`qemu-i386-static -cpu 486` on this cloud VM, which has no `/dev/fb0`:
+the get client printed `WD24X-CMAP-GET bad open` and exited 1. The set
+client printed `WD24X-CMAP-SET bad open` and exited 1. Neither printed
+its success line. That is a missing-device check on this VM. It is not
+a colormap result.
+
+The same qemu of the TTY reader opened this VM's `/dev/tty0` and printed
+`WD24X-TTY-READ kd -1 fg 0 name (S) dummy device bind 1`. `kd -1` means
+`KDGETMODE` failed here. The name is this VM's vtcon. It is not the
+755C, and it is not a keyboard test.
+
+The artifact directory forces mode 666. On the 755C the three binaries
+need to be executable before the scripts' `[ -x ]` check. The scripts
+compare the hashes above. A different build stops.
+
+## Phase 2 and phase 3 — what the code does, not what ran
+
+Both scripts load `/tmp/wd24adv-cmap-92591b1e.ko` with the phase-1
+parameter list plus `s6d_cmap=1`. They do not start X. X's
+`fb_set_var` calls `fb_set_cmap` on the published cache, which would
+write every colour entry, and X sets `KD_GRAPHICS`. That is why these
+phases stay off X.
+
+Phase 2 client: open `/dev/fb0` `O_RDWR`, one `FBIOGETCMAP` of 256
+entries, require every channel `<= 0xfc00` and `(v & 0x03ff) == 0`,
+print `WD24X-CMAP-GET entries 256 shift10 1`, sleep 8, close. No PUT,
+no `FBIOPUT_VSCREENINFO`, no mmap.
+
+Phase 3 client: that GET, then one `FBIOPUTCMAP` of index 7, length 1,
+channels `0x8000` (the hook stores `(0x8000 >> 10) & 0x3f` = 32), then
+GET again. Success line `WD24X-CMAP-SET index 7 put 1 cache 1`. The
+second GET is the kernel cache. It is not a new DAC read.
+
+Register effects, from the candidate sources, not from a probe:
+
+- Publish on open, only if `s6d_cmap=1`: write `3C6=FF`, write `3C7=00`,
+  read `3C9` 768 times. No `3C9` colour write when the read matches the
+  load snapshot. Mismatch latches and the open fails. No colour write
+  on that path either.
+- `FBIOGETCMAP` in 6.18.57 copies `info->cmap`. It does not call the
+  driver and does not touch a port.
+- The one PUT: `3C6=FF`, `3C8=7`, three `3C9` data bytes `0x20`,
+  `3C7=7`, three `3C9` reads. Success only if those three reads match.
+  The kernel then copies `0x8000` into that one cache entry. Other
+  cache entries stay the snapshot. If the readback fails, the existing
+  full-snapshot restore runs inside the hook.
+- Close does not touch the DAC. It sets `frozen` and ends the banking
+  session. `published` stays set.
+- Trial expiry is the existing `wd24_restore_cmap`: `3C6=FF`, `3C8=00`,
+  768 `3C9` writes, then readback. The client does not do that. The
+  script treats `wd24adv live: trial expiry -> 0`, `readback mismatches 0;`,
+  and `in_text 1;` as the restore evidence. A later GET is not that
+  evidence.
+- After a successful publish, stop does not clear `published`. The
+  expiry gate therefore requires `cmap_param 1 published 1`. If the
+  hardware leaves `published 0`, the script does not print done. That
+  gate is from reading the assignments, not from a `s6d_cmap=1` run.
+
+Each script is one `trial=180`. Sleeps after insmod returns are 5, then
+15, then 170. The batch script runs phase 3 only when phase 2 exits 0.
+It runs only when `WD24X_BATCH_ARM=phase2-and-phase3`. That variable is
+not set. A failed phase does not retry. If phase 2's rmmod fails, phase
+3 sees `wd24adv` already loaded and stops without rmmod. The executor
+finishes that unload. The scripts do not rmmod a module they did not
+insert.
+
+Logs are `/tmp/wd24x-cmap-p2.out`, `/tmp/wd24x-cmap-p2.err`,
+`/tmp/wd24x-cmap-p2-dmesg.txt`, and the `p3` names. They do not delete
+the glyph logs, the phase-1 logs, the baseline module, or the candidate
+module.
+
+## TTY — observed failure, no guessed fix
+
+The operator reported the physical TTY did not answer. When that
+started is not recorded. Serial and VGA+ bind are separate from a
+keystroke. This driver does not touch the keyboard controller.
+
+Distinctions, from code, not from a measurement on the machine:
+
+- vtcon name and bind are the fbcon binding. They are not
+  `KDGETMODE`.
+- `KD_TEXT` is 0 and `KD_GRAPHICS` is 1 (`KDGETMODE` 0x4B3B).
+- `VT_GETSTATE` `v_active` is the foreground VT. It is not the KD mode.
+- X `LinuxEnable` sets `KD_GRAPHICS`. `LinuxDisable` sets `KD_TEXT`
+  when that path runs. `LinuxFini`, if it finds no other VT in
+  `v_state`, sets `activeVT` to -1 and still calls `VT_ACTIVATE`
+  because the test is `activeVT >= -1`. In 6.18.57 `vt_ioctl`,
+  `VT_ACTIVATE` returns `-ENXIO` when the argument is 0 or greater than
+  `MAX_NR_CONSOLES`. An argument of -1 takes that path. This is a
+  reading of X 1.14.7 `linux.c` and that kernel. It is not identified
+  as the cause of the dead keyboard.
+- `VT_DISALLOCATE` can still return `-EBUSY`. The earlier "Can't
+  deallocate console" line is that fprintf. It is not `FatalError`.
+
+`wd24x-tty-read` opens `/dev/tty0` read-only, issues `KDGETMODE` and
+`VT_GETSTATE`, and reads vtcon0 name and bind. It does not call
+`KDSETMODE` or `VT_ACTIVATE`. It is a later-session snapshot, not a
+repair. Text and keyboard recovery are not called validated.
+
+## Modes
+
+S6d live drawing that has been watched is `640x480-8` only. The host
+mode table still marks `640x400-8` and `320x200-8` PROVEN for the
+earlier pattern trials, and `320x240-8x` and `640x480-8-v800` UNPROVEN
+(`err=-95`, zero writes). This package does not add a mode and does not
+claim those two unproven lines.
+
+## Doom
+
+Goal stated by the operator: Windows 98-comparable speed on this same
+755C, with a matched timedemo, the same WAD, resolution, detail, sound,
+and a correct palette. No number is claimed. No port was built. No
+IWAD is in this tree, and a proprietary WAD is not assumed. Full X is
+not a requirement of the goal: a later port could write the banked
+mmap or another fbdev path. That port, a freely licensed IWAD, and a
+run on the machine are all still absent. There is no FPS artifact.
+
+## Cold boot — copy these, then stop
+
+Target paths are under `/tmp`. Do not overwrite one hash with another.
+Do not copy the rejected module onto the machine.
+
+| target path | sha256 |
+| --- | --- |
+| `/tmp/wd24adv-pr14.ko` | `7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36` |
+| `/tmp/wd24adv-cmap-92591b1e.ko` | `92591b1e26c3888868285a4a50d602cf969dfa9bdd53c9f868f21fef03d6a8ae` |
+| `/tmp/wd24x-glyph` | `c632750382b3def78912a6b5013ef53e74969e596ed39d1391b283555f01da67` |
+| `/tmp/wd24x-client` | `d846aa0153c59017072118e142d075502cd0332d720527b0255f4a422a021179` |
+| `/tmp/wd24-xfbdev-i486.tgz` | `af429004d7d279f84d6ebdf2b62f589b81471dd791f6d0949d3d6c67a106c224` |
+| Xfbdev inside that archive | `6450171476a8e6aa91883744947423db123c74a042d697f9263b686dcb2f9f13` |
+| `/tmp/wd24-xkb.tgz` | `5d2203659fffd031f85715e3ce29a7be987c04bc231e36574e6fb748147e9cb2` |
+| xkbcomp inside that archive | `5ebf28e8823a5165efb0a2a0b997d2218ebbaa24ddb5abd76160643a939a5f62` |
+| `/tmp/busybox-wd24` | `52b264655f25e902098eb797ba72f424cbe3ec0c37caceeaf5f0984835682236` |
+| `/tmp/wd24x-glyph-run.sh` | `63a84bf7210b6c4c43d61555e153d9754dc483b07fb1b6fe2d4b92a2f17ea441` |
+| `/tmp/wd24x-cmap-phase1-run.sh` | `8efaddb358e153a76ed0c1846c835b13bb8c4df0d8ad147b223ca21839645e5e` |
+| `/tmp/wd24x-cmap-get` | `71b3eccfccfc88b8ef3bc14c333bbf6c08801ee2e7bade58edcfc6097fcd2d20` |
+| `/tmp/wd24x-cmap-set` | `afa3da3f154f5896809be1a27bdbbb2e76f84eb31eb86c62ac32d918e6b325d3` |
+| `/tmp/wd24x-tty-read` | `c4f5d3881d11d9d3135f6e89d463a3f7125676df47da30445768368a678aaa5e` |
+| `/tmp/wd24x-cmap-p2-run.sh` | `adf9b84a40e7f8d6825e2bf9e941ffb2acc29230d185033ecdf422330724d610` |
+| `/tmp/wd24x-cmap-p3-run.sh` | `aecb5b8c93fac50b483213393c7e79a8a67a231e6ecdb98de575120e8e1b3bef` |
+| `/tmp/wd24x-cmap-batch-run.sh` | `ba58c660a2adab9e3536d5c3e3f2ccd3804062b32d4dabe6fbd411d1ea01fab4` |
+
+Rejected, do not stage:
+`30415e508e2757f008210233bd9d2610a160fbbf132b4df9e8d674109375b19a`.
+
+Install is copy plus `chmod +x` on the binaries and scripts. Rollback
+of a loaded candidate is the script's own rmmod after the trial, and
+only when that script's insmod returned 0. A preexisting `wd24adv` is
+left loaded. The baseline file is never overwritten by the candidate.
+
+## What still needs the machine
+
+These are the remaining hardware dependencies. Host tests do not close
+them.
+
+1. Phase 2 on `92591b1e` with `s6d_cmap=1`: whether open's 768 reads
+   match the load snapshot, whether the proc line shows `published 1`,
+   and whether expiry's existing restore returns `trial expiry -> 0`
+   with `in_text 1`. The success line is the cache shape, not the panel.
+2. Phase 3: whether the one index-7 readback matches, whether the cache
+   GET shows that one entry changed and the others did not, and whether
+   expiry restores colour RAM. The client does not observe the restore.
+3. A watched panel for hue, and for whether index 0 and index 15 differ.
+   Digits 1..5 were seen on the baseline. Hue was not.
+4. A physical keystroke after graphics, with the read-only TTY snapshot
+   taken while the keyboard is dead and again after the script exits.
+   Cause and timing are unknown. Do not treat serial or VGA+ bind as
+   that test.
+5. Any mode other than the watched S6d `640x480-8`, if it is attempted
+   at all. `320x240-8x` and `640x480-8-v800` are still unproven.
+6. A Doom timedemo. No port, no free IWAD, and no number exist yet.
+
+## Review leftovers
+
+- `published 1` after expiry is unread on hardware. The script fails
+  closed if it is wrong.
+- An in-flight GET can still observe a mix of old and new channels.
+  The copy out of `info->cmap` happens after `info->lock` is dropped.
+  That is memory-safe. It is not an atomic snapshot.
+- Phase 2 and 3 do not issue `KDSETMODE`. They do not repair a VT left
+  in graphics mode by something else.
+- The batch entry point is one switch, not a hash typed at a prompt.
+  It is off. Turning it on is outside this package.

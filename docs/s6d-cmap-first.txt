@@ -1,9 +1,10 @@
 # First test for the colormap candidate
 
 t479u authorized the default-off regression and a recovery check before
-any later step. That is phase 1 only. The script checks the file hash
-itself. There is no prompt to type the hash. Phase 2 and phase 3 are
-not authorized. Copying this note does not insmod.
+any later step. That is phase 1 only, and that one trial passed. The
+script checks the file hash itself. There is no prompt to type the hash.
+Phase 2 and phase 3 scripts exist and are not a hardware authorization.
+Copying this note does not insmod.
 
 ## Hashes
 
@@ -36,9 +37,10 @@ Before any command: a person is present, `/proc/fb` is empty, and
 that phase. The candidate name inside the module is still `wd24adv`.
 Do not overwrite the baseline file with it.
 
-## Phase 1 — default off
+## Phase 1 — default off — one pass recorded
 
-Script `docs/s6d-cmap-phase1-run.sh`.
+The trial is recorded in `docs/s6d-live-2026-11-05.txt`. It does not
+authorize phase 2. Script `docs/s6d-cmap-phase1-run.sh`.
 Artifact `/opt/cursor/artifacts/wd24x-cmap-phase1-run.sh`.
 Module path `/tmp/wd24adv-cmap-92591b1e.ko`.
 The insmod line omits `s6d_cmap`. The baseline file
@@ -61,43 +63,19 @@ colormap. It does not prove colours.
 
 Stop after rmmod. Do not continue.
 
-## Phase 2 — publish read only
+## Phase 2 and phase 3 — scripts exist, not a hardware session
 
-Not authorized. A later approval must name `92591b1e` and the words "phase 2".
-
-Same parameters plus `s6d_cmap=1`. Open the fb once. Do not run a client
-that issues `FBIOPUTCMAP`.
-
-Go: phase 1 passed on this same file, and the new approval names phase 2.
-No-go: phase 1 was skipped or failed, or the hash differs.
-
-Expect one of two results. Open succeeds and the proc line shows
-`published 1`, `busy 1` while the fd is open, and `busy 0` after close.
-Or open fails, `busy` stays 0, and `failed`/`nmismatch` latch so a second
-open is refused. On that failure, stop. The publish read writes `3C6=FF`
-and `3C7=00` before it compares. It does not write colour RAM. Let the
-trial expire and rmmod. Do not PUT.
-
-## Phase 3 — one set
-
-A later approval must name `92591b1e` and the words "phase 3".
-
-One `FBIOPUTCMAP`, then one `FBIOGETCMAP`, then close and let the trial
-expire.
-
-Go: phase 2 on this same file published and closed cleanly, and the new
-approval names phase 3.
-No-go: publish did not happen, or this is the same sitting as phase 2
-without a new approval.
-
-A GET that returns the 16-bit values just written is the kernel cache.
-It is not a live DAC read. A GET of `-EINVAL` after an error means `len`
-was cleared. Do not treat either result as a panel colour. Do not issue
-a second PUT.
+`docs/s6d-offline-2026-11-05.txt` has the hashes, the register effects,
+and the list of what still needs the machine. The scripts refuse to
+print done unless their gates pass. Copying them does not insmod.
+`WD24X_BATCH_ARM` is unset. Setting it is a later decision by a person,
+not a step in these files.
 
 ## Still not proved
 
-Panel hue, a fifth square, glyphs, the keyboard, and any claim that the
-755C DAC matches the host VGA model. The lifetime replay and the VGA
-model are host tests. AddressSanitizer showed the rejected free is a
-heap use-after-free in that host process. It did not run on the 755C.
+Panel hue, whether index 0 and index 15 differ on the glass, the
+keyboard, `s6d_cmap=1`, and any claim that the 755C DAC matches the
+host VGA model. Digits 1 through 5 were seen on the baseline module.
+The lifetime replay and the VGA model are host tests. AddressSanitizer
+showed the rejected free is a heap use-after-free in that host process.
+It did not run on the 755C.

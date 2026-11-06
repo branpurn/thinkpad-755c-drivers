@@ -2,8 +2,10 @@
 
 The baseline module stays
 `7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36`.
-This document describes a different file. Nothing here was loaded on the
-755C. The VGA model is not that machine, and it is not an emulator proof.
+This document describes a different file. That file was loaded once with
+`s6d_cmap` left off. The pass is in `docs/s6d-live-2026-11-05.txt`.
+`s6d_cmap=1` has not been loaded. The VGA model is not that machine,
+and it is not an emulator proof.
 
 ## Candidate
 

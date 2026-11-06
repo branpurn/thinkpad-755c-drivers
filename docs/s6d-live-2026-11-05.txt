@@ -404,3 +404,37 @@ The operator's photographs and the note t477u show digits 1 through 5
 on the panel after a brief artifact. That is shape on the glass.
 It is not a hue measurement and it is not a keyboard result.
 
+---
+
+## Candidate 92591b1e, default off — one pass
+
+Module 92591b1e26c3888868285a4a50d602cf969dfa9bdd53c9f868f21fef03d6a8ae.
+Script 8efaddb358e153a76ed0c1846c835b13bb8c4df0d8ad147b223ca21839645e5e.
+The insmod line omitted `s6d_cmap`. Script status 0. insmod 0.
+X pid 926. Client pid 934. Client status 0.
+Stdout: WD24X-GLYPH shadow 640x480x8 marks 5 match 5 ctrl 1.
+Mid-run: cmap_param 0 published 0 frozen 0, faults 15 switches 15
+thrash 0 latched 0.
+SIGTERM 0. wait 0.
+Expiry 0, mismatches 0, in_text 1, armed 0, fb_reg 0, cmap_param 0
+published 0 frozen 1.
+rmmod 0. /proc/fb empty. VGA+ bind 1. Only fb and font loaded.
+No X on :1. The baseline file and the candidate file both matched
+their hashes. The shell on the serial line answered.
+No new panel, hue, or keyboard observation. This pass shows the extra
+proc line with the parameter off. It does not show a DAC publish or a
+PUT. `frozen 1` after expiry is the stop/release store. It is not a
+colour restore, because no colour program ran.
+
+---
+
+## Physical TTY — operator report, cause unknown
+
+The operator reported that the physical keyboard/TTY did not answer,
+at a time that is not in this log. The serial line was the path used
+for the shutdown. This note does not record a cause. VGA+ bind 1 and a
+responsive serial shell are not a keystroke. The driver sources do not
+program the keyboard controller. No module change is made from this
+report. A read-only userspace snapshot is described in
+`docs/s6d-offline-2026-11-05.txt`. It has not been run on the 755C.
+
