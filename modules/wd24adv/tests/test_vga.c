@@ -18,6 +18,19 @@ static struct vgamodel m, snap;
 static struct wd24_ctx c;
 static struct wd24_io io;
 static u8 planes[4 * WD24_PLANE];
+static struct wd24_io lie_real;
+static unsigned lie_on, lie_reads;
+
+static u8 lie_inb(void *p, u16 port)
+{
+	u8 v = lie_real.inb(p, port);
+
+	if (lie_on && port == 0x3c9) {
+		lie_reads++;
+		v ^= 0x01;
+	}
+	return v;
+}
 
 static void setup(enum vm_profile p, unsigned int seed)
 {
@@ -535,6 +548,116 @@ int main(void)
 		T(err == 0 && c.nmismatch == 0 && m.violations == 0 &&
 		  !memcmp(m.dac, snap.dac, 768),
 		  "dac span: restore after the lie matches the load snapshot");
+	}
+
+	/* Production settle, not a second copy of the port loop.
+	 * A honest restore after a real entry program rewrites the cache
+	 * from the snapshot. A lying restore readback is the kernel's
+	 * -EIO latch: invalidate, do not rewrite, and the next read is refused. */
+	{
+		struct wd24_cmap_fault f;
+		struct wd24_dac_io dio;
+		struct wd24_dac_span sp;
+		u8 saved[768], live[768];
+		u16 er[256], eg[256], eb[256];
+		unsigned failed, nmis;
+
+		f = wd24_cmap_settle(0, -5, 1);
+		T(f.err == 0 && f.published && !f.rewrite && !f.invalidate && !f.latch,
+		  "settle: a successful put does not rewrite or latch");
+		f = wd24_cmap_settle(-5, 0, 1);
+		T(f.err == -5 && f.published && f.rewrite && !f.invalidate && !f.latch,
+		  "settle: restore ok rewrites the snapshot into the cache");
+		f = wd24_cmap_settle(-5, -5, 1);
+		T(f.err == -5 && !f.published && !f.rewrite && f.invalidate && !f.latch,
+		  "settle: restore error invalidates and does not claim the snapshot");
+		f = wd24_cmap_settle(-5, 0, 0);
+		T(f.invalidate && !f.rewrite && !f.published,
+		  "settle: no cache arrays, so a restored DAC is not published");
+		f = wd24_cmap_read_mismatch();
+		T(f.err == -5 && f.latch && f.invalidate && !f.published && !f.rewrite,
+		  "read mismatch: latch and invalidate");
+		failed = 0;
+		nmis = 4;
+		wd24_cmap_latch(&failed, &nmis);
+		T(failed == 1 && nmis == 5, "latch: failed sticks and nmismatch grows");
+		T(wd24_cmap_before_read(0, 0, 1, 0, 0) == 0, "before read: open");
+		T(wd24_cmap_before_read(1, 0, 1, 0, 0) == -19 &&
+		  wd24_cmap_before_read(0, 1, 1, 0, 0) == -19 &&
+		  wd24_cmap_before_read(0, 0, 0, 0, 0) == -19 &&
+		  wd24_cmap_before_read(0, 0, 1, 1, 0) == -19 &&
+		  wd24_cmap_before_read(0, 0, 1, 0, 1) == -19,
+		  "before read: frozen, dead, missing snapshot, text, or latched");
+
+		setup(VM_WD24, 83);
+		err = RUN(wd24_plan_load(&c));
+		T(err == 0, "audit load");
+		memcpy(saved, c.cmap, 768);
+		dio.outb = io.outb;
+		dio.inb = io.inb;
+		dio.p = io.priv;
+		sp.index = 7;
+		sp.r = 0x11;
+		sp.g = 0x22;
+		sp.b = 0x33;
+		err = wd24_dac_put_span(&dio, &sp, 1);
+		T(err == 0 && !memcmp(c.cmap, saved, 768) &&
+		  m.dac[21] == 0x11 && m.dac[22] == 0x22 && m.dac[23] == 0x33,
+		  "audit: entry program leaves the snapshot and stores that entry");
+		err = RUN(wd24_restore_cmap(&c));
+		f = wd24_cmap_settle(-5, err, 1);
+		wd24_dac_expand_image(c.cmap, er, eg, eb);
+		T(err == 0 && !c.failed && c.nmismatch == 0 &&
+		  !memcmp(m.dac, snap.dac, 768) && !memcmp(c.cmap, saved, 768) &&
+		  f.rewrite && f.published &&
+		  (er[7] >> 10) == (saved[21] & 0x3f) &&
+		  (eg[7] >> 10) == (saved[22] & 0x3f) &&
+		  (eb[7] >> 10) == (saved[23] & 0x3f),
+		  "audit: honest restore, cache rewrite is the snapshot");
+
+		setup(VM_WD24, 84);
+		err = RUN(wd24_plan_load(&c));
+		memcpy(saved, c.cmap, 768);
+		sp.index = 8;
+		sp.r = 1;
+		sp.g = 2;
+		sp.b = 3;
+		dio.outb = io.outb;
+		dio.inb = io.inb;
+		dio.p = io.priv;
+		T(wd24_dac_put_span(&dio, &sp, 1) == 0, "audit: second program");
+		lie_real = io;
+		lie_on = 1;
+		lie_reads = 0;
+		io.inb = lie_inb;
+		err = RUN(wd24_restore_cmap(&c));
+		lie_on = 0;
+		io.inb = lie_real.inb;
+		f = wd24_cmap_settle(-5, err, 1);
+		T(err == -EIO && c.failed && c.nmismatch >= 1 && lie_reads == 768 &&
+		  !memcmp(c.cmap, saved, 768) && f.invalidate && !f.rewrite &&
+		  !f.published && !f.latch,
+		  "audit: restore readback error latches inside restore");
+		{
+			struct wd24_cmap_view v;
+
+			memset(&v, 0, sizeof(v));
+			v.param = v.live = v.fbcon = 1;
+			v.armed = v.active = v.busy = v.have_cmap = v.published = 1;
+			v.bad = 1;
+			T(wd24_cmap_allow(&v) == -19 &&
+			  wd24_cmap_before_read(0, 0, 1, 0, 1) == -19,
+			  "audit: latched mismatch refuses the next program and the next read");
+		}
+
+		setup(VM_WD24, 85);
+		err = RUN(wd24_plan_load(&c));
+		memcpy(saved, m.dac, 768);
+		m.dac[0] ^= 0x01;
+		c.be->dac_read(&c, 0xff, live);
+		T(wd24_dac_diff6(live, c.cmap) == 1 && !memcmp(m.dac + 1, saved + 1, 767) &&
+		  m.dac[0] == (u8)(saved[0] ^ 0x01) && m.pel == 0xff && m.violations == 0,
+		  "audit: a rejected publish read forces the mask and writes no colour");
 	}
 
 	printf("wd24adv vga model test: %d passed, %d failed\n", passes, fails);

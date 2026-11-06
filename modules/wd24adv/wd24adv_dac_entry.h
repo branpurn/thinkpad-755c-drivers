@@ -91,6 +91,76 @@ static inline int wd24_cmap_allow(const struct wd24_cmap_view *v)
 	return 0;
 }
 
+/* Publish reads only when this is 0. A latched mismatch is `bad`. */
+static inline int wd24_cmap_before_read(unsigned frozen, unsigned dead,
+					unsigned have, unsigned in_text,
+					unsigned bad)
+{
+	if (frozen || dead || !have || in_text || bad)
+		return -19;
+	return 0;
+}
+
+/* What the hook does with info->cmap after a PUT or a publish read.
+ * rewrite: store the load snapshot (<<10). The kernel must not also
+ * copy the rejected request.
+ * invalidate: set len to 0 and keep the arrays. FBIOGETCMAP then
+ * returns -EINVAL. Do not kfree them here: a GET may already have
+ * copied the pointers and be in copy_to_user.
+ * latch: this decision itself sets failed and nmismatch. A restore
+ * that already called mismatch() must not ask for it again.
+ */
+struct wd24_cmap_fault {
+	int err;
+	unsigned published;
+	unsigned rewrite;
+	unsigned invalidate;
+	unsigned latch;
+};
+
+static inline struct wd24_cmap_fault wd24_cmap_settle(int put_err,
+						      int restore_err,
+						      unsigned had_arrays)
+{
+	struct wd24_cmap_fault f;
+
+	f.err = put_err;
+	f.published = 0;
+	f.rewrite = 0;
+	f.invalidate = 0;
+	f.latch = 0;
+	if (!put_err) {
+		f.published = 1;
+		return f;
+	}
+	if (!restore_err && had_arrays) {
+		f.rewrite = 1;
+		f.published = 1;
+		return f;
+	}
+	f.invalidate = 1;
+	return f;
+}
+
+static inline struct wd24_cmap_fault wd24_cmap_read_mismatch(void)
+{
+	struct wd24_cmap_fault f;
+
+	f.err = -5;
+	f.published = 0;
+	f.rewrite = 0;
+	f.invalidate = 1;
+	f.latch = 1;
+	return f;
+}
+
+static inline void wd24_cmap_latch(unsigned *failed, unsigned *nmismatch)
+{
+	*failed = 1;
+	if (nmismatch)
+		*nmismatch += 1;
+}
+
 static inline int wd24_dac_entry(u32 regno, u16 r, u16 g, u16 b,
 				 struct wd24_dac_entry *e)
 {

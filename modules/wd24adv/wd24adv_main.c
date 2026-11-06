@@ -2035,32 +2035,77 @@ static void s6d_cmap_view(struct wd24_cmap_view *v)
 	v->frozen = s6d_cmap_frozen;
 }
 
-/* Caller holds info->lock and hw_lock. Reads the DAC (3C6=FF, 3C7=0,
- * 768 x 3C9). Publishes <<10 only when that read matches c->cmap.
- * Does not write 3C9. */
+/* len = 0, arrays kept. framebuffer_release is what frees them. */
+static void s6d_cmap_invalidate(struct fb_info *info)
+{
+	s6d_cmap_published = false;
+	if (info->cmap.len)
+		info->cmap.len = 0;
+}
+
+static void s6d_cmap_apply(struct fb_info *info, struct wd24_cmap_fault f)
+{
+	unsigned int failed, nmis;
+
+	if (f.latch && hw) {
+		failed = hw->failed;
+		nmis = hw->nmismatch;
+		wd24_cmap_latch(&failed, &nmis);
+		hw->failed = failed;
+		hw->nmismatch = nmis;
+	}
+	if (f.rewrite && hw && info->cmap.red && info->cmap.green &&
+	    info->cmap.blue) {
+		if (info->cmap.len != 256)
+			info->cmap.len = 256;
+		wd24_dac_expand_image(hw->cmap, info->cmap.red, info->cmap.green,
+				      info->cmap.blue);
+		s6d_cmap_published = true;
+	} else if (f.invalidate || f.rewrite) {
+		s6d_cmap_invalidate(info);
+	} else {
+		s6d_cmap_published = f.published;
+	}
+}
+
+/* Caller holds info->lock and hw_lock. A matching read publishes <<10.
+ * The read writes 3C6=FFh and 3C7=00 before the compare. It does not
+ * write 3C9. A mismatch latches failed and does not free the cache.
+ * busy is the caller's job, after this returns 0. */
 static int s6d_cmap_publish(struct fb_info *info)
 {
 	u8 live_dac[768];
+	struct wd24_cmap_fault f;
 	int err;
 
 	BUILD_BUG_ON(EPERM != 1 || EIO != 5 || EBUSY != 16 ||
 		     ENODEV != 19 || EINVAL != 22);
 	if (!s6d_cmap)
 		return 0;
-	if (s6d_cmap_frozen || !hw || hw_dead || !hw->io || !hw->be->dac_read ||
-	    !(hw->have & WD24_HAVE_CMAP) || hw->in_text || hw->nmismatch ||
-	    hw->failed)
-		return -ENODEV;
+	err = wd24_cmap_before_read(s6d_cmap_frozen, hw_dead || !hw,
+				    hw && (hw->have & WD24_HAVE_CMAP),
+				    !hw || hw->in_text,
+				    !hw || hw->nmismatch || hw->failed);
+	if (err || !hw || !hw->io || !hw->be->dac_read)
+		return err ? err : -ENODEV;
 	hw->be->dac_read(hw, 0xff, live_dac);
 	if (wd24_dac_diff6(live_dac, hw->cmap)) {
-		s6d_cmap_published = false;
-		fb_dealloc_cmap(&info->cmap);
-		return -EIO;
+		f = wd24_cmap_read_mismatch();
+		s6d_cmap_apply(info, f);
+		return f.err;
 	}
-	err = fb_alloc_cmap(&info->cmap, 256, 0);
-	if (err) {
-		s6d_cmap_published = false;
-		return err;
+	if (!(info->cmap.len == 256 && info->cmap.red && info->cmap.green &&
+	      info->cmap.blue)) {
+		if (info->cmap.red || info->cmap.green || info->cmap.blue ||
+		    info->cmap.transp) {
+			if (!info->cmap.red || !info->cmap.green || !info->cmap.blue)
+				return -EBUSY;
+			info->cmap.len = 256;
+		} else {
+			err = fb_alloc_cmap(&info->cmap, 256, 0);
+			if (err)
+				return err;
+		}
 	}
 	wd24_dac_expand_image(hw->cmap, info->cmap.red, info->cmap.green,
 			      info->cmap.blue);
@@ -2068,14 +2113,18 @@ static int s6d_cmap_publish(struct fb_info *info)
 	return 0;
 }
 
-/* FBIOPUTCMAP holds info->lock, then this takes hw_lock. It does not
- * take console_lock. Faults take console_lock, then hw_lock. */
+/* FBIOPUTCMAP holds info->lock, then this takes hw_lock.
+ * FBIOPUT_VSCREENINFO holds console_lock, then info->lock, then
+ * fb_set_var calls fb_set_cmap on the published cache. Same lock order
+ * as a fault (console, then hw). This function does not print: the
+ * caller may already hold console_lock. */
 static int s6d_fb_setcmap(struct fb_cmap *cmap, struct fb_info *info)
 {
 	struct wd24_cmap_view view;
+	struct wd24_cmap_fault f;
 	struct wd24_dac_io dio;
 	unsigned int i;
-	int err;
+	int err, rst;
 
 	if (!cmap || !cmap->red || !cmap->green || !cmap->blue ||
 	    cmap->start > 255 || cmap->len == 0 ||
@@ -2084,7 +2133,8 @@ static int s6d_fb_setcmap(struct fb_cmap *cmap, struct fb_info *info)
 	hw_acq();
 	s6d_cmap_view(&view);
 	err = wd24_cmap_allow(&view);
-	if (err || !hw || !hw->io || !hw->io->outb || !hw->io->inb) {
+	if (err || !hw || !hw->io || !hw->io->outb || !hw->io->inb ||
+	    info->cmap.len != 256 || !info->cmap.red) {
 		hw_rel();
 		return err ? err : -ENODEV;
 	}
@@ -2104,23 +2154,15 @@ static int s6d_fb_setcmap(struct fb_cmap *cmap, struct fb_info *info)
 		if (err)
 			break;
 	}
-	if (err) {
-		int rst = wd24_restore_cmap(hw);
-
-		if (!rst && info->cmap.len == 256 && info->cmap.red) {
-			wd24_dac_expand_image(hw->cmap, info->cmap.red,
-					      info->cmap.green, info->cmap.blue);
-			s6d_cmap_published = true;
-		} else {
-			s6d_cmap_published = false;
-			fb_dealloc_cmap(&info->cmap);
-		}
+	if (!err) {
 		hw_rel();
-		pr_err("S6d: cmap put failed %d (snapshot restore %d)\n", err, rst);
-		return err;
+		return 0;
 	}
+	rst = wd24_restore_cmap(hw);
+	f = wd24_cmap_settle(err, rst, 1);
+	s6d_cmap_apply(info, f);
 	hw_rel();
-	return 0;
+	return f.err;
 }
 
 static int s6d_fb_open(struct fb_info *info, int user)
@@ -2172,21 +2214,19 @@ static int s6d_fb_open(struct fb_info *info, int user)
 			s6d_b->state = WD24S6B_OFF;
 		} else {
 			s6d_st->active = true;
-			s6d_busy = true;
 			s6d_st->stopping = false;
 			wd24s6d_thrash_reset(&s6d_st->thrash);
 			s6d_st->mapped_base = ~0u;
+			if (!s6d_cmap)
+				s6d_busy = true;
 		}
-	} else {
+	} else if (!s6d_cmap) {
 		s6d_busy = true;
 	}
 	if (!err && s6d_cmap) {
-		int perr = s6d_cmap_publish(info);
-
-		if (perr) {
-			s6d_busy = false;
-			err = perr;
-		}
+		err = s6d_cmap_publish(info);
+		if (!err)
+			s6d_busy = true;
 	}
 	hw_rel();
 	if (err)

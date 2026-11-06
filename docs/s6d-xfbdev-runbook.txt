@@ -35,10 +35,10 @@ FBIOPUTCMAP returns -EINVAL. fb_setcolreg and fb_setcmap are absent
 (fbcmap.c). fbdevPutColors calls FBIOPUTCMAP and ignores the return.
 fbdevEnable programs a colormap only for DIRECTCOLOR. Missing
 fb_setcolreg does not stop this binary from starting. The DAC is left
-as it already is. Colors are not a pass criterion. A later color change
-would be fb_setcolreg under hw_lock, writing 3C8/3C9 the way the
-existing DAC save/restore does, with X's 16-bit channels shifted to the
-6-bit VGA DAC. That change is not in this tree.
+as it already is. Colors are not a pass criterion. The baseline module
+7da0fffe has neither hook. A later gated candidate uses fb_setcmap, not
+fb_setcolreg, and is specified in docs/s6d-cmap.txt. This runbook does
+not load it.
 
 The thrash latch counts consecutive window switches and resets when a
 fault stays in the current window. The default bound is 32. A forward
