@@ -402,6 +402,8 @@ Same module hash, staged as `/tmp/wd24adv-pr14.ko`. pattern=0 was requested. ins
 
 The loaded module is still `7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36`. The X binary is still `6450171476a8e6aa91883744947423db123c74a042d697f9263b686dcb2f9f13`. A watched repeat of that pair matched five shadow rectangles, faults 15 switches 15 thrash 0, and the panel showed four small squares after a messy first image cleared. That is not all five, and not a palette result. Details are in `docs/s6d-live-2026-11-05.txt`.
 
+A separate client, `modules/wd24adv/tests/wd24x-glyph.c`, draws digits 1..5 in those same cells with indices 0 and 15. It does not replace `wd24x-client`. The bank walk of its 320 bytes stays at one consecutive window switch. The runbook is `docs/s6d-glyph-runbook.txt`. It is not a request to run it, and it does not use the colormap candidate.
+
 `read()` on the fb returns `-EINVAL` because there is no `fb_read`. A second mmap returns `-EBUSY` while X holds the only mapping. After release, `stopping` refuses another open. The stamp tool's own read-back does not show X's pixels.
 
 S6d live mode is `640x480-8` only. `640x400-8` and `320x200-8` are marked proven in the mode table and have not been seen live. `320x240-8x` and `640x480-8-v800` are unproven. The baseline module has no colormap hook, so get and put fail. A separate candidate adds `fb_setcmap` behind `s6d_cmap=0` by default. The contract and the file hash are in `docs/s6d-cmap.txt`. The first-test gates are in `docs/s6d-cmap-first.txt`. That candidate is not a request to load it. Thrash bound stays 32.
