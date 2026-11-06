@@ -148,10 +148,17 @@ console_ok() {
 live_ok() {
 	live=$(cat "$P/proc/wd24adv/live" 2>/dev/null) || return 1
 	echo "$live"
-	case "$live" in
-	*"wd24adv live: trial expiry -> 0"*) ;;
-	*) return 1 ;;
-	esac
+	hit=0
+	oldifs=$IFS
+	IFS='
+'
+	for line in $live; do
+		if [ "$line" = "wd24adv live: trial expiry -> 0" ]; then
+			hit=1
+		fi
+	done
+	IFS=$oldifs
+	[ "$hit" = 1 ] || return 1
 	case "$live" in
 	*"readback mismatches 0;"*) ;;
 	*) return 1 ;;
@@ -189,7 +196,7 @@ s6d_ok() {
 cmap_off() {
 	s6d=$(cat "$P/proc/wd24adv/s6d" 2>/dev/null) || return 1
 	case "$s6d" in
-	*"cmap_param 1 published 1"*) return 0 ;;
+	*"cmap_param 1 published 1 frozen"*) return 0 ;;
 	*) return 1 ;;
 	esac
 }
@@ -209,7 +216,7 @@ exact_mark() {
 [ -f "$P/tmp/wd24adv-cmap-92591b1e.ko" ] || stop "module missing"
 [ -x "$P/tmp/wd24x-cmap-set" ] || stop "set client missing"
 hash_ok "$P/tmp/wd24adv-cmap-92591b1e.ko" 92591b1e26c3888868285a4a50d602cf969dfa9bdd53c9f868f21fef03d6a8ae || stop "module hash"
-hash_ok "$P/tmp/wd24x-cmap-set" afa3da3f154f5896809be1a27bdbbb2e76f84eb31eb86c62ac32d918e6b325d3 || stop "set hash"
+hash_ok "$P/tmp/wd24x-cmap-set" 1a26c1c92e6c36d50175cbfce164506482495d3a1f2bc5a81192f5d1044a8c1f || stop "set hash"
 if [ -f "$P/tmp/wd24adv-pr14.ko" ]; then
 	hash_ok "$P/tmp/wd24adv-pr14.ko" 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36 || stop "baseline hash"
 fi

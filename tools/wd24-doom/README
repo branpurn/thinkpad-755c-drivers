@@ -1,0 +1,38 @@
+# i486 Doom buffer backend
+
+The engine is doomgeneric commit `e257a09527062bfb986b6e5e0780839b6cbd5b71`
+(GPL-2). It is fetched into `/tmp` by `build.sh` and is not committed.
+The IWAD used for the host smoke is Freedoom Phase 1, 0.13.0,
+`freedoom1.wad` sha256
+`7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d`,
+from the Freedoom 0.13.0 zip
+`3f9b264f3e3ce503b4fb7f6bdcb1f419d93c7b546f4df3e874dd878db9688f59`.
+Freedoom is BSD. The wad is not committed. A proprietary WAD is not used.
+
+`build.sh` produces `/tmp/wd24x-doom.s`
+sha256 `9e3c6d90fc7d3d408a304954cf7b9fe04784b52381c4c74d2f31ba97331f8ef9`
+size 435064. i486 static-pie, no INTERP, no `cmov`. Zone size is the
+engine default, 6 MiB.
+
+Render size is 320x200, 32-bit, scale factor 1. That buffer is not the
+640x480 scanout of the S6d driver. Detail is the engine default (high).
+Sound is off only when `-nosound` is passed. The bench script passes it.
+
+`WD24X_DOOM_FB` must be the string `mmap` before `/dev/fb0` is opened.
+That path copies luminance into an 8-bit mapping and prints
+`fb luminance not playpal`. It does not call `FBIOPUTCMAP` or
+`KDSETMODE`. `WD24X_DOOM_PALETTE=1` exits before any framebuffer call.
+Neither variable is set by the bench script.
+
+`wd24x-doom-bench.sh` runs only when `WD24X_DOOM_HOST=1`.
+`smoke` checks two frames, sum `0xb298c9c0`.
+`bench` checks Freedoom `demo1`: 7117 gametics, 7156 frames, sum
+`0x9f415cb5`, under `qemu-i386-static -cpu 486` on this host.
+The engine prints a frames-per-second figure for that qemu run.
+That figure is not a 755C result and is not a Windows 98 comparison.
+The engine reports the timedemo through `I_Error`, so the process
+status is non-zero even when the gametic line is present.
+
+A later matched run would use the same wad, the same demo, 320x200,
+an explicit low-detail setting, sound off, and the machine's own clock.
+This package does not set low detail. The S6d scanout remains 640x480.

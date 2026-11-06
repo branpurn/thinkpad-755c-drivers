@@ -9,7 +9,7 @@ CFLAGS ?= -O2 -g -Wall -Wextra -Werror -std=gnu11
 CORE = ../wd24adv_core.c ../wd24adv_modes.c ../wd24adv_port.c
 HW = ../../wd90c24fb/wd90c24_hw.c
 
-test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test_s5 test_s6 test_s6b test_s6d_bank test_s6d_thrash test_s6d_fault test_dead test_cmap_life test_cmap_life_asan test_glyph_bank test_cmap_check
+test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test_s5 test_s6 test_s6b test_s6d_bank test_s6d_thrash test_s6d_fault test_dead test_cmap_life test_cmap_life_asan test_glyph_bank test_cmap_check test_cmap_abi
 	./test_core
 	./xcheck
 	./test_vga
@@ -31,7 +31,12 @@ test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test
 	dash ./test_glyph_run.sh
 	dash ./test_cmap_phase1_run.sh
 	./test_cmap_check
+	./test_cmap_abi
+	python3 ./test_cmap_audit.py
 	dash ./test_cmap_p23_run.sh
+	dash ./test_tty_order.sh
+	$(CC) $(CFLAGS) -I../../../tools/wd24-doom -o /tmp/wd24-test-doom-pick ../../../tools/wd24-doom/test_doom_pick.c
+	/tmp/wd24-test-doom-pick
 
 test_core: test_core.c $(CORE) ../wd24adv_core.h
 	$(CC) $(CFLAGS) -o $@ test_core.c $(CORE)
@@ -81,6 +86,9 @@ test_s6d_fault: test_s6d_fault.c ../wd24adv_s6d_fault.h ../wd24adv_s6d_bank.h ..
 test_cmap_check: test_cmap_check.c wd24x-cmap-check.h
 	$(CC) $(CFLAGS) -o $@ test_cmap_check.c
 
+test_cmap_abi: test_cmap_abi.c wd24x-cmap-get.c wd24x-cmap-set.c wd24x-cmap-os.h wd24x-cmap-check.h vgamodel.c vgamodel.h $(CORE) ../wd24adv_core.h ../wd24adv_dac_entry.h
+	$(CC) $(CFLAGS) -DWD24X_CMAP_NO_MAIN -o $@ test_cmap_abi.c wd24x-cmap-get.c wd24x-cmap-set.c vgamodel.c $(CORE)
+
 test_glyph_bank: test_glyph_bank.c wd24x-glyph-bits.h ../wd24adv_s6d_bank.h ../wd24adv_s6d_thrash.h
 	$(CC) $(CFLAGS) -o $@ test_glyph_bank.c
 
@@ -98,6 +106,6 @@ wd24x-client: wd24x-client.c
 	$(CC) $(CFLAGS) -o $@ wd24x-client.c
 
 clean:
-	rm -f test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test_s5 test_s6 test_s6b test_s6d_bank test_s6d_thrash test_s6d_fault test_dead test_cmap_life test_cmap_life_asan test_glyph_bank test_cmap_check wd24s6d-mmap wd24x-client
+	rm -f test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test_s5 test_s6 test_s6b test_s6d_bank test_s6d_thrash test_s6d_fault test_dead test_cmap_life test_cmap_life_asan test_glyph_bank test_cmap_check test_cmap_abi wd24s6d-mmap wd24x-client
 
 .PHONY: test clean

@@ -421,10 +421,17 @@ published 0 frozen 1.
 rmmod 0. /proc/fb empty. VGA+ bind 1. Only fb and font loaded.
 No X on :1. The baseline file and the candidate file both matched
 their hashes. The shell on the serial line answered.
-No new panel, hue, or keyboard observation. This pass shows the extra
-proc line with the parameter off. It does not show a DAC publish or a
-PUT. `frozen 1` after expiry is the stop/release store. It is not a
-colour restore, because no colour program ran.
+No new panel, hue, or keyboard observation in that trial's own notes.
+This pass shows the extra proc line with the parameter off. It does
+not show a DAC publish or a PUT. `frozen 1` after expiry is the
+stop/release store. It is not a colour restore, because no colour
+program ran.
+
+The operator later described the panel during the glyph drawing, in
+this order: initial stripes, stale coloured-square remnants, a white
+upper band and a dark bottom, then a clean blue field with digits 1
+through 5. The cause is not identified. `wd24x-order` prints selected
+log lines in the order they appear. It does not explain that sequence.
 
 ---
 

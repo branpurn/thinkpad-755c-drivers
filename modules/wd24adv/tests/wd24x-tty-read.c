@@ -38,6 +38,16 @@ int main(void)
 			nname = 0;
 		name[nname] = 0;
 		close(fn);
+		{
+			char *s = name;
+			char *w = name;
+			for (; *s; s++) {
+				if (*s == '\n' || *s == '\r')
+					continue;
+				*w++ = *s;
+			}
+			*w = 0;
+		}
 	} else {
 		name[0] = 0;
 	}
@@ -48,6 +58,16 @@ int main(void)
 			nbind = 0;
 		bind[nbind] = 0;
 		close(fb);
+		{
+			char *s = bind;
+			char *w = bind;
+			for (; *s; s++) {
+				if (*s == '\n' || *s == '\r')
+					continue;
+				*w++ = *s;
+			}
+			*w = 0;
+		}
 	} else {
 		bind[0] = 0;
 	}

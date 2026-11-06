@@ -31,8 +31,8 @@ setup() {
 #!/bin/sh
 b=$(basename "$1")
 case "$b" in
-wd24x-cmap-get) h=71b3eccfccfc88b8ef3bc14c333bbf6c08801ee2e7bade58edcfc6097fcd2d20 ;;
-wd24x-cmap-set) h=afa3da3f154f5896809be1a27bdbbb2e76f84eb31eb86c62ac32d918e6b325d3 ;;
+wd24x-cmap-get) h=159c93efff1142ebf31632c7f1ccf1f403cfc53019214c414b9fe048ce3f2857 ;;
+wd24x-cmap-set) h=1a26c1c92e6c36d50175cbfce164506482495d3a1f2bc5a81192f5d1044a8c1f ;;
 wd24adv-cmap-92591b1e.ko) h=92591b1e26c3888868285a4a50d602cf969dfa9bdd53c9f868f21fef03d6a8ae ;;
 wd24adv-pr14.ko) h=7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36 ;;
 *) h=000 ;;
@@ -216,6 +216,33 @@ grep -q "stop expiry" "$M/out" && ok || bad "expiry"
 grep -q "done" "$M/out" && bad "expiry done" || ok
 [ -f "$M/rmmod.args" ] && ok || bad "expiry rmmod"
 
+setup "$ROOT/modules/wd24adv/tests/.c23-p10"
+printf '%s\n' 'cmap_param 1 published 10 frozen 0' > "$ROOT/modules/wd24adv/tests/.c23-p10/proc/wd24adv/s6d"
+rc=$(run "$ROOT/modules/wd24adv/tests/.c23-p10" "$P2")
+M=$ROOT/modules/wd24adv/tests/.c23-p10
+grep -q "stop cmap publish" "$M/out" && ok || bad "published 10"
+grep -q "done" "$M/out" && bad "published 10 done" || ok
+
+setup "$ROOT/modules/wd24adv/tests/.c23-z0"
+printf '%s\n' 's6d: armed 0 active 0 stopping 0 busy 0 fb_reg 0 node -1' \
+	'fbcon_param 1 bind_param 0' \
+	'faults 4 switches 4 thrash 0 latched 0 mapped_base 0xffffffff' \
+	'why -' \
+	'cmap_param 1 published 1 frozen 0' > "$ROOT/modules/wd24adv/tests/.c23-z0/proc/wd24adv/s6d"
+rc=$(run "$ROOT/modules/wd24adv/tests/.c23-z0" "$P2")
+M=$ROOT/modules/wd24adv/tests/.c23-z0
+grep -q "WD24X-CMAP-P2-RUN done" "$M/out" && ok || bad "frozen 0 done"
+[ "$rc" = 0 ] && ok || bad "frozen 0 rc"
+
+setup "$ROOT/modules/wd24adv/tests/.c23-e01"
+printf '%s\n' 'wd24adv live: trial expiry -> 01' \
+	'port writes: data 1, index 1; readback mismatches 0; in_text 1; trial -' \
+	> "$ROOT/modules/wd24adv/tests/.c23-e01/proc/wd24adv/live"
+rc=$(run "$ROOT/modules/wd24adv/tests/.c23-e01" "$P3")
+M=$ROOT/modules/wd24adv/tests/.c23-e01
+grep -q "stop expiry" "$M/out" && ok || bad "expiry 01"
+grep -q "done" "$M/out" && bad "expiry 01 done" || ok
+
 # batch
 STAMP=$ROOT/modules/wd24adv/tests/.c23-stamp
 rm -rf "$STAMP"
@@ -266,6 +293,9 @@ rm -rf "$ROOT/modules/wd24adv/tests/.c23-ok2" \
 	"$ROOT/modules/wd24adv/tests/.c23-time" \
 	"$ROOT/modules/wd24adv/tests/.c23-ok3" \
 	"$ROOT/modules/wd24adv/tests/.c23-exp" \
+	"$ROOT/modules/wd24adv/tests/.c23-p10" \
+	"$ROOT/modules/wd24adv/tests/.c23-z0" \
+	"$ROOT/modules/wd24adv/tests/.c23-e01" \
 	"$STAMP"
 echo "test_cmap_p23_run: $pass passed, $fail failed"
 [ "$fail" = 0 ]

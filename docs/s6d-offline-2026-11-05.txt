@@ -8,8 +8,9 @@ would need the default-off regression again. `wd90c24fb` is untouched.
 
 Host `make -C modules/wd24adv/tests test` with
 `CFLAGS='-O2 -g -Wall -Wextra -Werror -std=gnu11'` completed with 0
-failed, including `test_cmap_check` (11) and `test_cmap_p23_run` (49).
-That make is not the 755C.
+failed, including `test_cmap_abi` (54), `test_cmap_audit.py`,
+`test_cmap_p23_run` (55), `test_tty_order` (17), and `test_doom_pick`
+(11). That make is not the 755C.
 
 ## Userspace built here
 
@@ -21,22 +22,33 @@ objdump mnemonic column: no `cmov`, `cpuid`, `syscall`, `sysenter`,
 
 | file | sha256 | size |
 | --- | --- | --- |
-| `/opt/cursor/artifacts/wd24x-cmap-get` | `71b3eccfccfc88b8ef3bc14c333bbf6c08801ee2e7bade58edcfc6097fcd2d20` | 13844 |
-| `/opt/cursor/artifacts/wd24x-cmap-set` | `afa3da3f154f5896809be1a27bdbbb2e76f84eb31eb86c62ac32d918e6b325d3` | 13844 |
-| `/opt/cursor/artifacts/wd24x-tty-read` | `c4f5d3881d11d9d3135f6e89d463a3f7125676df47da30445768368a678aaa5e` | 21876 |
-| `/opt/cursor/artifacts/wd24x-cmap-p2-run.sh` | `adf9b84a40e7f8d6825e2bf9e941ffb2acc29230d185033ecdf422330724d610` | 6702 |
-| `/opt/cursor/artifacts/wd24x-cmap-p3-run.sh` | `aecb5b8c93fac50b483213393c7e79a8a67a231e6ecdb98de575120e8e1b3bef` | 6753 |
+| `/opt/cursor/artifacts/wd24x-cmap-get` | `159c93efff1142ebf31632c7f1ccf1f403cfc53019214c414b9fe048ce3f2857` | 13844 |
+| `/opt/cursor/artifacts/wd24x-cmap-set` | `1a26c1c92e6c36d50175cbfce164506482495d3a1f2bc5a81192f5d1044a8c1f` | 13844 |
+| `/opt/cursor/artifacts/wd24x-tty-read` | `7847d2de4578b820407bd1eac93a38081120fd0bf37824a315c13b5efb8da31d` | 21876 |
+| `/opt/cursor/artifacts/wd24x-order` | `609effb8ab73d0f4bad10f1bb7d48268391c5dd631aeb8899b7f53001f2f32a0` | 30228 |
+| `/opt/cursor/artifacts/wd24x-doom` | `9e3c6d90fc7d3d408a304954cf7b9fe04784b52381c4c74d2f31ba97331f8ef9` | 435064 |
+| `/opt/cursor/artifacts/wd24x-cmap-p2-run.sh` | `308d36d1d7ff14310ae87cabe84abc22a4b1dc232ddaa56ac88a418c167ab446` | 6801 |
+| `/opt/cursor/artifacts/wd24x-cmap-p3-run.sh` | `6ae8245c2a0c054420052f82817383db5c542759ab71497fc254013b3cb47ca9` | 6852 |
 | `/opt/cursor/artifacts/wd24x-cmap-batch-run.sh` | `ba58c660a2adab9e3536d5c3e3f2ccd3804062b32d4dabe6fbd411d1ea01fab4` | 783 |
+| `/opt/cursor/artifacts/wd24x-tty-accept.sh` | `c01f38e4703e3394d4c639890450ab6038488752cd1e92b8d2564b68c0607c24` | 1203 |
 
 Sources: `modules/wd24adv/tests/wd24x-cmap-get.c`, `wd24x-cmap-set.c`,
 `wd24x-tty-read.c`, and `docs/s6d-cmap-p2-run.sh`, `s6d-cmap-p3-run.sh`,
 `s6d-cmap-batch-run.sh`. The script hashes match those docs.
 
-`qemu-i386-static -cpu 486` on this cloud VM, which has no `/dev/fb0`:
-the get client printed `WD24X-CMAP-GET bad open` and exited 1. The set
-client printed `WD24X-CMAP-SET bad open` and exited 1. Neither printed
-its success line. That is a missing-device check on this VM. It is not
-a colormap result.
+`qemu-i386-static -cpu 486` of `wd24x-cmap-abi-size` printed
+`WD24X-CMAP-ABI size 24 red 8 transp 20 get 0x4604 put 0x4605 vs 0x4601`.
+The same qemu, on this VM which has no `/dev/fb0`, printed
+`WD24X-CMAP-GET bad open` and `WD24X-CMAP-SET bad open`, both exit 1.
+`test_cmap_abi` drives those clients against the host VGA model:
+publish performs no `3C9` write, phase 3 writes three `3C9` bytes at
+index 7 only, and the full snapshot write restores all 768 bytes.
+That model is not the 755C.
+
+The phase 2/3 proc gate is `cmap_param 1 published 1 frozen`, so
+`published 10` does not pass. The expiry line must be exactly
+`wd24adv live: trial expiry -> 0`. Buffers are filled with `0x0001`
+before GET, so a short kernel copy cannot look like a full shift-10 map.
 
 The same qemu of the TTY reader opened this VM's `/dev/tty0` and printed
 `WD24X-TTY-READ kd -1 fg 0 name (S) dummy device bind 1`. `kd -1` means
@@ -122,14 +134,20 @@ Distinctions, from code, not from a measurement on the machine:
   `VT_ACTIVATE` returns `-ENXIO` when the argument is 0 or greater than
   `MAX_NR_CONSOLES`. An argument of -1 takes that path. This is a
   reading of X 1.14.7 `linux.c` and that kernel. It is not identified
-  as the cause of the dead keyboard.
+  as the cause of the dead keyboard. No X or driver patch was made
+  from it.
 - `VT_DISALLOCATE` can still return `-EBUSY`. The earlier "Can't
   deallocate console" line is that fprintf. It is not `FatalError`.
 
 `wd24x-tty-read` opens `/dev/tty0` read-only, issues `KDGETMODE` and
-`VT_GETSTATE`, and reads vtcon0 name and bind. It does not call
-`KDSETMODE` or `VT_ACTIVATE`. It is a later-session snapshot, not a
-repair. Text and keyboard recovery are not called validated.
+`VT_GETSTATE`, and reads vtcon0 name and bind. Newlines in the sysfs
+fields are stripped so the report is one line. It does not call
+`KDSETMODE` or `VT_ACTIVATE`. `wd24x-order` prints `live: mode`,
+`session ON`, `end (`, `trial expiry`, and the deallocate line in the
+order they occur. It does not name a cause. `docs/s6d-tty-accept.sh`
+is the later keystroke check. It is off unless
+`WD24X_TTY_ACCEPT=keystroke`. Text and keyboard recovery are not
+called validated.
 
 ## Modes
 
@@ -141,13 +159,18 @@ claim those two unproven lines.
 
 ## Doom
 
-Goal stated by the operator: Windows 98-comparable speed on this same
-755C, with a matched timedemo, the same WAD, resolution, detail, sound,
-and a correct palette. No number is claimed. No port was built. No
-IWAD is in this tree, and a proprietary WAD is not assumed. Full X is
-not a requirement of the goal: a later port could write the banked
-mmap or another fbdev path. That port, a freely licensed IWAD, and a
-run on the machine are all still absent. There is no FPS artifact.
+The backend is `tools/wd24-doom/`. Full X is not used. The i486 binary,
+the Freedoom pin, and the qemu checks are in that README. Two qemu
+runs of Freedoom `demo1` both reported 7117 gametics and frame sum
+`0x9f415cb5`. A two-frame run reported sum `0xb298c9c0`. Those sums are
+`qemu-i386-static -cpu 486` on this host. They are not 755C frames per
+second and they are not a Windows 98 comparison.
+
+Render is 320x200. The S6d scanout that has been watched is 640x480.
+This binary does not scale one into the other. Detail is the engine
+default. The bench passes `-nosound`. `WD24X_DOOM_FB=mmap` is the only
+switch that opens `/dev/fb0`, and it copies luminance, not PLAYPAL.
+`WD24X_DOOM_PALETTE=1` exits before that open. The bench sets neither.
 
 ## Cold boot — copy these, then stop
 
@@ -167,17 +190,28 @@ Do not copy the rejected module onto the machine.
 | `/tmp/busybox-wd24` | `52b264655f25e902098eb797ba72f424cbe3ec0c37caceeaf5f0984835682236` |
 | `/tmp/wd24x-glyph-run.sh` | `63a84bf7210b6c4c43d61555e153d9754dc483b07fb1b6fe2d4b92a2f17ea441` |
 | `/tmp/wd24x-cmap-phase1-run.sh` | `8efaddb358e153a76ed0c1846c835b13bb8c4df0d8ad147b223ca21839645e5e` |
-| `/tmp/wd24x-cmap-get` | `71b3eccfccfc88b8ef3bc14c333bbf6c08801ee2e7bade58edcfc6097fcd2d20` |
-| `/tmp/wd24x-cmap-set` | `afa3da3f154f5896809be1a27bdbbb2e76f84eb31eb86c62ac32d918e6b325d3` |
-| `/tmp/wd24x-tty-read` | `c4f5d3881d11d9d3135f6e89d463a3f7125676df47da30445768368a678aaa5e` |
-| `/tmp/wd24x-cmap-p2-run.sh` | `adf9b84a40e7f8d6825e2bf9e941ffb2acc29230d185033ecdf422330724d610` |
-| `/tmp/wd24x-cmap-p3-run.sh` | `aecb5b8c93fac50b483213393c7e79a8a67a231e6ecdb98de575120e8e1b3bef` |
+| `/tmp/wd24x-cmap-get` | `159c93efff1142ebf31632c7f1ccf1f403cfc53019214c414b9fe048ce3f2857` |
+| `/tmp/wd24x-cmap-set` | `1a26c1c92e6c36d50175cbfce164506482495d3a1f2bc5a81192f5d1044a8c1f` |
+| `/tmp/wd24x-tty-read` | `7847d2de4578b820407bd1eac93a38081120fd0bf37824a315c13b5efb8da31d` |
+| `/tmp/wd24x-order` | `609effb8ab73d0f4bad10f1bb7d48268391c5dd631aeb8899b7f53001f2f32a0` |
+| `/tmp/wd24x-doom` | `9e3c6d90fc7d3d408a304954cf7b9fe04784b52381c4c74d2f31ba97331f8ef9` |
+| `/tmp/wd24x-cmap-p2-run.sh` | `308d36d1d7ff14310ae87cabe84abc22a4b1dc232ddaa56ac88a418c167ab446` |
+| `/tmp/wd24x-cmap-p3-run.sh` | `6ae8245c2a0c054420052f82817383db5c542759ab71497fc254013b3cb47ca9` |
 | `/tmp/wd24x-cmap-batch-run.sh` | `ba58c660a2adab9e3536d5c3e3f2ccd3804062b32d4dabe6fbd411d1ea01fab4` |
+| `/tmp/wd24x-tty-accept.sh` | `c01f38e4703e3394d4c639890450ab6038488752cd1e92b8d2564b68c0607c24` |
 
 Rejected, do not stage:
 `30415e508e2757f008210233bd9d2610a160fbbf132b4df9e8d674109375b19a`.
 
-Install is copy plus `chmod +x` on the binaries and scripts. Rollback
+The same bytes are in `/opt/cursor/artifacts/wd24-cold.tgz`
+sha256 `7bfda51b7309c914668042e72b2c3423550b445eac39d1d0304efa2f0ff3c979`
+size 2350158. Inside it, scripts and binaries are mode 755 and the
+modules are mode 644. Extracting it does not insmod. SHA256SUMS is
+in the archive. Freedoom is not in it.
+
+Install on a normal filesystem keeps those modes. The artifact
+directory itself forces mode 666 on loose files, so the tar is the
+copy that keeps the executable bit. Rollback
 of a loaded candidate is the script's own rmmod after the trial, and
 only when that script's insmod returned 0. A preexisting `wd24adv` is
 left loaded. The baseline file is never overwritten by the candidate.
@@ -196,13 +230,16 @@ them.
    expiry restores colour RAM. The client does not observe the restore.
 3. A watched panel for hue, and for whether index 0 and index 15 differ.
    Digits 1..5 were seen on the baseline. Hue was not.
-4. A physical keystroke after graphics, with the read-only TTY snapshot
-   taken while the keyboard is dead and again after the script exits.
-   Cause and timing are unknown. Do not treat serial or VGA+ bind as
-   that test.
+4. A physical key on the 755C keyboard. `docs/s6d-tty-accept.sh` reads
+   one byte only when `WD24X_TTY_ACCEPT=keystroke`, and it records
+   `wd24x-tty-read` before and after. It does not call `KDSETMODE`.
+   Serial and VGA+ bind are not that byte.
 5. Any mode other than the watched S6d `640x480-8`, if it is attempted
    at all. `320x240-8x` and `640x480-8-v800` are still unproven.
-6. A Doom timedemo. No port, no free IWAD, and no number exist yet.
+6. A Doom timedemo on the 755C. The qemu gametic count above is not
+   that run. Correct 8-bit colour still needs the unvalidated palette
+   path, which this binary refuses. Scanout scaling to 640x480 is not
+   in the binary.
 
 ## Review leftovers
 
