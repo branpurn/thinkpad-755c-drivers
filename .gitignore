@@ -25,4 +25,6 @@ lowmem.bin
 /modules/wd24adv/tests/test_engine
 /modules/wd24adv/tests/test_s1
 /modules/wd24adv/tests/test_s2
+/modules/wd24adv/tests/test_cmap_life
+/modules/wd24adv/tests/test_cmap_life_asan
 /.venv*/

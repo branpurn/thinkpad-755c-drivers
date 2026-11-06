@@ -9,7 +9,7 @@ CFLAGS ?= -O2 -g -Wall -Wextra -Werror -std=gnu11
 CORE = ../wd24adv_core.c ../wd24adv_modes.c ../wd24adv_port.c
 HW = ../../wd90c24fb/wd90c24_hw.c
 
-test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test_s5 test_s6 test_s6b test_s6d_bank test_s6d_thrash test_s6d_fault test_dead
+test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test_s5 test_s6 test_s6b test_s6d_bank test_s6d_thrash test_s6d_fault test_dead test_cmap_life test_cmap_life_asan
 	./test_core
 	./xcheck
 	./test_vga
@@ -25,6 +25,8 @@ test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test
 	./test_s6d_thrash
 	./test_s6d_fault
 	./test_dead
+	./test_cmap_life
+	ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:log_path=/tmp/wd24-cmap-asan ./test_cmap_life_asan
 
 test_core: test_core.c $(CORE) ../wd24adv_core.h
 	$(CC) $(CFLAGS) -o $@ test_core.c $(CORE)
@@ -71,6 +73,12 @@ test_s6d_thrash: test_s6d_thrash.c ../wd24adv_s6d_thrash.h
 test_s6d_fault: test_s6d_fault.c ../wd24adv_s6d_fault.h ../wd24adv_s6d_bank.h ../wd24adv_s6d_thrash.h
 	$(CC) $(CFLAGS) -o $@ test_s6d_fault.c
 
+test_cmap_life: test_cmap_life.c vgamodel.c vgamodel.h $(CORE) ../wd24adv_core.h ../wd24adv_dac_entry.h
+	$(CC) $(CFLAGS) -pthread -o $@ test_cmap_life.c vgamodel.c $(CORE)
+
+test_cmap_life_asan: test_cmap_life.c vgamodel.c vgamodel.h $(CORE) ../wd24adv_core.h ../wd24adv_dac_entry.h
+	$(CC) -O1 -g -Wall -Wextra -Werror -std=gnu11 -pthread -fsanitize=address,undefined -fno-omit-frame-pointer -o $@ test_cmap_life.c vgamodel.c $(CORE)
+
 wd24s6d-mmap: wd24s6d-mmap.c ../wd24adv_s6d_fault.h ../wd24adv_s6d_bank.h ../wd24adv_s6d_thrash.h
 	$(CC) $(CFLAGS) -o $@ wd24s6d-mmap.c
 
@@ -79,6 +87,6 @@ wd24x-client: wd24x-client.c
 	$(CC) $(CFLAGS) -o $@ wd24x-client.c
 
 clean:
-	rm -f test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test_s5 test_s6 test_s6b test_s6d_bank test_s6d_thrash test_s6d_fault test_dead wd24s6d-mmap wd24x-client
+	rm -f test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test_s5 test_s6 test_s6b test_s6d_bank test_s6d_thrash test_s6d_fault test_dead test_cmap_life test_cmap_life_asan wd24s6d-mmap wd24x-client
 
 .PHONY: test clean

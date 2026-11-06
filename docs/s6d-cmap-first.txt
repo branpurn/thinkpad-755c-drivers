@@ -1,0 +1,93 @@
+# First test for the colormap candidate
+
+This file does not approve a load. Nothing in the offline package insmods
+the candidate or the baseline. Do not stage either file onto the target
+from this package.
+
+## Hashes
+
+Baseline, the module that has already run, unchanged:
+
+`7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36`
+
+Candidate, not approved:
+
+`/opt/cursor/artifacts/wd24adv-cmap-candidate.ko`
+`92591b1e26c3888868285a4a50d602cf969dfa9bdd53c9f868f21fef03d6a8ae`
+size 132600
+vermagic `6.18.57-tc755x mod_unload 486`
+
+Rejected, do not load, do not keep as a spare:
+
+`30415e508e2757f008210233bd9d2610a160fbbf132b4df9e8d674109375b19a`
+
+The driver sources were not changed for the lifetime replay, so the
+candidate hash is still `92591b1e`. The contract is `docs/s6d-cmap.txt`.
+
+## Stop rules
+
+One phase per approval. A pass does not start the next phase. A failure
+stops the series. Do not retry a failed open or a failed PUT. Do not add
+`s6d_cmap=1` during phase 1. Do not call `FBIOPUTCMAP` during phase 2.
+
+Before any command: a person is present, `/proc/fb` is empty, and
+`sha256sum` of the file about to be loaded matches the hash named for
+that phase. The candidate name inside the module is still `wd24adv`.
+Do not overwrite the baseline file with it.
+
+## Phase 1 — default off
+
+Load the candidate only, with the existing S6d parameters and without
+`s6d_cmap` (the default is 0).
+
+Go: hash is `92591b1e`, `/proc/fb` is empty, and this phase was named.
+No-go: any other hash, `/proc/fb` not empty, or no person.
+
+Expect the same text-restore shape as the baseline runs: trial expiry
+`in_text 1`, empty `/proc/fb`, `rmmod` 0. `/proc/wd24adv/s6d` includes
+`cmap_param 0 published 0 frozen 0`. `FBIOGETCMAP` is `-EINVAL`. This
+phase does not prove colours. It checks that the default does not add a
+colormap program.
+
+Stop after rmmod. Do not continue.
+
+## Phase 2 — publish read only
+
+A later approval must name `92591b1e` and the words "phase 2".
+
+Same parameters plus `s6d_cmap=1`. Open the fb once. Do not run a client
+that issues `FBIOPUTCMAP`.
+
+Go: phase 1 passed on this same file, and the new approval names phase 2.
+No-go: phase 1 was skipped or failed, or the hash differs.
+
+Expect one of two results. Open succeeds and the proc line shows
+`published 1`, `busy 1` while the fd is open, and `busy 0` after close.
+Or open fails, `busy` stays 0, and `failed`/`nmismatch` latch so a second
+open is refused. On that failure, stop. The publish read writes `3C6=FF`
+and `3C7=00` before it compares. It does not write colour RAM. Let the
+trial expire and rmmod. Do not PUT.
+
+## Phase 3 — one set
+
+A later approval must name `92591b1e` and the words "phase 3".
+
+One `FBIOPUTCMAP`, then one `FBIOGETCMAP`, then close and let the trial
+expire.
+
+Go: phase 2 on this same file published and closed cleanly, and the new
+approval names phase 3.
+No-go: publish did not happen, or this is the same sitting as phase 2
+without a new approval.
+
+A GET that returns the 16-bit values just written is the kernel cache.
+It is not a live DAC read. A GET of `-EINVAL` after an error means `len`
+was cleared. Do not treat either result as a panel colour. Do not issue
+a second PUT.
+
+## Still not proved
+
+Panel hue, a fifth square, glyphs, the keyboard, and any claim that the
+755C DAC matches the host VGA model. The lifetime replay and the VGA
+model are host tests. AddressSanitizer showed the rejected free is a
+heap use-after-free in that host process. It did not run on the 755C.
