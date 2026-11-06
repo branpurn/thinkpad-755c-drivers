@@ -99,17 +99,24 @@ sh /tmp/wd24x-glyph-run.sh
 
 It checks the baseline module hash and the glyph hash, empty `/proc/fb`,
 vtcon0 `(S) VGA+` bind 1, no vtcon1, and no `/tmp/.X1-lock` or
-`/tmp/.X11-unix/X1`. It does not delete a stale X1 socket. A failed
-check does not insmod.
+`/tmp/.X11-unix/X1`. A failed check does not insmod, does not signal,
+does not remove an X socket, and does not rmmod. `owned` is set only
+after this script's insmod returns 0. The file hash is not the loaded
+instance. A module that was already there, or one that appears when
+insmod returns nonzero, is left for the executor.
 
 insmod parameters are `dryrun=0 live=1 mode=640x480-8 trial=180 s6d=1
 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=0`. X is
 `Xfbdev :1 -nolisten tcp -noreset -fb /dev/fb0`. No `-ac`.
 
 Timing on the success path: 15 s for X to stay up, 20 s to watch the
-client, then X is reaped, then 150 s so the 180 s trial can expire,
-then `/proc/wd24adv/live` must show `trial expiry`, `mismatches 0`, and
-`in_text 1`. Then rmmod. The pass line is exactly
+client, then X is reaped, then 150 s so the 180 s trial can expire.
+`/proc/wd24adv/live` must contain the driver's lines `wd24adv live:
+trial expiry -> 0`, `readback mismatches 0;`, and `in_text 1;`.
+`/proc/wd24adv/s6d` must contain `s6d: armed 0 active `, ` fb_reg 0 node `,
+and ` thrash 0 latched 0 mapped_base `, which is the baseline proc
+format. Then rmmod. `done` is printed only when that rmmod status is 0.
+The pass line is exactly
 
 ```
 WD24X-GLYPH shadow 640x480x8 marks 5 match 5 ctrl 1

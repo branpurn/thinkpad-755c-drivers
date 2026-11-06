@@ -3,11 +3,17 @@
 # Do not set WD24X_MOCK on the target. An empty value uses /proc and /tmp.
 # Trial clock starts at insmod. No -ac. X uses -noreset.
 # The rectangle client /tmp/wd24x-client is not used and is not removed.
+#
+# owned=1 only after this process's insmod returns 0. The file hash is
+# not the loaded instance. A module already present, or one that appears
+# after a failed insmod, is not unloaded. No trap.
 P=${WD24X_MOCK:-}
 xpid=
 cpid=
 xstarted=
+owned=
 finishing=
+cleanup_rc=0
 
 state() {
 	if [ ! -f "/proc/$1/stat" ]; then
@@ -45,9 +51,17 @@ hash_ok() {
 	esac
 }
 
-finish() {
+# Before insmod. Does not signal, does not remove an X socket, does not rmmod.
+stop() {
+	echo "WD24X-GLYPH-RUN stop $1"
+	exit 1
+}
+
+# Pids this script started, and the module only if insmod returned 0.
+own_cleanup() {
+	rmst=0
 	if [ -n "$finishing" ]; then
-		return 0
+		return "$cleanup_rc"
 	fi
 	finishing=1
 	if [ -n "$cpid" ]; then
@@ -57,8 +71,12 @@ finish() {
 			echo "CTERM=$?"
 			sleep 2
 		fi
-		reap_hard "$cpid" || return 1
+		reap_hard "$cpid" || cleanup_rc=1
 		cpid=
+	fi
+	if [ "$cleanup_rc" != 0 ]; then
+		echo "WD24X-GLYPH-RUN executor reap then rmmod"
+		return 1
 	fi
 	if [ -n "$xpid" ]; then
 		st=$(state "$xpid")
@@ -67,10 +85,14 @@ finish() {
 			echo "TERM=$?"
 			sleep 10
 		fi
-		reap_hard "$xpid" || return 1
+		if ! reap_hard "$xpid"; then
+			cleanup_rc=1
+			echo "WD24X-GLYPH-RUN executor reap $xpid then rmmod"
+			return 1
+		fi
 		xpid=
 	fi
-	if [ -n "$xstarted" ]; then
+	if [ -n "$xstarted" ] && [ "$cleanup_rc" = 0 ]; then
 		rm -f "$P/tmp/.X1-lock" "$P/tmp/.X11-unix/X1"
 	fi
 	if [ -r "$P/proc/wd24adv/live" ]; then
@@ -81,17 +103,22 @@ finish() {
 		echo "WD24X-GLYPH-RUN s6d"
 		cat "$P/proc/wd24adv/s6d"
 	fi
-	if grep -q '^wd24adv ' "$P/proc/modules" 2>/dev/null; then
+	if [ "$owned" = 1 ] && grep -q '^wd24adv ' "$P/proc/modules" 2>/dev/null; then
 		rmmod wd24adv
-		echo "RM=$?"
+		rmst=$?
+		echo "RM=$rmst"
+		if [ "$rmst" != 0 ]; then
+			cleanup_rc=1
+			return 1
+		fi
 	fi
 	dmesg > "$P/tmp/wd24x-glyph-dmesg.txt" 2>/dev/null
-	return 0
+	return "$cleanup_rc"
 }
 
 fail() {
 	echo "WD24X-GLYPH-RUN stop $1"
-	finish || echo "WD24X-GLYPH-RUN executor finish rmmod and X1"
+	own_cleanup || echo "WD24X-GLYPH-RUN executor finish rmmod and X1"
 	exit 1
 }
 
@@ -112,19 +139,43 @@ console_ok() {
 	return 0
 }
 
+# Driver live text, from wd24adv_main.c hw_run:
+#   wd24adv live: trial expiry -> %d
+#   port writes: ... readback mismatches %u; in_text %d; trial %s
 live_ok() {
 	live=$(cat "$P/proc/wd24adv/live" 2>/dev/null) || return 1
 	echo "$live"
 	case "$live" in
-	*"trial expiry"*) ;;
+	*"wd24adv live: trial expiry -> 0"*) ;;
 	*) return 1 ;;
 	esac
 	case "$live" in
-	*"mismatches 0"*) ;;
+	*"readback mismatches 0;"*) ;;
 	*) return 1 ;;
 	esac
 	case "$live" in
-	*"in_text 1"*) ;;
+	*"in_text 1;"*) ;;
+	*) return 1 ;;
+	esac
+	return 0
+}
+
+# Baseline s6d proc, before the colormap candidate added a line:
+#   s6d: armed %d active %d stopping %d busy %d fb_reg %d node %d
+#   faults %u switches %u thrash %u latched %u mapped_base 0x%x
+s6d_ok() {
+	s6d=$(cat "$P/proc/wd24adv/s6d" 2>/dev/null) || return 1
+	echo "$s6d"
+	case "$s6d" in
+	*"s6d: armed 0 active "*) ;;
+	*) return 1 ;;
+	esac
+	case "$s6d" in
+	*" fb_reg 0 node "*) ;;
+	*) return 1 ;;
+	esac
+	case "$s6d" in
+	*" thrash 0 latched 0 mapped_base "*) ;;
 	*) return 1 ;;
 	esac
 	return 0
@@ -142,41 +193,43 @@ exact_mark() {
 	[ "$lines" = 1 ] && [ "$hit" = 1 ]
 }
 
-[ -x "$P/tmp/busybox-wd24" ] || fail "extractor missing"
-[ -f "$P/tmp/wd24-xfbdev-i486.tgz" ] || fail "X archive missing"
-[ -f "$P/tmp/wd24-xkb.tgz" ] || fail "xkb archive missing"
-[ -f "$P/tmp/wd24adv-pr14.ko" ] || fail "module missing"
-[ -x "$P/tmp/wd24x-glyph" ] || fail "glyph missing"
-hash_ok "$P/tmp/wd24adv-pr14.ko" 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36 || fail "module hash"
-hash_ok "$P/tmp/wd24x-glyph" c632750382b3def78912a6b5013ef53e74969e596ed39d1391b283555f01da67 || fail "glyph hash"
-console_ok || fail "console"
+[ -x "$P/tmp/busybox-wd24" ] || stop "extractor missing"
+[ -f "$P/tmp/wd24-xfbdev-i486.tgz" ] || stop "X archive missing"
+[ -f "$P/tmp/wd24-xkb.tgz" ] || stop "xkb archive missing"
+[ -f "$P/tmp/wd24adv-pr14.ko" ] || stop "module missing"
+[ -x "$P/tmp/wd24x-glyph" ] || stop "glyph missing"
+hash_ok "$P/tmp/wd24adv-pr14.ko" 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36 || stop "module hash"
+hash_ok "$P/tmp/wd24x-glyph" c632750382b3def78912a6b5013ef53e74969e596ed39d1391b283555f01da67 || stop "glyph hash"
+console_ok || stop "console"
 if [ -S "$P/tmp/.X11-unix/X1" ] || [ -f "$P/tmp/.X1-lock" ]; then
-	fail "stale X1"
+	stop "stale X1"
 fi
 if grep -q '^wd24adv ' "$P/proc/modules" 2>/dev/null; then
-	fail "wd24adv loaded"
+	stop "wd24adv loaded"
 fi
 if grep -q '^vga16fb ' "$P/proc/modules" 2>/dev/null; then
-	fail "vga16fb"
+	stop "vga16fb"
 fi
 if grep -q '^wd90c24fb ' "$P/proc/modules" 2>/dev/null; then
-	fail "wd90c24fb"
+	stop "wd90c24fb"
 fi
 
 if [ ! -x "$P/tmp/wd24-xfbdev/Xfbdev" ]; then
-	"$P/tmp/busybox-wd24" tar -C "$P/tmp" -xzof "$P/tmp/wd24-xfbdev-i486.tgz" || fail "extract X"
+	"$P/tmp/busybox-wd24" tar -C "$P/tmp" -xzof "$P/tmp/wd24-xfbdev-i486.tgz" || stop "extract X"
 fi
 if [ ! -x "$P/tmp/xfb-prefix/bin/xkbcomp" ]; then
-	"$P/tmp/busybox-wd24" tar -C "$P/tmp" -xzof "$P/tmp/wd24-xkb.tgz" || fail "extract xkb"
+	"$P/tmp/busybox-wd24" tar -C "$P/tmp" -xzof "$P/tmp/wd24-xkb.tgz" || stop "extract xkb"
 fi
-hash_ok "$P/tmp/wd24-xfbdev/Xfbdev" 6450171476a8e6aa91883744947423db123c74a042d697f9263b686dcb2f9f13 || fail "X hash"
-hash_ok "$P/tmp/xfb-prefix/bin/xkbcomp" 5ebf28e8823a5165efb0a2a0b997d2218ebbaa24ddb5abd76160643a939a5f62 || fail "xkbcomp hash"
+hash_ok "$P/tmp/wd24-xfbdev/Xfbdev" 6450171476a8e6aa91883744947423db123c74a042d697f9263b686dcb2f9f13 || stop "X hash"
+hash_ok "$P/tmp/xfb-prefix/bin/xkbcomp" 5ebf28e8823a5165efb0a2a0b997d2218ebbaa24ddb5abd76160643a939a5f62 || stop "xkbcomp hash"
 
-dmesg -c >/dev/null
 insmod "$P/tmp/wd24adv-pr14.ko" dryrun=0 live=1 mode=640x480-8 trial=180 s6d=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
 rc=$?
 echo "RC=$rc"
-[ "$rc" = "0" ] || fail "insmod"
+# rc 0 is this insertion. A later wd24adv line is not proof of it.
+[ "$rc" = "0" ] || stop "insmod"
+owned=1
+dmesg -c >/dev/null
 
 "$P/tmp/wd24-xfbdev/Xfbdev" :1 -nolisten tcp -noreset -fb /dev/fb0 >"$P/tmp/wd24-xfbdev/x.log" 2>&1 &
 xpid=$!
@@ -184,11 +237,11 @@ xstarted=1
 echo "XPID=$xpid"
 sleep 15
 st=$(state "$xpid")
-	if [ -z "$st" ] || [ "$st" = "Z" ]; then
-		reap_hard "$xpid" || true
-		xpid=
-		fail "X not alive"
-	fi
+if [ -z "$st" ] || [ "$st" = "Z" ]; then
+	reap_hard "$xpid" || true
+	xpid=
+	fail "X not alive"
+fi
 if grep -q "Failed to compile keymap" "$P/tmp/wd24-xfbdev/x.log"; then
 	fail "keymap"
 fi
@@ -224,10 +277,10 @@ if [ -n "$xpid" ]; then
 		echo "TERM=$?"
 		sleep 10
 	fi
-	reap_hard "$xpid" || {
+	if ! reap_hard "$xpid"; then
 		echo "WD24X-GLYPH-RUN executor reap $xpid then rmmod"
 		exit 1
-	}
+	fi
 	xpid=
 fi
 if [ -n "$xstarted" ]; then
@@ -237,14 +290,14 @@ xstarted=
 
 # 15s plus 20s are already slept. 150s more passes trial=180.
 sleep 150
-if ! live_ok || ! console_ok; then
+if ! live_ok || ! s6d_ok || ! console_ok; then
 	echo "WD24X-GLYPH-RUN stop expiry"
-	finish || echo "WD24X-GLYPH-RUN executor finish rmmod"
+	own_cleanup || echo "WD24X-GLYPH-RUN executor finish rmmod"
 	exit 1
 fi
-finish || {
-	echo "WD24X-GLYPH-RUN executor finish rmmod"
+own_cleanup || exit 1
+console_ok || {
+	echo "WD24X-GLYPH-RUN stop console after rmmod"
 	exit 1
 }
-console_ok || fail "console after rmmod"
 echo "WD24X-GLYPH-RUN done"

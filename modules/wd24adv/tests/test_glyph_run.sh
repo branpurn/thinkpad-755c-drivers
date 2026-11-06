@@ -25,7 +25,10 @@ setup() {
 	printf '%s\n' 'wd24adv live: trial expiry -> 0' \
 		'port writes: data 1, index 1; readback mismatches 0; in_text 1; trial -' \
 		> "$M/proc/wd24adv/live"
-	printf '%s\n' 's6d: armed 0' > "$M/proc/wd24adv/s6d"
+	printf '%s\n' 's6d: armed 0 active 0 stopping 0 busy 0 fb_reg 0 node -1' \
+		'fbcon_param 1 bind_param 0' \
+		'faults 15 switches 15 thrash 0 latched 0 mapped_base 0xffffffff' \
+		'why -' > "$M/proc/wd24adv/s6d"
 	cat > "$M/bin/sha256sum" <<'EOF'
 #!/bin/sh
 b=$(basename "$1")
@@ -58,14 +61,16 @@ echo "wd24adv: session ON"
 EOF
 	cat > "$M/bin/sleep" <<'EOF'
 #!/bin/sh
+# Let a just-started client exit, and leave the X stand-in alive.
+if [ "${1:-}" = 15 ] || [ "${1:-}" = 20 ]; then
+	/bin/sleep 0.2
+fi
 exit 0
 EOF
 	cat > "$M/tmp/wd24-xfbdev/Xfbdev" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$WD24X_MOCK/x.args"
-while true; do
-	/bin/sleep 1
-done
+exec /bin/sleep 60
 EOF
 	cat > "$M/tmp/xfb-prefix/bin/xkbcomp" <<'EOF'
 #!/bin/sh
@@ -168,12 +173,75 @@ grep -q "stop client timeout" "$M/out" && ok || bad "timeout"
 grep -q "WD24X-GLYPH-RUN done" "$M/out" && bad "timeout done" || ok
 [ -f "$M/rmmod.args" ] && ok || bad "timeout rmmod"
 
+setup "$ROOT/modules/wd24adv/tests/.glyph-mock-pre"
+printf '%s\n' 'wd24adv 1 - Live' >> "$ROOT/modules/wd24adv/tests/.glyph-mock-pre/proc/modules"
+rc=$(run "$ROOT/modules/wd24adv/tests/.glyph-mock-pre")
+M=$ROOT/modules/wd24adv/tests/.glyph-mock-pre
+grep -q "stop wd24adv loaded" "$M/out" && ok || bad "preexisting"
+[ ! -f "$M/rmmod.args" ] && ok || bad "preexisting rmmod"
+[ ! -f "$M/insmod.args" ] && ok || bad "preexisting insmod"
+grep -q "WD24X-GLYPH-RUN done" "$M/out" && bad "preexisting done" || ok
+
+setup "$ROOT/modules/wd24adv/tests/.glyph-mock-race"
+cat > "$ROOT/modules/wd24adv/tests/.glyph-mock-race/bin/insmod" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$WD24X_MOCK/insmod.args"
+printf '%s\n' 'wd24adv 1 - Live' >> "$WD24X_MOCK/proc/modules"
+exit 1
+EOF
+chmod 755 "$ROOT/modules/wd24adv/tests/.glyph-mock-race/bin/insmod"
+rc=$(run "$ROOT/modules/wd24adv/tests/.glyph-mock-race")
+M=$ROOT/modules/wd24adv/tests/.glyph-mock-race
+grep -q "stop insmod" "$M/out" && ok || bad "insmod race"
+grep -q "^RC=1" "$M/out" && ok || bad "insmod rc"
+[ ! -f "$M/rmmod.args" ] && ok || bad "insmod race rmmod"
+grep -q "WD24X-GLYPH-RUN done" "$M/out" && bad "insmod race done" || ok
+grep -q '^wd24adv ' "$M/proc/modules" && ok || bad "unrelated module kept"
+
+setup "$ROOT/modules/wd24adv/tests/.glyph-mock-rm"
+cat > "$ROOT/modules/wd24adv/tests/.glyph-mock-rm/bin/rmmod" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$WD24X_MOCK/rmmod.args"
+exit 1
+EOF
+chmod 755 "$ROOT/modules/wd24adv/tests/.glyph-mock-rm/bin/rmmod"
+rc=$(run "$ROOT/modules/wd24adv/tests/.glyph-mock-rm")
+M=$ROOT/modules/wd24adv/tests/.glyph-mock-rm
+grep -q "^RM=1" "$M/out" && ok || bad "rmmod status"
+grep -q "WD24X-GLYPH-RUN done" "$M/out" && bad "rmmod done" || ok
+[ "$rc" != 0 ] && ok || bad "rmmod rc"
+
+setup "$ROOT/modules/wd24adv/tests/.glyph-mock-exp"
+printf '%s\n' 'wd24adv live: trial expiry -> 5' \
+	'port writes: data 1, index 1; readback mismatches 0; in_text 1; trial -' \
+	> "$ROOT/modules/wd24adv/tests/.glyph-mock-exp/proc/wd24adv/live"
+rc=$(run "$ROOT/modules/wd24adv/tests/.glyph-mock-exp")
+M=$ROOT/modules/wd24adv/tests/.glyph-mock-exp
+grep -q "stop expiry" "$M/out" && ok || bad "expiry code"
+grep -q "WD24X-GLYPH-RUN done" "$M/out" && bad "expiry done" || ok
+[ -f "$M/rmmod.args" ] && ok || bad "expiry still unloads owned"
+
+setup "$ROOT/modules/wd24adv/tests/.glyph-mock-thr"
+printf '%s\n' 's6d: armed 0 active 0 stopping 0 busy 0 fb_reg 0 node -1' \
+	'fbcon_param 1 bind_param 0' \
+	'faults 15 switches 15 thrash 0 latched 1 mapped_base 0xffffffff' \
+	'why -' > "$ROOT/modules/wd24adv/tests/.glyph-mock-thr/proc/wd24adv/s6d"
+rc=$(run "$ROOT/modules/wd24adv/tests/.glyph-mock-thr")
+M=$ROOT/modules/wd24adv/tests/.glyph-mock-thr
+grep -q "stop expiry" "$M/out" && ok || bad "latched"
+grep -q "WD24X-GLYPH-RUN done" "$M/out" && bad "latched done" || ok
+
 rm -rf "$ROOT/modules/wd24adv/tests/.glyph-mock-ok" \
 	"$ROOT/modules/wd24adv/tests/.glyph-mock-hash" \
 	"$ROOT/modules/wd24adv/tests/.glyph-mock-fb" \
 	"$ROOT/modules/wd24adv/tests/.glyph-mock-vt" \
 	"$ROOT/modules/wd24adv/tests/.glyph-mock-x1" \
 	"$ROOT/modules/wd24adv/tests/.glyph-mock-mark" \
-	"$ROOT/modules/wd24adv/tests/.glyph-mock-time"
+	"$ROOT/modules/wd24adv/tests/.glyph-mock-time" \
+	"$ROOT/modules/wd24adv/tests/.glyph-mock-pre" \
+	"$ROOT/modules/wd24adv/tests/.glyph-mock-race" \
+	"$ROOT/modules/wd24adv/tests/.glyph-mock-rm" \
+	"$ROOT/modules/wd24adv/tests/.glyph-mock-exp" \
+	"$ROOT/modules/wd24adv/tests/.glyph-mock-thr"
 echo "test_glyph_run: $pass passed, $fail failed"
 [ "$fail" = 0 ]
