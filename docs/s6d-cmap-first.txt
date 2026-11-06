@@ -1,8 +1,9 @@
 # First test for the colormap candidate
 
-This file does not approve a load. Nothing in the offline package insmods
-the candidate or the baseline. Do not stage either file onto the target
-from this package.
+t479u authorized the default-off regression and a recovery check before
+any later step. That is phase 1 only. The script checks the file hash
+itself. There is no prompt to type the hash. Phase 2 and phase 3 are
+not authorized. Copying this note does not insmod.
 
 ## Hashes
 
@@ -37,23 +38,32 @@ Do not overwrite the baseline file with it.
 
 ## Phase 1 — default off
 
-Load the candidate only, with the existing S6d parameters and without
-`s6d_cmap` (the default is 0).
+Script `docs/s6d-cmap-phase1-run.sh`.
+Artifact `/opt/cursor/artifacts/wd24x-cmap-phase1-run.sh`.
+Module path `/tmp/wd24adv-cmap-92591b1e.ko`.
+The insmod line omits `s6d_cmap`. The baseline file
+`/tmp/wd24adv-pr14.ko` is not the module loaded and is not written.
 
-Go: hash is `92591b1e`, `/proc/fb` is empty, and this phase was named.
-No-go: any other hash, `/proc/fb` not empty, or no person.
+The candidate proc keeps the baseline lines and adds
+`cmap_param %d published %d frozen %d`. Before the glyph client the
+script requires `cmap_param 0 published 0`. `s6d_arm` clears `frozen`.
+`s6d_fb_release` and `s6d_stop` set `frozen`, including when the
+parameter is off, so the expiry gate does not require `frozen 0`.
+It still requires `armed 0`, `fb_reg 0`, `thrash 0 latched 0`, and
+`cmap_param 0 published 0`.
 
-Expect the same text-restore shape as the baseline runs: trial expiry
-`in_text 1`, empty `/proc/fb`, `rmmod` 0. `/proc/wd24adv/s6d` includes
-`cmap_param 0 published 0 frozen 0`. `FBIOGETCMAP` is `-EINVAL`. This
-phase does not prove colours. It checks that the default does not add a
-colormap program.
+Expect the same text-restore shape as the baseline glyph pass:
+`wd24adv live: trial expiry -> 0`, `readback mismatches 0;`,
+`in_text 1;`, empty `/proc/fb`, VGA+ bind 1, `RM=0`. The glyph line
+is `WD24X-GLYPH shadow 640x480x8 marks 5 match 5 ctrl 1` with `CL=0`.
+`FBIOGETCMAP` stays `-EINVAL` because this phase does not publish a
+colormap. It does not prove colours.
 
 Stop after rmmod. Do not continue.
 
 ## Phase 2 — publish read only
 
-A later approval must name `92591b1e` and the words "phase 2".
+Not authorized. A later approval must name `92591b1e` and the words "phase 2".
 
 Same parameters plus `s6d_cmap=1`. Open the fb once. Do not run a client
 that issues `FBIOPUTCMAP`.
