@@ -37,12 +37,25 @@
  *   /proc/wd24adv/s5       - s5=1|2 only: the S5 host-data list (dryrun=1) or result
  *   /proc/wd24adv/s6       - s6=1 only: the S6 dual-window proof (dryrun=1: run on the model) or result
  *   /proc/wd24adv/s6b      - s6b=1 only: S6b session log (/dev/wd24s6b, dual-window mmap + copy)
- *   /proc/wd24adv/live     - live log; read uses trylock (never blocks on fbcon paint)
+ *   /proc/wd24adv/live     - live log; read uses trylock
+ *   /proc/wd24adv/s6d      - s6d=1 only: fault/switch counters (trylock)
  *
- * S6d: s6d=1 arms after 640x480-8; s6d_fbcon=1 (default) register_framebuffer
- * (fbcon binds). s6d_fbcon=0 skips register so pattern stays. pattern is a
- * bool (1=bars, 0=skip), not a pattern id. Never overlap serial /proc reads
- * with the visual/fbcon phase.
+ * S6d: s6d=1 arms after 640x480-8.
+ *   s6d_fbcon=0 — do not register_framebuffer (bars stay; no fbdev node).
+ *   s6d_fbcon=1 s6d_bind=1 (defaults) — register and allow fbcon open.
+ *   s6d_fbcon=1 s6d_bind=0 — register a real fb, but fb_open(info, 0)
+ *     returns -EBUSY so fbcon_startup fails and the VT is not taken over.
+ *     This is not skip_vt_switch and not DEFERRED_TAKEOVER (that needs FB=y).
+ *   s6d_cmap=0 (default) — no fb_setcmap. FBIOGETCMAP stays -EINVAL.
+ *   s6d_cmap=1 — refused unless s6d=1 s6d_fbcon=1 s6d_bind=0 dryrun=0
+ *     live=1 mode=640x480-8 and no other stage. Userspace open reads the
+ *     DAC with the vgastate sequence and publishes it only when it
+ *     matches the load snapshot. FBIOPUTCMAP then writes 3C8/3C9 and
+ *     returns 0 only after a 3C9 readback. fbcon cannot call it: bind
+ *     is 0, and the hook also refuses while busy is 0.
+ * pattern is a bool (1=bars, 0=skip), not a pattern id.
+ * Do not printk while holding hw_lock unless the fb draw path can nest:
+ * after fbcon binds, printk on console=tty0 re-enters imageblit.
  *
  * S1 (s1=1 dryrun=0, never with live=1 or mode=): after the same read-only
  * entry check, a read-only probe of the 23C0h register blocks
@@ -87,6 +100,7 @@
 #include <linux/ioport.h>
 #include <linux/console.h>
 #include <linux/mutex.h>
+#include <linux/sched.h>
 #include <linux/workqueue.h>
 #include <linux/jiffies.h>
 
@@ -98,6 +112,7 @@
 #include "wd24adv_s6b.h"
 #include "wd24adv_s6d.h"
 #include "wd24adv_ioctl.h"
+#include "wd24adv_dac_entry.h"
 #include <linux/fb.h>
 #include <linux/fs.h>
 #include <linux/device.h>
@@ -186,8 +201,58 @@ static struct wd24_ctx *ctx;
 static char *plan_txt, *modes_txt, *self_txt;
 static size_t plan_len, modes_len, self_len;
 
-/* live state; every hardware operation runs under hw_lock + console_lock */
+/* live state; every hardware operation runs under hw_lock.
+ * VGA/fbcon code takes console_lock and then this mutex. Do not take
+ * console_lock while already holding hw_lock from a path fbcon can re-enter
+ * (fault is the exception that is ordered console_lock, then hw_lock).
+ * hw_task lets fb draw nest when printk fires on the holder: the mutex
+ * itself is not recursive. */
 static DEFINE_MUTEX(hw_lock);
+static struct task_struct *hw_task;
+static int s6d_in_draw;
+
+static void hw_acq(void)
+{
+	mutex_lock(&hw_lock);
+	hw_task = current;
+}
+
+static void hw_rel(void)
+{
+	hw_task = NULL;
+	mutex_unlock(&hw_lock);
+}
+
+static int hw_try(void)
+{
+	if (!mutex_trylock(&hw_lock))
+		return 0;
+	hw_task = current;
+	return 1;
+}
+
+static bool hw_nested(void)
+{
+	return hw_task == current;
+}
+
+/* Same-task reentry (printk into fbcon while this task holds hw_lock)
+ * must not draw and must not lock again. The mutex is not recursive.
+ * A nested draw used to run whenever the outer section was not itself
+ * a draw; that touched the aperture mid-critical-section. */
+static bool s6d_registering;
+static bool wd24_exiting;
+static struct task_struct *s6d_ender;
+
+static void s6d_yield_ender(void)
+{
+	while (s6d_ender && s6d_ender != current) {
+		hw_rel();
+		schedule_timeout_uninterruptible(1);
+		hw_acq();
+	}
+}
+
 static struct wd24_ctx *hw;
 static u8 *hw_planes;
 static void __iomem *vmem;
@@ -277,18 +342,18 @@ static const struct proc_ops self_ops = {
 
 static ssize_t live_read(struct file *f, char __user *b, size_t n, loff_t *p)
 {
-	/* Never block: fbcon fillrect/imageblit can hold hw_lock for a long
-	 * pixel-by-pixel paint. Overlapping head/cat of /proc during visual
-	 * hung the serial shell on the S6d live (2026-11-05). */
+	/* Non-blocking: a draw or mode set may hold hw_lock. A blocked
+	 * proc read is not what stopped the 2026-11-05 insmod (that task
+	 * never returned to the shell). trylock still keeps a later read
+	 * from sleeping behind a long paint. */
 	static const char busy[] =
-		"wd24adv: hw busy (draw/mode/fbcon holds lock); retry -- "
-		"do not overlap /proc reads with visual\n";
+		"wd24adv: hw busy (draw/mode holds lock); retry\n";
 	ssize_t r;
 
-	if (!mutex_trylock(&hw_lock))
+	if (!hw_try())
 		return rd(b, n, p, busy, sizeof(busy) - 1);
 	r = rd(b, n, p, live_txt, live_len);
-	mutex_unlock(&hw_lock);
+	hw_rel();
 	return r;
 }
 
@@ -329,14 +394,22 @@ MODULE_PARM_DESC(s6b, "S6b: /dev/wd24s6b explicit dual-window mmap (A0000 half =
 
 static bool s6d;
 module_param(s6d, bool, 0444);
-MODULE_PARM_DESC(s6d, "S6d: fault-banked fbdev (640x480-8) using S6b dual-window + thrash latch; dryrun=0 live=1 mode=640x480-8; with s6d_fbcon=1 (default) BINDS fbcon (visual) — Brandon must watch; s6d_fbcon=0 skips register");
+MODULE_PARM_DESC(s6d, "S6d: fault-banked fbdev (640x480-8) using S6b dual-window + thrash latch; dryrun=0 live=1 mode=640x480-8; s6d_fbcon=0 skips register; s6d_fbcon=1 registers (s6d_bind selects fbcon open)");
 static unsigned int s6d_thrash_bound = WD24S6D_THRASH_BOUND_DEFAULT;
 module_param(s6d_thrash_bound, uint, 0444);
 MODULE_PARM_DESC(s6d_thrash_bound, "S6d: consecutive window-switch bound before thrash latch (default 32)");
 
 static bool s6d_fbcon = true;
 module_param(s6d_fbcon, bool, 0444);
-MODULE_PARM_DESC(s6d_fbcon, "S6d: 1 (default) register_framebuffer (fbcon binds, visual wipe); 0 arm dual-window only — no fbdev/fbcon, pattern stays for trial");
+MODULE_PARM_DESC(s6d_fbcon, "S6d: 1 (default) call register_framebuffer; 0 arm dual-window only — no fbdev node, pattern stays. Does not by itself suppress fbcon when 1; see s6d_bind");
+
+static bool s6d_bind = true;
+module_param(s6d_bind, bool, 0444);
+MODULE_PARM_DESC(s6d_bind, "S6d with s6d_fbcon=1: 1 (default) allow fb_open(info,0) so fbcon can bind; 0 return -EBUSY from that open so fbcon_startup fails and the VT stays put. Ignored when s6d_fbcon=0. Not skip_vt_switch. Requires /proc/fb empty (no fbcon driver already registered)");
+
+static bool s6d_cmap;
+module_param(s6d_cmap, bool, 0444);
+MODULE_PARM_DESC(s6d_cmap, "S6d RAMDAC fb_setcmap, default 0 (no hook, baseline palette). 1 requires s6d=1 s6d_fbcon=1 s6d_bind=0 dryrun=0 live=1 mode=640x480-8 and no other stage. No colour write at register, in text, or while frozen");
 
 static struct wd24s6 *s6st;
 static u8 *s6_save;
@@ -553,6 +626,7 @@ static int hw_run(enum hw_op op, const struct wd24_mode *m)
 	size_t len = 0;
 	int err;
 
+	s6d_yield_ender();
 	if (op != OP_LOAD) {
 		s6b_stop(op_name[op]);	/* S6b/S6d end before any mode change */
 		s6d_stop(op_name[op]);
@@ -629,12 +703,21 @@ static int hw_mode(const struct wd24_mode *m)
 
 static void trial_fn(struct work_struct *w)
 {
-	mutex_lock(&hw_lock);
+	hw_acq();
+	/* register_framebuffer may have dropped hw_lock. Do not tear the
+	 * session down under it; run this expiry once registration returns. */
+	if (s6d_registering && !READ_ONCE(wd24_exiting)) {
+		hw_rel();
+		queue_delayed_work_on(WORK_CPU_UNBOUND, system_percpu_wq,
+				      &trial_work, HZ);
+		return;
+	}
+	s6d_yield_ender();
 	if (hw && hw->trial_pending) {
 		vram_gate("trial expiry: plane restore");	/* sets no_vram if locked */
 		hw_run(OP_EXPIRE, NULL);
 	}
-	mutex_unlock(&hw_lock);
+	hw_rel();
 }
 
 static ssize_t control_write(struct file *f, const char __user *b, size_t n,
@@ -649,8 +732,8 @@ static ssize_t control_write(struct file *f, const char __user *b, size_t n,
 	cmd[k] = 0;
 	while (k && (cmd[k - 1] == '\n' || cmd[k - 1] == ' '))
 		cmd[--k] = 0;
-	/* trylock: same hang class as live_read during fbcon paint */
-	if (!mutex_trylock(&hw_lock))
+	/* trylock: do not sleep behind a draw that already holds hw_lock */
+	if (!hw_try())
 		return -EAGAIN;
 	if (!hw)
 		err = -ENODEV;
@@ -666,7 +749,7 @@ static ssize_t control_write(struct file *f, const char __user *b, size_t n,
 		err = hw_mode(wd24_mode_find(cmd + 5));
 	else
 		err = -EINVAL;
-	mutex_unlock(&hw_lock);
+	hw_rel();
 	if (!strcmp(cmd, "confirm") && !err)
 		pr_info("mode confirmed: kept until \"text\" or rmmod\n");
 	return err ? err : n;
@@ -824,7 +907,7 @@ static int s1_live(void)
 	wd24s1_init(s1st, &wd24s1_kernel_io);
 	s1st->strict_echo = s1_echo;
 
-	mutex_lock(&hw_lock);
+	hw_acq();
 	console_lock();
 	hw->be->begin(hw);
 	entry_err = wd24_entry_check(hw, WD24_PH_LOAD);
@@ -841,7 +924,7 @@ static int s1_live(void)
 		wd24s1_run(s1st);
 #endif
 	console_unlock();
-	mutex_unlock(&hw_lock);
+	hw_rel();
 	release_region(WD24S1_P_INDEX, 4);
 	release_region(VGA_PORTS, VGA_NPORTS);
 
@@ -962,7 +1045,7 @@ static int s2_live(void)
 	hw->fix_sr06 = fix_sr06;
 	wd24s2_init(s2st, &wd24s2_kernel_io);
 
-	mutex_lock(&hw_lock);
+	hw_acq();
 	console_lock();
 	hw->be->begin(hw);
 	entry_err = wd24_entry_check(hw, WD24_PH_LOAD);
@@ -979,7 +1062,7 @@ static int s2_live(void)
 		wd24s2_run(s2st);
 #endif
 	console_unlock();
-	mutex_unlock(&hw_lock);
+	hw_rel();
 	release_region(WD24S1_P_INDEX, 4);
 	release_region(VGA_PORTS, VGA_NPORTS);
 
@@ -1247,9 +1330,9 @@ static int s3_fake_run(void)
 		return -ENOMEM;
 	for (i = 0; i < 7 * WD24S3_WIN; i++)
 		wd24s3_fake_vram[i] = (u8)(i * 7 + (i >> 9));
-	mutex_lock(&hw_lock);
+	hw_acq();
 	s3_live(NULL);
-	mutex_unlock(&hw_lock);
+	hw_rel();
 	vfree(wd24s3_fake_vram);
 	wd24s3_fake_vram = NULL;
 	return 0;
@@ -1464,7 +1547,7 @@ static int s6b_fopen(struct inode *in, struct file *f)
 {
 	int err = 0;
 
-	mutex_lock(&hw_lock);
+	hw_acq();
 	if (s6b_busy)
 		err = -EBUSY;
 #ifndef WD24S1_QEMU_FAKE
@@ -1489,16 +1572,16 @@ static int s6b_fopen(struct inode *in, struct file *f)
 			s6b_sync(false);
 		}
 	}
-	mutex_unlock(&hw_lock);
+	hw_rel();
 	return err;
 }
 
 static int s6b_frelease(struct inode *in, struct file *f)
 {
-	mutex_lock(&hw_lock);
+	hw_acq();
 	s6b_end_locked("release (close / munmap / exit)");
 	s6b_busy = false;
-	mutex_unlock(&hw_lock);
+	hw_rel();
 	return 0;
 }
 
@@ -1509,9 +1592,9 @@ static int s6b_fmmap(struct file *f, struct vm_area_struct *vma)
 
 	if (vma->vm_pgoff || len > 0x10000)
 		return -EINVAL;
-	mutex_lock(&hw_lock);
+	hw_acq();
 	if (!s6b_st || s6b_st->state != WD24S6B_ON) {
-		mutex_unlock(&hw_lock);
+		hw_rel();
 		return -ENODEV;
 	}
 	vm_flags_set(vma, VM_DONTCOPY | VM_DONTEXPAND | VM_DONTDUMP);
@@ -1523,7 +1606,7 @@ static int s6b_fmmap(struct file *f, struct vm_area_struct *vma)
 					       vma->vm_end, 0xa0000);
 	err = vm_iomap_memory(vma, 0xa0000, 0x10000);
 #endif
-	mutex_unlock(&hw_lock);
+	hw_rel();
 	return err;
 }
 
@@ -1549,7 +1632,7 @@ static long s6b_fioctl(struct file *f, unsigned int cmd, unsigned long arg)
 	default:
 		return -ENOTTY;
 	}
-	mutex_lock(&hw_lock);
+	hw_acq();
 	if (cmd == WD24S6B_IOC_INFO) {
 		memset(&in, 0, sizeof(in));
 		in.state = s6b_st->state;
@@ -1560,11 +1643,11 @@ static long s6b_fioctl(struct file *f, unsigned int cmd, unsigned long arg)
 		in.nwr = s6b_st->nwr;
 		in.vram = WD24S6B_VRAM;
 		in.frame = WD24S6B_FRAME;
-		mutex_unlock(&hw_lock);
+		hw_rel();
 		return copy_to_user(up, &in, sizeof(in)) ? -EFAULT : 0;
 	}
 	if (s6b_st->state != WD24S6B_ON) {
-		mutex_unlock(&hw_lock);
+		hw_rel();
 		return -EIO;
 	}
 	s6b_sync(true);
@@ -1583,7 +1666,7 @@ static long s6b_fioctl(struct file *f, unsigned int cmd, unsigned long arg)
 			       s6b_st->why ? s6b_st->why : "?");
 		}
 	}
-	mutex_unlock(&hw_lock);
+	hw_rel();
 	return err;
 }
 
@@ -1726,40 +1809,95 @@ static struct wd24s6d *s6d_st;
 static struct wd24s6b *s6d_b;
 static struct fb_info *s6d_info;
 static bool s6d_armed, s6d_busy;
+static bool s6d_cmap_published, s6d_cmap_frozen;
 static struct vm_area_struct *s6d_vma;	/* exclusive single mapper */
+
+/* Drop every userspace PTE before the aperture is reprogrammed or the
+ * module's vm_ops go away. Caller holds hw_lock. Order matches
+ * wd24s6d_stop_step(): quiesce, unmap, then the caller ends the session.
+ * unmap_mapping_range takes its own locks, so hw_lock is dropped across it.
+ * stopping is set first so a fault cannot pass its check in that window. */
+static void s6d_drop_maps(void)
+{
+	struct address_space *mapping = NULL;
+
+	if (s6d_st)
+		s6d_st->stopping = true;
+	if (s6d_vma && s6d_vma->vm_file)
+		mapping = s6d_vma->vm_file->f_mapping;
+	s6d_vma = NULL;
+	if (!mapping)
+		return;
+	hw_rel();
+	unmap_mapping_range(mapping, 0, 0, 1);
+	hw_acq();
+}
 
 static void s6d_end_locked(const char *why)
 {
+	u32 nf, ns, nt;
 	int err;
 
+	/* Caller holds hw_lock. A fault holds console_lock, then hw_lock.
+	 * Taking console_lock here while still holding hw_lock deadlocks
+	 * that fault. Drop hw first. s6d_ender keeps another hw_run from
+	 * restoring text until wd24s6b_end has finished. */
+	s6d_yield_ender();
 	if (!s6d_st || !s6d_st->active)
 		return;
-	if (s6d_info && s6d_st->fb_reg) {
-		/* unregister drops fbcon; must not hold console_lock here */
-	}
-	S6B_HW_BEGIN();
-	err = wd24s6b_end(s6d_b);
-	S6B_HW_END();
-	if (err)
-		pr_err("S6d: end (%s): %d\n", why, err);
-	else
-		pr_info("S6d: end (%s): faults %u switches %u thrash %u\n",
-			why, s6d_st->nfault, s6d_st->nswitch, s6d_st->nthrash);
+	s6d_ender = current;
+	nf = s6d_st->nfault;
+	ns = s6d_st->nswitch;
+	nt = s6d_st->nthrash;
 	s6d_st->active = false;
 	s6d_st->mapped_base = ~0u;
 	s6d_vma = NULL;
 	wd24s6d_thrash_reset(&s6d_st->thrash);
+	hw_rel();
+#ifndef WD24S1_QEMU_FAKE
+	console_lock();
+#endif
+	hw_acq();
+#ifndef WD24S1_QEMU_FAKE
+	if (hw) {
+		hw->be->begin(hw);
+		hw->tag = "S6d: end session";
+	}
+#endif
+	err = wd24s6b_end(s6d_b);
+#ifndef WD24S1_QEMU_FAKE
+	if (hw)
+		hw->be->end(hw);
+	console_unlock();
+#endif
+	/* Drop hw before printk. A fault may hold console_lock and be
+	 * waiting for hw_lock; printing while holding hw_lock deadlocks it.
+	 * s6d_ender stays set so another hw_run does not restore text yet. */
+	hw_rel();
+	if (err)
+		pr_err("S6d: end (%s): %d\n", why, err);
+	else
+		pr_info("S6d: end (%s): faults %u switches %u thrash %u\n",
+			why, nf, ns, nt);
+	s6d_ender = NULL;
+	hw_acq();
 }
 
 static void s6d_stop(const char *why)
 {
 	bool need_unreg = false;
 
+	/* Before any lock drop. A SET waiting on hw_lock must see this
+	 * and return without a 3C9 write. Text restore follows s6d_stop. */
+	s6d_cmap_frozen = true;
+	/* quiesce + unmap, end-session, then unregister. text-restore is
+	 * hw_run's next step (trial expiry, "text", rmmod), not here. */
 	s6d_armed = false;
 	if (s6d_st && s6d_st->fb_reg) {
 		s6d_st->fb_reg = false;
 		need_unreg = true;
 	}
+	s6d_drop_maps();
 	s6d_end_locked(why);
 	s6d_busy = false;
 	/*
@@ -1767,9 +1905,9 @@ static void s6d_stop(const char *why)
 	 * callbacks re-enter). hw_run holds hw_lock; drop it around unregister.
 	 */
 	if (need_unreg && s6d_info) {
-		mutex_unlock(&hw_lock);
+		hw_rel();
 		unregister_framebuffer(s6d_info);
-		mutex_lock(&hw_lock);
+		hw_acq();
 	}
 }
 
@@ -1777,27 +1915,44 @@ static vm_fault_t s6d_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	unsigned long off;
-	int err;
+	const char *why = "refused";
+	int err = 0;
 
 	off = (vmf->address - vma->vm_start) + (vma->vm_pgoff << PAGE_SHIFT);
 	if (off >= WD24S6D_MMAP_LEN)
 		return VM_FAULT_SIGBUS;
-	mutex_lock(&hw_lock);
-	if (!s6d_st || !s6d_st->active || !s6d_armed || vma != s6d_vma) {
-		mutex_unlock(&hw_lock);
-		return VM_FAULT_SIGBUS;
+	/* console_lock then hw_lock, same order as fbcon. Both sleeps are
+	 * uninterruptible: a userspace alarm or SIGKILL cannot pull the
+	 * task out of this fault. */
+#ifndef WD24S1_QEMU_FAKE
+	console_lock();
+#endif
+	hw_acq();
+	if (!s6d_st || !s6d_st->active || !s6d_armed || s6d_st->stopping ||
+	    vma != s6d_vma) {
+		err = -ENODEV;
+		goto out;
 	}
-	if (s6d_st->thrash.latched) {
-		mutex_unlock(&hw_lock);
-		return VM_FAULT_SIGBUS;
+#ifndef WD24S1_QEMU_FAKE
+	if (hw) {
+		hw->be->begin(hw);
+		hw->tag = "S6d: fault bank";
 	}
-	S6B_HW_BEGIN();
+#endif
 	err = wd24s6d_map_win(s6d_st, vma, (u32)off);
-	S6B_HW_END();
-	mutex_unlock(&hw_lock);
+	if (s6d_st->why)
+		why = s6d_st->why;
+#ifndef WD24S1_QEMU_FAKE
+	if (hw)
+		hw->be->end(hw);
+#endif
+out:
+	hw_rel();
+#ifndef WD24S1_QEMU_FAKE
+	console_unlock();
+#endif
 	if (err) {
-		pr_err("S6d: fault off=%lx: %d (%s)\n", off, err,
-				   s6d_st->why ? s6d_st->why : "?");
+		pr_err("S6d: fault off=%lx: %d (%s)\n", off, err, why);
 		return VM_FAULT_SIGBUS;
 	}
 	return VM_FAULT_NOPAGE;
@@ -1805,10 +1960,10 @@ static vm_fault_t s6d_fault(struct vm_fault *vmf)
 
 static void s6d_vma_close(struct vm_area_struct *vma)
 {
-	mutex_lock(&hw_lock);
+	hw_acq();
 	if (vma == s6d_vma)
 		s6d_vma = NULL;
-	mutex_unlock(&hw_lock);
+	hw_rel();
 }
 
 static const struct vm_operations_struct s6d_vm_ops = {
@@ -1820,61 +1975,264 @@ static int s6d_fb_mmap(struct fb_info *info, struct vm_area_struct *vma)
 {
 	unsigned long len = vma->vm_end - vma->vm_start;
 
-	if (vma->vm_pgoff || len > WD24S6D_MMAP_LEN)
+	if (vma->vm_pgoff || !len || len > WD24S6D_MMAP_LEN)
 		return -EINVAL;
-	mutex_lock(&hw_lock);
-	if (!s6d_st || !s6d_st->active || !s6d_armed) {
-		mutex_unlock(&hw_lock);
+	hw_acq();
+	if (!s6d_st || !s6d_st->active || !s6d_armed || s6d_st->stopping) {
+		hw_rel();
 		return -ENODEV;
 	}
 	if (s6d_vma) {
-		mutex_unlock(&hw_lock);
+		hw_rel();
 		return -EBUSY;
 	}
-	vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
+	vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP |
+		     VM_DONTCOPY);
 	vma->vm_ops = &s6d_vm_ops;
 	vma->vm_private_data = info;
 	s6d_vma = vma;
 	s6d_st->mapped_base = ~0u;
-	mutex_unlock(&hw_lock);
+	hw_rel();
 	return 0;
+}
+
+static void s6d_cmap_out(void *p, u8 v, u16 port)
+{
+	struct wd24_ctx *c = p;
+
+	c->io->outb(c->io->priv, v, port);
+	if (port == WD24_DAC_RI || port == WD24_DAC_WI)
+		c->hw_index++;
+	else
+		c->hw_data++;
+}
+
+static u8 s6d_cmap_in(void *p, u16 port)
+{
+	struct wd24_ctx *c = p;
+
+	return c->io->inb(c->io->priv, port);
+}
+
+static void s6d_cmap_view(struct wd24_cmap_view *v)
+{
+	memset(v, 0, sizeof(*v));
+	v->param = s6d_cmap;
+	v->dryrun = dryrun;
+	v->live = live;
+	v->bind = s6d_bind;
+	v->fbcon = s6d_fbcon;
+	v->armed = s6d_armed;
+	v->active = s6d_st && s6d_st->active;
+	v->stopping = s6d_st && s6d_st->stopping;
+	v->busy = s6d_busy;
+	v->registering = s6d_registering;
+	v->in_text = !hw || hw->in_text;
+	v->hw_dead = hw_dead || !hw;
+	v->have_cmap = hw && (hw->have & WD24_HAVE_CMAP);
+	v->bad = !hw || hw->nmismatch || hw->failed;
+	v->published = s6d_cmap_published;
+	v->frozen = s6d_cmap_frozen;
+}
+
+/* len = 0, arrays kept. framebuffer_release is what frees them. */
+static void s6d_cmap_invalidate(struct fb_info *info)
+{
+	s6d_cmap_published = false;
+	if (info->cmap.len)
+		info->cmap.len = 0;
+}
+
+static void s6d_cmap_apply(struct fb_info *info, struct wd24_cmap_fault f)
+{
+	unsigned int failed, nmis;
+
+	if (f.latch && hw) {
+		failed = hw->failed;
+		nmis = hw->nmismatch;
+		wd24_cmap_latch(&failed, &nmis);
+		hw->failed = failed;
+		hw->nmismatch = nmis;
+	}
+	if (f.rewrite && hw && info->cmap.red && info->cmap.green &&
+	    info->cmap.blue) {
+		if (info->cmap.len != 256)
+			info->cmap.len = 256;
+		wd24_dac_expand_image(hw->cmap, info->cmap.red, info->cmap.green,
+				      info->cmap.blue);
+		s6d_cmap_published = true;
+	} else if (f.invalidate || f.rewrite) {
+		s6d_cmap_invalidate(info);
+	} else {
+		s6d_cmap_published = f.published;
+	}
+}
+
+/* Caller holds info->lock and hw_lock. A matching read publishes <<10.
+ * The read writes 3C6=FFh and 3C7=00 before the compare. It does not
+ * write 3C9. A mismatch latches failed and does not free the cache.
+ * busy is the caller's job, after this returns 0. */
+static int s6d_cmap_publish(struct fb_info *info)
+{
+	u8 live_dac[768];
+	struct wd24_cmap_fault f;
+	int err;
+
+	BUILD_BUG_ON(EPERM != 1 || EIO != 5 || EBUSY != 16 ||
+		     ENODEV != 19 || EINVAL != 22);
+	if (!s6d_cmap)
+		return 0;
+	err = wd24_cmap_before_read(s6d_cmap_frozen, hw_dead || !hw,
+				    hw && (hw->have & WD24_HAVE_CMAP),
+				    !hw || hw->in_text,
+				    !hw || hw->nmismatch || hw->failed);
+	if (err || !hw || !hw->io || !hw->be->dac_read)
+		return err ? err : -ENODEV;
+	hw->be->dac_read(hw, 0xff, live_dac);
+	if (wd24_dac_diff6(live_dac, hw->cmap)) {
+		f = wd24_cmap_read_mismatch();
+		s6d_cmap_apply(info, f);
+		return f.err;
+	}
+	if (!(info->cmap.len == 256 && info->cmap.red && info->cmap.green &&
+	      info->cmap.blue)) {
+		if (info->cmap.red || info->cmap.green || info->cmap.blue ||
+		    info->cmap.transp) {
+			if (!info->cmap.red || !info->cmap.green || !info->cmap.blue)
+				return -EBUSY;
+			info->cmap.len = 256;
+		} else {
+			err = fb_alloc_cmap(&info->cmap, 256, 0);
+			if (err)
+				return err;
+		}
+	}
+	wd24_dac_expand_image(hw->cmap, info->cmap.red, info->cmap.green,
+			      info->cmap.blue);
+	s6d_cmap_published = true;
+	return 0;
+}
+
+/* FBIOPUTCMAP holds info->lock, then this takes hw_lock.
+ * FBIOPUT_VSCREENINFO holds console_lock, then info->lock, then
+ * fb_set_var calls fb_set_cmap on the published cache. Same lock order
+ * as a fault (console, then hw). This function does not print: the
+ * caller may already hold console_lock. */
+static int s6d_fb_setcmap(struct fb_cmap *cmap, struct fb_info *info)
+{
+	struct wd24_cmap_view view;
+	struct wd24_cmap_fault f;
+	struct wd24_dac_io dio;
+	unsigned int i;
+	int err, rst;
+
+	if (!cmap || !cmap->red || !cmap->green || !cmap->blue ||
+	    cmap->start > 255 || cmap->len == 0 ||
+	    cmap->len > 256 - cmap->start)
+		return -EINVAL;
+	hw_acq();
+	s6d_cmap_view(&view);
+	err = wd24_cmap_allow(&view);
+	if (err || !hw || !hw->io || !hw->io->outb || !hw->io->inb ||
+	    info->cmap.len != 256 || !info->cmap.red) {
+		hw_rel();
+		return err ? err : -ENODEV;
+	}
+	dio.outb = s6d_cmap_out;
+	dio.inb = s6d_cmap_in;
+	dio.p = hw;
+	wd24_dac_mask_ff(&dio);
+	for (i = 0; i < cmap->len; i++) {
+		struct wd24_dac_entry ent;
+
+		err = wd24_dac_entry(cmap->start + i, cmap->red[i],
+				     cmap->green[i], cmap->blue[i], &ent);
+		if (!err)
+			err = wd24_dac_put_entry(&dio, ent.index,
+						 ent.rgb[0], ent.rgb[1],
+						 ent.rgb[2]);
+		if (err)
+			break;
+	}
+	if (!err) {
+		hw_rel();
+		return 0;
+	}
+	rst = wd24_restore_cmap(hw);
+	f = wd24_cmap_settle(err, rst, 1);
+	s6d_cmap_apply(info, f);
+	hw_rel();
+	return f.err;
 }
 
 static int s6d_fb_open(struct fb_info *info, int user)
 {
 	int err = 0;
 
+	/* user=0 is fbcon. Refusing it makes fbcon_startup return NULL on
+	 * the first registration, so do_take_over_console does not bind.
+	 * Safe only when no framebuffer is already registered (fbcon's
+	 * console driver is not in the table yet). /proc/fb must be empty. */
 	if (!user)
-		return 0;
-	mutex_lock(&hw_lock);
-	if (s6d_busy)
+		return s6d_bind ? 0 : -EBUSY;
+	hw_acq();
+	s6d_yield_ender();
+	if (s6d_st && s6d_st->stopping)
+		err = -ENODEV;
+	else if (s6d_busy)
 		err = -EBUSY;
 #ifndef WD24S1_QEMU_FAKE
-	else if (!s6d_armed || !hw || hw_dead || hw->in_text || hw->nmismatch ||
-		 !vmem || hw->no_vram || vram_dead)
+	else if (!s6d_st || !s6d_armed || !hw || hw_dead || hw->in_text ||
+		 hw->nmismatch || !vmem || hw->no_vram || vram_dead)
 		err = -ENODEV;
 #else
-	else if (!s6d_armed)
+	else if (!s6d_st || !s6d_armed)
 		err = -ENODEV;
 #endif
 	else if (!s6d_st->active) {
-		S6B_HW_BEGIN();
+		/* console_lock, then hw_lock. A fault already holds console. */
+		s6d_ender = current;
+		hw_rel();
+#ifndef WD24S1_QEMU_FAKE
+		console_lock();
+#endif
+		hw_acq();
+#ifndef WD24S1_QEMU_FAKE
+		if (hw) {
+			hw->be->begin(hw);
+			hw->tag = "S6d: fb open";
+		}
+#endif
 		err = wd24s6b_begin(s6d_b, s6b_io ? s6b_io : &s6_live_io);
-		S6B_HW_END();
+#ifndef WD24S1_QEMU_FAKE
+		if (hw)
+			hw->be->end(hw);
+		console_unlock();
+#endif
+		s6d_ender = NULL;
 		if (err) {
-			pr_err("S6d: begin failed %d\n", err);
 			s6d_b->state = WD24S6B_OFF;
 		} else {
 			s6d_st->active = true;
-			s6d_busy = true;
+			s6d_st->stopping = false;
 			wd24s6d_thrash_reset(&s6d_st->thrash);
 			s6d_st->mapped_base = ~0u;
-			pr_info("S6d: session ON (fb open)\n");
+			if (!s6d_cmap)
+				s6d_busy = true;
 		}
-	} else {
+	} else if (!s6d_cmap) {
 		s6d_busy = true;
 	}
-	mutex_unlock(&hw_lock);
+	if (!err && s6d_cmap) {
+		err = s6d_cmap_publish(info);
+		if (!err)
+			s6d_busy = true;
+	}
+	hw_rel();
+	if (err)
+		pr_err("S6d: fb open failed %d\n", err);
+	else if (s6d_busy)
+		pr_info("S6d: session ON (fb open)\n");
 	return err;
 }
 
@@ -1882,19 +2240,53 @@ static int s6d_fb_release(struct fb_info *info, int user)
 {
 	if (!user)
 		return 0;
-	mutex_lock(&hw_lock);
+	hw_acq();
+	s6d_cmap_frozen = true;
+	s6d_yield_ender();
+	/* munmap already ran on process exit; this also covers close()
+	 * while a VMA still exists. */
+	s6d_drop_maps();
 	s6d_end_locked("fb release");
 	s6d_busy = false;
-	mutex_unlock(&hw_lock);
+	hw_rel();
 	return 0;
 }
 
-/* Banked CPU fill for fbcon — SETWIN + A0000 writes; no accel. */
+/* Banked CPU fill for fbcon — SETWIN + A0000 writes; no accel.
+ * printk on console=tty0 re-enters these while the same task holds
+ * hw_lock. Nest instead of taking the mutex again, and do not print
+ * from inside the draw (that recurses). */
+static bool s6d_draw_enter(bool *took)
+{
+	/* Any same-task reentry already holds hw_lock. Drawing here would
+	 * run inside that critical section; locking again would sleep forever. */
+	if (hw_nested())
+		return false;
+	*took = true;
+	hw_acq();
+	/* Do not yield here. fbcon calls this with console_lock held, and
+	 * the end path is waiting for that lock. */
+	if (!s6d_st || !s6d_st->active || s6d_st->stopping || !vmem) {
+		hw_rel();
+		return false;
+	}
+	s6d_in_draw++;
+	return true;
+}
+
+static void s6d_draw_leave(bool took)
+{
+	if (s6d_in_draw)
+		s6d_in_draw--;
+	if (took)
+		hw_rel();
+}
+
 static int s6d_ensure_off(u32 off)
 {
 	u32 w0, w1, base, win, pg;
 
-	if (!s6d_st || !s6d_st->active || !vmem)
+	if (!s6d_st || !s6d_st->active || s6d_st->stopping || !vmem)
 		return -ENODEV;
 	base = wd24s6d_win_base_pg(off);
 	win = s6d_st->mapped_base;
@@ -1928,25 +2320,29 @@ static void s6d_fillrect(struct fb_info *info, const struct fb_fillrect *r)
 		w = WD24S6D_XRES - x;
 	if (y + h > WD24S6D_YRES)
 		h = WD24S6D_YRES - y;
-	mutex_lock(&hw_lock);
-	if (!s6d_st || !s6d_st->active || !vmem)
-		goto out;
-	for (row = 0; row < h; row++) {
-		for (col = 0; col < w; col++) {
-			u32 off = (y + row) * WD24S6D_LINE + x + col;
-			u32 local;
+	{
+		bool took = false;
+		const char *why = NULL;
 
-			if (s6d_ensure_off(off)) {
-				pr_err("S6d: fillrect stop (%s)\n",
-						   s6d_st->why ? s6d_st->why : "?");
-				goto out;
+		if (!s6d_draw_enter(&took))
+			return;
+		for (row = 0; row < h && !why; row++) {
+			for (col = 0; col < w; col++) {
+				u32 off = (y + row) * WD24S6D_LINE + x + col;
+				u32 local;
+
+				if (s6d_ensure_off(off)) {
+					why = s6d_st->why ? s6d_st->why : "?";
+					break;
+				}
+				local = off - (s6d_st->mapped_base << 12);
+				writeb((u8)color, vmem + local);
 			}
-			local = off - (s6d_st->mapped_base << 12);
-			writeb((u8)color, vmem + local);
 		}
+		s6d_draw_leave(took);
+		if (why)
+			pr_err("S6d: fillrect stop (%s)\n", why);
 	}
-out:
-	mutex_unlock(&hw_lock);
 }
 
 static void s6d_copyarea(struct fb_info *info, const struct fb_copyarea *a)
@@ -1974,27 +2370,32 @@ static void s6d_imageblit(struct fb_info *info, const struct fb_image *img)
 		h = WD24S6D_YRES - y;
 	src = img->data;
 	src_stride = (img->width + 7) >> 3;
-	mutex_lock(&hw_lock);
-	if (!s6d_st || !s6d_st->active || !vmem)
-		goto out;
-	for (row = 0; row < h; row++) {
-		for (col = 0; col < w; col++) {
-			u32 off = (y + row) * WD24S6D_LINE + x + col;
-			u32 local;
-			u8 bit = src[row * src_stride + (col >> 3)] & (0x80 >> (col & 7));
-			u8 pix = bit ? (u8)fg : (u8)bg;
+	{
+		bool took = false;
+		const char *why = NULL;
 
-			if (s6d_ensure_off(off)) {
-				pr_err("S6d: imageblit stop (%s)\n",
-						   s6d_st->why ? s6d_st->why : "?");
-				goto out;
+		if (!s6d_draw_enter(&took))
+			return;
+		for (row = 0; row < h && !why; row++) {
+			for (col = 0; col < w; col++) {
+				u32 off = (y + row) * WD24S6D_LINE + x + col;
+				u32 local;
+				u8 bit = src[row * src_stride + (col >> 3)] &
+					 (0x80 >> (col & 7));
+				u8 pix = bit ? (u8)fg : (u8)bg;
+
+				if (s6d_ensure_off(off)) {
+					why = s6d_st->why ? s6d_st->why : "?";
+					break;
+				}
+				local = off - (s6d_st->mapped_base << 12);
+				writeb(pix, vmem + local);
 			}
-			local = off - (s6d_st->mapped_base << 12);
-			writeb(pix, vmem + local);
 		}
+		s6d_draw_leave(took);
+		if (why)
+			pr_err("S6d: imageblit stop (%s)\n", why);
 	}
-out:
-	mutex_unlock(&hw_lock);
 }
 
 static const struct fb_ops s6d_fbops = {
@@ -2007,9 +2408,26 @@ static const struct fb_ops s6d_fbops = {
 	.fb_imageblit	= s6d_imageblit,
 };
 
+static const struct fb_ops s6d_fbops_cmap = {
+	.owner		= THIS_MODULE,
+	.fb_open	= s6d_fb_open,
+	.fb_release	= s6d_fb_release,
+	.fb_mmap	= s6d_fb_mmap,
+	.fb_fillrect	= s6d_fillrect,
+	.fb_copyarea	= s6d_copyarea,
+	.fb_imageblit	= s6d_imageblit,
+	.fb_setcmap	= s6d_fb_setcmap,
+};
+
 static void s6d_free(void)
 {
+	bool took = !hw_nested();
+
+	if (took)
+		hw_acq();
 	s6d_stop("free");
+	if (took)
+		hw_rel();
 	if (s6d_info) {
 		framebuffer_release(s6d_info);
 		s6d_info = NULL;
@@ -2041,7 +2459,8 @@ static int s6d_setup(void)
 	if (!info)
 		return -ENOMEM;
 	s6d_info = info;
-	info->fbops = &s6d_fbops;
+	info->node = -1;		/* 0 would look linked before register */
+	info->fbops = s6d_cmap ? &s6d_fbops_cmap : &s6d_fbops;
 	info->flags = FBINFO_VIRTFB;
 	info->screen_base = NULL;	/* no linear/shadow; mmap is fault-banked */
 	info->screen_size = WD24S6D_MMAP_LEN;
@@ -2091,6 +2510,8 @@ static void s6d_arm(const struct wd24_mode *m)
 	}
 	if (!s6d_info || !s6d_st)
 		return;
+	s6d_cmap_frozen = false;
+	s6d_cmap_published = false;
 	s6d_armed = true;
 	S6B_HW_BEGIN();
 	err = wd24s6b_begin(s6d_b, s6b_io ? s6b_io : &s6_live_io);
@@ -2102,38 +2523,128 @@ static void s6d_arm(const struct wd24_mode *m)
 		return;
 	}
 	s6d_st->active = true;
-	s6d_busy = true;
+	s6d_st->stopping = false;
+	s6d_busy = false;	/* userspace open is separate from the arm session */
 	if (!s6d_fbcon) {
-		/* Dual-window armed; no fbdev node → no fbcon wipe. Pattern
-		 * (if pattern=1) stays for the trial window. Matches design
-		 * optional "no bind" proof path; default remains register. */
+		/* Unchanged: no fbdev node, so no fbcon and no mmap. */
 		s6d_st->fb_reg = false;
-		pr_info("S6d: armed WITHOUT register_framebuffer (s6d_fbcon=0; no fbcon; pattern stays); thrash bound %u\n",
+		pr_info("S6d: armed WITHOUT register_framebuffer (s6d_fbcon=0; no fb node; pattern stays); thrash bound %u\n",
 			s6d_thrash_bound);
 		return;
 	}
-	/* drop hw_lock around register_framebuffer (fbcon may call fb_open) */
-	mutex_unlock(&hw_lock);
-	err = register_framebuffer(s6d_info);
-	mutex_lock(&hw_lock);
-	if (err) {
-		pr_err("S6d: register_framebuffer failed %d\n", err);
-		s6d_end_locked("register fail");
-		s6d_busy = false;
-		s6d_armed = false;
+	if (!s6d_bind) {
+		/* fb_open(0) returns -EBUSY without taking hw_lock, and
+		 * fbcon_startup fails before any draw. Holding hw_lock
+		 * keeps the trial worker out of the session. The module
+		 * cannot see whether fbcon's console driver is already
+		 * registered (filp_open/kernel_read are not exported);
+		 * that check is a shell step before insmod. */
+		err = register_framebuffer(s6d_info);
+	} else {
+		/* fbcon draw takes hw_lock under console_lock. Cannot hold
+		 * hw_lock across register or that draw sleeps forever. */
+		s6d_registering = true;
+		hw_rel();
+		err = register_framebuffer(s6d_info);
+		hw_acq();
+		s6d_registering = false;
+	}
+	if (!s6d_armed || (s6d_st && s6d_st->stopping)) {
+		if (s6d_info && s6d_info->node >= 0) {
+			s6d_st->fb_reg = true;
+			s6d_stop("stopped during register");
+		}
 		return;
 	}
-	if (!s6d_armed) {
-		/* stopped while unlocked */
-		mutex_unlock(&hw_lock);
-		unregister_framebuffer(s6d_info);
-		mutex_lock(&hw_lock);
+	if (!s6d_bind) {
+		int node = s6d_info ? s6d_info->node : -1;
+
+		/* fbcon_startup failed: device is linked, VT was not bound.
+		 * Any other result (including 0) means bind was not refused. */
+		if (err == -ENODEV && node >= 0) {
+			s6d_st->fb_reg = true;
+			hw_rel();
+			pr_info("S6d: registered fb%d WITHOUT fbcon bind (s6d_bind=0, fb_open(0) refused, register %d); thrash bound %u\n",
+				node, err, s6d_thrash_bound);
+			pr_info("S6d: STOP if dmesg shows Console: switching to colour — bind was not refused\n");
+			hw_acq();
+			return;
+		}
+		hw_rel();
+		pr_err("S6d: s6d_bind=0 fail closed (register %d, node %d)\n",
+		       err, node);
+		hw_acq();
+		if (node >= 0 && s6d_st) {
+			s6d_st->fb_reg = true;
+			s6d_stop("bind=0 refused result");
+		} else {
+			s6d_end_locked("bind=0 register failed");
+			s6d_armed = false;
+			s6d_busy = false;
+		}
+		return;
+	}
+	if (err || !s6d_info || s6d_info->node < 0) {
+		int node = s6d_info ? s6d_info->node : -1;
+
+		hw_rel();
+		pr_err("S6d: register_framebuffer failed %d (node %d)\n", err, node);
+		hw_acq();
+		if (node >= 0 && s6d_st) {
+			s6d_st->fb_reg = true;
+			s6d_stop("register fail");
+		} else {
+			s6d_end_locked("register fail");
+			s6d_armed = false;
+			s6d_busy = false;
+		}
 		return;
 	}
 	s6d_st->fb_reg = true;
-	pr_info("S6d: armed + registered fb%d (VISUAL: fbcon may bind); thrash bound %u\n",
-		s6d_info->node, s6d_thrash_bound);
+	{
+		int node = s6d_info->node;
+
+		/* Outside hw_lock: tty0 printk would re-enter imageblit. */
+		hw_rel();
+		pr_info("S6d: armed + registered fb%d (s6d_bind=1; fbcon may bind); thrash bound %u\n",
+			node, s6d_thrash_bound);
+		hw_acq();
+	}
 }
+
+static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
+{
+	char local[640];
+	int len;
+	static const char busy[] = "wd24adv s6d: hw busy; retry\n";
+
+	if (!hw_try())
+		return rd(b, n, p, busy, sizeof(busy) - 1);
+	if (!s6d_st) {
+		len = scnprintf(local, sizeof(local), "s6d: not set up\n");
+	} else {
+		len = scnprintf(local, sizeof(local),
+			"s6d: armed %d active %d stopping %d busy %d fb_reg %d node %d\n"
+			"fbcon_param %d bind_param %d\n"
+			"faults %u switches %u thrash %u latched %u mapped_base 0x%x\n"
+			"why %s\n"
+			"cmap_param %d published %d frozen %d\n",
+			s6d_armed, s6d_st->active, s6d_st->stopping, s6d_busy,
+			s6d_st->fb_reg, s6d_info ? s6d_info->node : -1,
+			s6d_fbcon, s6d_bind,
+			s6d_st->nfault, s6d_st->nswitch, s6d_st->nthrash,
+			s6d_st->thrash.latched, s6d_st->mapped_base,
+			s6d_st->why ? s6d_st->why : "-",
+			s6d_cmap, s6d_cmap_published, s6d_cmap_frozen);
+	}
+	hw_rel();
+	if (len < 0)
+		return -EINVAL;
+	return rd(b, n, p, local, (size_t)len);
+}
+
+static const struct proc_ops s6d_ops = {
+	.proc_read = s6d_read, .proc_lseek = default_llseek };
 
 
 /* live: claim the ports, map A0000, save the text state */
@@ -2160,9 +2671,9 @@ static int live_start(void)
 	hw->planes = hw_planes;
 	hw->allow_clock = allow_clock;
 	hw->fix_sr06 = fix_sr06;
-	mutex_lock(&hw_lock);
+	hw_acq();
 	err = hw_run(OP_LOAD, NULL);
-	mutex_unlock(&hw_lock);
+	hw_rel();
 	return err;
 }
 
@@ -2260,6 +2771,13 @@ static int __init wd24adv_init(void)
 #endif
 	if (!s1_echo && !s1) {
 		pr_err("s1_echo= needs s1=1\n");
+		return -EINVAL;
+	}
+	if (wd24_cmap_param_refuse(s6d_cmap, s6d, dryrun, live, s6d_bind,
+				   s6d_fbcon,
+				   mode && !strcmp(mode, "640x480-8"),
+				   s1 || s2 || s3 || s4 || s5 || s6 || s6b || s6c)) {
+		pr_err("s6d_cmap=1 refused: needs s6d=1 s6d_fbcon=1 s6d_bind=0 dryrun=0 live=1 mode=640x480-8 and no other stage\n");
 		return -EINVAL;
 	}
 #ifdef WD24S1_QEMU_FAKE
@@ -2432,13 +2950,14 @@ static int __init wd24adv_init(void)
 	    (sx && !proc_create_data(sprog->param, 0444, pdir, &s3_ops, NULL)) ||
 	    (s6 && !proc_create_data("s6", 0444, pdir, &s6_ops, NULL)) ||
 	    (s6b && !proc_create_data("s6b", 0444, pdir, &s6b_ops, NULL)) ||
+	    (s6d && !proc_create_data("s6d", 0444, pdir, &s6d_ops, NULL)) ||
 	    (live && (!proc_create_data("live", 0444, pdir, &live_ops, NULL) ||
 		      !proc_create_data("control", 0200, pdir, &control_ops, NULL)))) {
 		if (live && !hw_dead) {
-			mutex_lock(&hw_lock);
+			hw_acq();
 			vram_gate("load failure: plane restore");
 			hw_run(OP_TEXT, NULL);
-			mutex_unlock(&hw_lock);
+			hw_rel();
 		}
 		free_all();
 		return -ENOMEM;
@@ -2480,34 +2999,34 @@ static int __init wd24adv_init(void)
 	pr_info("LIVE: text state saved (4 planes, DAC, VGA + ext regs); trial %u s; control: /proc/wd24adv/control\n",
 		trial);
 	if (m) {
-		mutex_lock(&hw_lock);
+		hw_acq();
 		err = hw_mode(m);
-		mutex_unlock(&hw_lock);
+		hw_rel();
 		if (err)
 			pr_err("live: mode %s failed (%d); text restored, module stays loaded\n",
 			       m->name, err);
 		if (sx) {
-			mutex_lock(&hw_lock);
+			hw_acq();
 			if (err)
 				s3_report("the mode set failed");
 			else
 				s3_live(m);
-			mutex_unlock(&hw_lock);
+			hw_rel();
 		}
 		if (s6 && !err) {
-			mutex_lock(&hw_lock);
+			hw_acq();
 			s6_live(m);
-			mutex_unlock(&hw_lock);
+			hw_rel();
 		}
 		if (s6b && !err) {
-			mutex_lock(&hw_lock);
+			hw_acq();
 			s6b_arm(m);
-			mutex_unlock(&hw_lock);
+			hw_rel();
 		}
 		if (s6d && !err) {
-			mutex_lock(&hw_lock);
+			hw_acq();
 			s6d_arm(m);
-			mutex_unlock(&hw_lock);
+			hw_rel();
 		}
 	}
 	return 0;
@@ -2520,12 +3039,15 @@ static void __exit wd24adv_exit(void)
 		if (pdir)
 			proc_remove(pdir);
 		pdir = NULL;
+		WRITE_ONCE(wd24_exiting, true);
 		cancel_delayed_work_sync(&trial_work);
-		mutex_lock(&hw_lock);
+		/* trial_fn may have queued one more delay as it exited. */
+		cancel_delayed_work_sync(&trial_work);
+		hw_acq();
 		/* not reached while pinned; defensive: registers only if locked */
 		if (!vram_gate("rmmod: plane restore") || !hw->in_text)
 			hw_run(OP_TEXT, NULL);
-		mutex_unlock(&hw_lock);
+		hw_rel();
 	}
 	free_all();
 }

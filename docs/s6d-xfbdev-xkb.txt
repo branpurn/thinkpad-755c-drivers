@@ -1,0 +1,58 @@
+XKB payload for the existing Xfbdev. The X binary and the module
+were not rebuilt. This file is not a framebuffer proof.
+
+The server is xorg-server 1.14.7 kdrive. Core keyboard init calls
+XkbCompileKeymap. That returns false when xkbcomp's exit status is
+not 0. devices.c then calls FatalError("Failed to activate core devices.").
+The compiled-in paths are:
+  /tmp/xfb-prefix/bin/xkbcomp
+  /tmp/xfb-prefix/share/X11/xkb
+Default components, from this server's libxkbfile reading rules/evdev
+for model pc105 and layout us:
+  keycodes evdev+aliases(qwerty)
+  types complete
+  compat complete
+  symbols pc+us+inet(evdev)
+  geometry pc(pc105)
+There is no command-line switch in this binary that changes the
+xkbcomp path. -xkbdir can change the data directory. The payload uses
+the compiled-in paths, so the command line does not need -xkbdir.
+
+The sentence "Errors from xkbcomp are not fatal to the X server" is
+the -eml string in xkb/ddxLoad.c. xkbcomp prints it. A warning still
+exits 0. A missing compiler exits non-zero, and that is fatal.
+
+Payload, gzip tar, extract with /tmp/busybox-wd24:
+/opt/cursor/artifacts/wd24-xkb.tgz
+sha256 5d2203659fffd031f85715e3ce29a7be987c04bc231e36574e6fb748147e9cb2
+size 811804 bytes
+Uncompressed tree about 1569001 bytes.
+xkbcomp sha256 5ebf28e8823a5165efb0a2a0b997d2218ebbaa24ddb5abd76160643a939a5f62
+size 1190836 bytes
+rules/evdev sha256 43a2ee6f57dd6a3217b4bba6dc2126bd8b27ea3ac5532e880b0be5d6ea30c668
+
+xkbcomp 1.4.5
+source sha256 6851086c4244b6fd0cc562880d8ff193fb2bbf1e141c73632e10731b31d4b05e
+i486-linux-musl-gcc 11.2.1, -march=i486 -mtune=i486 -Os, static-pie,
+no interpreter, cmov count 0.
+The rules file and the component files are the evdev pc105 us set
+from the xkb data that resolves to those five includes. 36 files.
+
+Offline, qemu-i386 8.2.2 -cpu 486, not the 755C:
+The rules parser in the same libxkbfile this server uses printed
+ok 1 and the five component names above, RC 0.
+The same xkbcomp, after BusyBox tar -xzof of this archive, was run as
+  xkbcomp -w 1 -R<xkbdir> -xkm - -em1 ... -emp ... -eml ... server-1.xkm
+with the keymap text for those five includes on stdin.
+RC 0. Output 12052 bytes, leading bytes 0f 6d 6b 78.
+Warnings about unresolved XF86 keysyms were printed, including the
+-eml trailer. The exit status was still 0. That is the path the
+server treats as success. It does not open /dev/fb0.
+
+Memory, from file sizes, not a measurement on the machine.
+Available on the last boot was about 21864 KiB, no swap.
+This tree is about 1.5 MiB on disk. xkbcomp is about 1.2 MiB and is
+running only while the server compiles the keymap. The X binary is
+about 2.0 MiB with a 300 KiB shadow. Those file sizes fit in 21864 KiB.
+The previous failure was a missing compiler, not an allocation error.
+At the measured archive rate, 811804 bytes is about 407 s.

@@ -1,0 +1,81 @@
+# First test for the colormap candidate
+
+t479u authorized the default-off regression and a recovery check before
+any later step. That is phase 1 only, and that one trial passed. The
+script checks the file hash itself. There is no prompt to type the hash.
+Phase 2 and phase 3 scripts exist and are not a hardware authorization.
+Copying this note does not insmod.
+
+## Hashes
+
+Baseline, the module that has already run, unchanged:
+
+`7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36`
+
+Candidate, not approved:
+
+`/opt/cursor/artifacts/wd24adv-cmap-candidate.ko`
+`92591b1e26c3888868285a4a50d602cf969dfa9bdd53c9f868f21fef03d6a8ae`
+size 132600
+vermagic `6.18.57-tc755x mod_unload 486`
+
+Rejected, do not load, do not keep as a spare:
+
+`30415e508e2757f008210233bd9d2610a160fbbf132b4df9e8d674109375b19a`
+
+The driver sources were not changed for the lifetime replay, so the
+candidate hash is still `92591b1e`. The contract is `docs/s6d-cmap.txt`.
+
+## Stop rules
+
+One phase per approval. A pass does not start the next phase. A failure
+stops the series. Do not retry a failed open or a failed PUT. Do not add
+`s6d_cmap=1` during phase 1. Do not call `FBIOPUTCMAP` during phase 2.
+
+Before any command: a person is present, `/proc/fb` is empty, and
+`sha256sum` of the file about to be loaded matches the hash named for
+that phase. The candidate name inside the module is still `wd24adv`.
+Do not overwrite the baseline file with it.
+
+## Phase 1 — default off — one pass recorded
+
+The trial is recorded in `docs/s6d-live-2026-11-05.txt`. It does not
+authorize phase 2. Script `docs/s6d-cmap-phase1-run.sh`.
+Artifact `/opt/cursor/artifacts/wd24x-cmap-phase1-run.sh`.
+Module path `/tmp/wd24adv-cmap-92591b1e.ko`.
+The insmod line omits `s6d_cmap`. The baseline file
+`/tmp/wd24adv-pr14.ko` is not the module loaded and is not written.
+
+The candidate proc keeps the baseline lines and adds
+`cmap_param %d published %d frozen %d`. Before the glyph client the
+script requires `cmap_param 0 published 0`. `s6d_arm` clears `frozen`.
+`s6d_fb_release` and `s6d_stop` set `frozen`, including when the
+parameter is off, so the expiry gate does not require `frozen 0`.
+It still requires `armed 0`, `fb_reg 0`, `thrash 0 latched 0`, and
+`cmap_param 0 published 0`.
+
+Expect the same text-restore shape as the baseline glyph pass:
+`wd24adv live: trial expiry -> 0`, `readback mismatches 0;`,
+`in_text 1;`, empty `/proc/fb`, VGA+ bind 1, `RM=0`. The glyph line
+is `WD24X-GLYPH shadow 640x480x8 marks 5 match 5 ctrl 1` with `CL=0`.
+`FBIOGETCMAP` stays `-EINVAL` because this phase does not publish a
+colormap. It does not prove colours.
+
+Stop after rmmod. Do not continue.
+
+## Phase 2 and phase 3 — scripts exist, not a hardware session
+
+`docs/s6d-offline-2026-11-05.txt` has the hashes, the register effects,
+and the list of what still needs the machine. The scripts refuse to
+print done unless their gates pass. Copying them does not insmod.
+`WD24X_BATCH_ARM` is unset. Setting it is a later decision by a person,
+not a step in these files.
+
+## Still not proved
+
+Panel hue, whether index 0 and index 15 differ on the glass, the
+keyboard, `s6d_cmap=1`, and any claim that the 755C DAC matches the
+host VGA model. Digits 1 through 5 were seen on the baseline module.
+The lifetime replay and the VGA model are host tests. AddressSanitizer
+showed the rejected free is a heap use-after-free in that host process.
+It did not run on the 755C.

@@ -133,12 +133,13 @@ What Brandon saw instead:
      DAC — often reads as green on this panel).
   4. Further fbcon clear → white; then imageblit of the TTY line (80x30).
 
-### Why serial/keyboard died
+### Why serial/keyboard died — NOT ESTABLISHED (see the audit below)
 
-`/proc/wd24adv/live` took `mutex_lock(&hw_lock)`. During/after fbcon bind,
-fillrect holds that lock for a long paint. Overlapping POST `head` of
-`/proc/wd24adv/*` blocked on the mutex → serial shell hung. Keyboard shell
-also non-functional after the fbcon switch; power cycle needed.
+An earlier note blamed a blocking `/proc/wd24adv/live` `mutex_lock` while
+fillrect held `hw_lock`, plus the POST `head` of `/proc/wd24adv/*`. That is
+not shown. Those reads were typed before `insmod` returned, so the shell
+had not executed them. The hang audit later in this file is the current
+account. Do not treat the proc-lock story as the cause.
 
 ### Box fixes (this follow-up)
 
@@ -151,3 +152,296 @@ also non-functional after the fbcon switch; power cycle needed.
     steps in WD24ADV-NEXT-STAGE.md (Brandon watching required).
 
 ko (restore-safe) sha256 d8b06a80695cb8bf47ad5b00ec628e8ce653b723c720303205e959f8a0c5b06c
+
+---
+
+## Bars + clean restore, no framebuffer — 2026-11-05 ~14:35 America/New_York
+
+Fact (owner-confirmed). S6d floppy, same boot family as above. Module sha256
+`d8b06a80695cb8bf47ad5b00ec628e8ce653b723c720303205e959f8a0c5b06c` (commit
+`5b75c66`). One command:
+
+  insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=1 fix_sr06=1 s6d_fbcon=0
+
+  RC=0
+  Owner: colour bars looked fine.
+  Trial expiry printk: faults 0, switches 0, thrash 0; live trial expiry 0; in_text=1
+  rmmod RM=0
+  /proc/fb empty afterwards
+  Text serial shell stayed responsive
+
+`s6d_fbcon=0` does not register a framebuffer. It skips `register_framebuffer`
+entirely. This run is bars plus text restore. It is not a registered fbdev
+and not an mmap test. faults/switches 0 matches that: nothing faulted.
+
+`pattern=1` is the bool that draws the 16 bars. `pattern=0` on the earlier
+visual skipped them on purpose.
+
+---
+
+## Hang audit (the ~13:50 visual, commit 9ad254f) — 2026-11-05
+
+Observed, and only this:
+
+- printk: load 0, mode 0, then `Console: switching to colour frame buffer device 80x30`, then `S6d: armed + registered fb0`.
+- `echo RC=$?` never returned.
+- Owner: green line-by-line roll, then a white screen with fbcon text. No colour bars (`pattern=0`).
+- Later serial input echoed and was not executed. Keyboard shell unavailable. No automatic text restore. Power cycle required.
+- POST lines that read `/proc/wd24adv/*` were sent before the insmod prompt returned.
+
+Not a PASS beyond the registration printk. Mode set and `register_framebuffer` returning far enough to print "armed + registered" are what that printk shows. Restore was not observed.
+
+Code at 9ad254f, checked against Linux 6.18.7 (same line as 6.18.57; fbcon/vt sources are not in this repo, they were read from the stable tree):
+
+1. `pattern` is a bool. `pattern=0` skips `wd24_pattern`. No bars on that command is what the code does.
+2. `do_bind_con_driver` prints `Console: switching to ...` and then calls `update_screen`, which is the fbcon redraw. That runs inside `register_framebuffer`, before `s6d_arm` prints "armed + registered". The line-by-line roll is the timing of that redraw through `s6d_fillrect` / `s6d_imageblit` (one `writeb` per pixel). Calling the green colour "the BIOS DAC" is a hypothesis: this driver has no `fb_setcolreg`, so the DAC is whatever was already loaded, and the owner saw green then white. The hue is not proven from the registers.
+3. There is no per-fb flag that skips the bind. `fb_info.skip_vt_switch` only calls `pm_vt_switch_required`. `CONFIG_FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER` depends on `FB=y`; this kernel is `FB=m`, so `deferred_takeover` is compiled out. The switching printk shows the bind ran.
+4. After register returns, `s6d_arm` takes `hw_lock` and `pr_info`s the armed line while still holding it. The 755C boot line in WD24ADV-LIVE-TEST is `console=tty0 console=ttyS0`. The S6d floppy APPEND file is not in this repo, so that exact cmdline was not re-read here. If tty0 is a printk console, the flush calls `fbcon_putcs` → `s6d_imageblit` → `mutex_lock(hw_lock)` on the same task. The mutex is not recursive. The task sleeps holding `hw_lock` and `console_lock`. `insmod` never returns, so the shell never runs the typed proc reads. `trial_fn` also needs `hw_lock`, so the 30 s restore does not run. That matches: armed line visible on serial (serial console flushed, then the VT console re-entered), no RC, no restore, keyboard dead (VT needs `console_lock`), serial bytes echoed by the tty and not read.
+5. The proc-lock story does not explain this. The reads were not executed.
+
+A read-only preflight later the same day (15:49 America/New_York) recorded this boot's command line with both `console=tty0` and `console=ttyS0,9600n8`. That is the tty0 printk path on the current boot. It does not replay the hang. SysRq was ignored during the hang; whether `CONFIG_MAGIC_SYSRQ` is enabled was not checked.
+
+The same preflight: `uname -r` `6.18.57-tc755x`; `/proc/fb` empty; only vtcon0 `(S) VGA+` bind 1; `fb` loaded and unused, `font` used by `fb`. No frame-buffer vtconsole. Current dmesg ring had been cleared and still contains the earlier `s6d_fbcon=0` arm line. No insmod was performed.
+
+`5b75c66` made `/proc` reads trylock and added `s6d_fbcon=0`. Trylock does not fix the armed-line deadlock. `s6d_fbcon=0` avoids it by never registering. The next stage registers and refuses the fbcon open instead.
+
+---
+
+## Registered no-fbcon mmap pass — source cfda0c4
+
+Module sha256 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36.
+Tool sha256 93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8.
+insmod returned 0. fb0 registered, fbcon did not bind, register returned -19.
+Tool printed `WD24S6D-MMAP ok stamps 5 tail 1` with status 0.
+/proc/wd24adv/s6d: faults 10, switches 10, thrash 0, latched 0.
+Trial expiry 0, in_text 1. /proc/fb empty. rmmod 0.
+Shell answered. Only vtcon was VGA+.
+Operator saw bars, five blocks, the corner pixel, and the root text console.
+This is the normal mmap path. kill -9 does not break an
+uninterruptible kernel wait.
+
+---
+
+## Hold / SIGKILL pass — same module and tool, one run
+
+Staged files, not the older /tmp/wd24adv.ko:
+module /tmp/wd24adv-pr14.ko
+sha256 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36
+tool /tmp/wd24s6d-mmap-pr14
+sha256 93f84ec0ef66c22fac85d552a3da8e095c993804befedf8e7d66f375661ef8b8
+Preflight: kernel 6.18.57-tc755x, /proc/fb empty, only vtcon0 (S) VGA+ bind 1.
+insmod returned 0. fb0 registered. fbcon did not bind.
+The tool printed WD24S6D-MMAP hold. /proc/wd24adv/s6d then showed active 1 busy 1.
+SIGKILL of that exact pid returned 0. wait status 137. The pid was then absent.
+printk: S6d: end (fb release): faults 10 switches 10 thrash 0.
+Next s6d read: active 0, busy 0, stopping 1, framebuffer still registered.
+Trial expiry 0, mismatches 0, in_text 1. Then armed 0, fb_reg 0.
+/proc/fb empty. rmmod 0. Shell answered.
+Loaded modules after that: fb and font only. Only VGA+ vtcon.
+No X run yet. Xfbdev, startx, and xinit are absent from
+PATH on this floppy, and the X11 directories are absent.
+The --hold form that was used is one argument and opens /dev/fb0.
+Combining --hold with a device path exits before open.
+
+---
+
+## s6d_bind=1 pass — same module, one run
+
+Module /tmp/wd24adv-pr14.ko
+sha256 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36
+pattern=0 was requested. insmod returned 0.
+dmesg: "Console: switching to colour frame buffer device 80x30"
+and "S6d: armed + registered fb0" with s6d_bind=1.
+No separate numeric register line was emitted.
+Trial /proc/wd24adv/s6d: faults 0, switches 13, thrash 0.
+Then "Console: switching to colour VGA+ 80x25".
+expiry 0, mismatches 0, in_text 1, armed 0, fb_reg 0, latched 0.
+/proc/fb empty. Only VGA+ bind 1. rmmod 0. The shell answered.
+The operator saw the standard bars briefly, then a downward redraw,
+solid white above and solid black below, then the root text console.
+The bars are the observation. This note does not assign a cause.
+Colors, whether glyphs were readable, and the keyboard were not checked.
+Runbook that was used: docs/s6d-bind-runbook.txt.
+
+---
+
+## First X start — failed in XKB, one run, not repeated
+
+Same module 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36.
+Extractor, archive, and all eight extracted files matched.
+insmod 0. dmesg: registered fb0 WITHOUT fbcon bind, register -19.
+X pid 340 exited 1 by itself. No signal was sent. A later wait
+returned 127 because that child was already gone.
+x.log, in order that matters:
+can't get colormap: Invalid argument
+then the built-in extensions, including XKEYBOARD
+XKB: Failed to compile keymap
+Keyboard initialization failed. This could be a missing or incorrect setup of xkeyboard-config.
+Fatal server error: Failed to activate core devices.
+Can't deallocate console 3 Resource busy
+No framebuffer id line was in that log. LogMessage uses verbosity 1
+and the default stderr verbosity is 0, so that line is not copied to
+the redirected stderr. The fb was opened: "S6d: session ON (fb open)",
+then "S6d: end (fb release): faults 5 switches 5 thrash 0".
+The colormap ioctl is not what stopped the server. The log continues
+after it. The deallocate line is LinuxFini after the fatal error.
+Trial expiry 0, mismatches 0, in_text 1, armed 0, fb_reg 0.
+/proc/fb empty. VGA+ bind 1. rmmod 0. The shell answered.
+The operator photograph showed a pale field, vertical stripes at the
+top, dark marks along the bottom, then a blue field, then the text
+cursor stopped briefly and resumed. That is not the diagnosis.
+The string "Errors from xkbcomp are not fatal to the X server" is an
+argument passed to xkbcomp. It is not a server policy. This start had
+no xkbcomp, so the compile failed and core-device init called FatalError.
+
+---
+
+## X headless lifecycle — one pass, no client
+
+Same module 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36.
+Xfbdev 6450171476a8e6aa91883744947423db123c74a042d697f9263b686dcb2f9f13.
+xkb archive 5d2203659fffd031f85715e3ce29a7be987c04bc231e36574e6fb748147e9cb2.
+xkbcomp 5ebf28e8823a5165efb0a2a0b997d2218ebbaa24ddb5abd76160643a939a5f62.
+rules/evdev 43a2ee6f57dd6a3217b4bba6dc2126bd8b27ea3ac5532e880b0be5d6ea30c668.
+MemAvailable before the trial was 19876 KiB. No swap.
+insmod 0. fb0, no fbcon bind. /proc/fb listed wd24s6d.
+X pid 431 was alive, state S, after 15 s.
+dmesg: S6d: session ON (fb open).
+The log had "can't get colormap: Invalid argument" and the xkbcomp
+warnings for unresolved XF86 keysyms. It did not have
+"Failed to compile keymap", "Failed to activate core devices", or
+"Fatal server error".
+SIGTERM of that pid returned 0. The process was then gone. The shell
+reported the child done. A following wait returned 127 because the
+child was already reaped. No other signal.
+S6d: end (fb release): faults 5 switches 5 thrash 0 latched 0.
+Trial expiry 0, mismatches 0, in_text 1, armed 0, fb_reg 0.
+/proc/fb empty. VGA+ bind 1. rmmod 0. The shell answered.
+No pixel, protocol, or input claim. The trees were removed after the
+logs. The archives and the module stayed in RAM.
+
+---
+
+## X protocol and shadow client — one pass
+
+Not a panel result and not a VRAM result.
+Client d846aa0153c59017072118e142d075502cd0332d720527b0255f4a422a021179.
+Script that ran: 10ee2f199d743c5650432d153940f6cd02aa793b19d8c1e4bf9c05e9071842f4.
+Extractor 52b264655f25e902098eb797ba72f424cbe3ec0c37caceeaf5f0984835682236.
+X archive af429004d7d279f84d6ebdf2b62f589b81471dd791f6d0949d3d6c67a106c224.
+xkb archive 5d2203659fffd031f85715e3ce29a7be987c04bc231e36574e6fb748147e9cb2.
+Module 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36.
+Those files were not rebuilt. Extraction EX=0 XK=0. MemAvailable 19816 KiB.
+Script status 0. insmod 0. X pid 523. Client pid 530. Client status 0.
+Stdout: WD24X-CLIENT shadow 640x480x8 rects 5 match 5.
+During the client, /proc/wd24adv/s6d was faults 15 switches 15 thrash 0 latched 0.
+Release was the same 15, 15, and 0.
+SIGTERM of X returned 0. wait returned 0.
+Expiry 0, mismatches 0, in_text 1, armed 0, fb_reg 0.
+/proc/fb empty. VGA+ bind 1. rmmod 0. The shell answered.
+No physical input. No panel or color claim.
+The client, the extracted trees, and the script were removed afterward.
+The archives and the module stayed in RAM.
+
+---
+
+## Watched repeat of the same client — one pass, four squares seen
+
+Same client d846aa0153c59017072118e142d075502cd0332d720527b0255f4a422a021179,
+same script 10ee2f199d743c5650432d153940f6cd02aa793b19d8c1e4bf9c05e9071842f4,
+same module 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36.
+Nothing was rebuilt.
+Script status 0. insmod 0. X pid 641. Client pid 648. Client status 0.
+Stdout: WD24X-CLIENT shadow 640x480x8 rects 5 match 5.
+Mid-run /proc/wd24adv/s6d: faults 15 switches 15 thrash 0 latched 0,
+armed 1 active 1 stopping 0 busy 1 fb_reg 1 bind_param 0.
+SIGTERM 0. wait 0.
+Release counters stayed 15, 15, and 0.
+Expiry 0, mismatches 0, in_text 1. /proc/fb empty. VGA+ bind 1.
+No X process and no client process. rmmod 0. Only fb and font loaded.
+The shell answered. MemAvailable after that was 20916 KiB.
+The log had the known colormap error, the XF86 keysym warnings, and
+"Can't deallocate console 3 Resource busy". No fatal line.
+The client, script, extracted trees, and the :1 socket were removed.
+The extractor, the archives, and the module stayed.
+
+Two photographs, in order. The first shows a narrow band of vertical
+stripes at the top, a white band, a large blue field with three
+colored squares, and a dark bottom with speckles. The second shows a
+blue field and four small squares near the left. The operator said the
+artifacts cleared after a few seconds. Four squares were visible.
+That is panel evidence that X drawing reached the glass. It is not
+evidence that all five rectangles were visible, and it does not
+identify palette hues. A guess that index 1 matches the field is
+only a guess.
+
+insmod selects 640x480-8 before X exists, so the panel scans the
+frame that is already there. Xfbdev later copies damage from its RAM
+shadow into the mmap, one box at a time. Those are the two steps.
+They are not a register diagnosis for the stripes.
+
+"Can't deallocate console 3 Resource busy" is fprintf from Xfbdev
+LinuxFini, after that VT fd is closed, when VT_DISALLOCATE fails.
+In linux 6.18.57 vt_disallocate returns -EBUSY when that console is
+in use, is the foreground, or has a selection. The log does not say
+which. LinuxFini runs while the server is leaving, including after
+SIGTERM. This run had no fatal line, and text restore and rmmod
+still completed.
+
+---
+
+## Glyph client on the baseline — one software pass, five digits seen
+
+Client c632750382b3def78912a6b5013ef53e74969e596ed39d1391b283555f01da67.
+Module 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36.
+Script status 0. insmod 0. X pid 798. Client pid 805. Client status 0.
+Stdout: WD24X-GLYPH shadow 640x480x8 marks 5 match 5 ctrl 1.
+Mid-run faults 15 switches 15 thrash 0 latched 0.
+SIGTERM 0. wait 0.
+Expiry 0, mismatches 0, in_text 1, armed 0, fb_reg 0.
+rmmod 0. The shell answered.
+The operator's photographs and the note t477u show digits 1 through 5
+on the panel after a brief artifact. That is shape on the glass.
+It is not a hue measurement and it is not a keyboard result.
+
+---
+
+## Candidate 92591b1e, default off — one pass
+
+Module 92591b1e26c3888868285a4a50d602cf969dfa9bdd53c9f868f21fef03d6a8ae.
+Script 8efaddb358e153a76ed0c1846c835b13bb8c4df0d8ad147b223ca21839645e5e.
+The insmod line omitted `s6d_cmap`. Script status 0. insmod 0.
+X pid 926. Client pid 934. Client status 0.
+Stdout: WD24X-GLYPH shadow 640x480x8 marks 5 match 5 ctrl 1.
+Mid-run: cmap_param 0 published 0 frozen 0, faults 15 switches 15
+thrash 0 latched 0.
+SIGTERM 0. wait 0.
+Expiry 0, mismatches 0, in_text 1, armed 0, fb_reg 0, cmap_param 0
+published 0 frozen 1.
+rmmod 0. /proc/fb empty. VGA+ bind 1. Only fb and font loaded.
+No X on :1. The baseline file and the candidate file both matched
+their hashes. The shell on the serial line answered.
+No new panel, hue, or keyboard observation in that trial's own notes.
+This pass shows the extra proc line with the parameter off. It does
+not show a DAC publish or a PUT. `frozen 1` after expiry is the
+stop/release store. It is not a colour restore, because no colour
+program ran.
+
+The operator later described the panel during the glyph drawing, in
+this order: initial stripes, stale coloured-square remnants, a white
+upper band and a dark bottom, then a clean blue field with digits 1
+through 5. The cause is not identified. `wd24x-order` prints selected
+log lines in the order they appear. It does not explain that sequence.
+
+---
+
+## Physical TTY — operator report, cause unknown
+
+The operator reported that the physical keyboard/TTY did not answer,
+at a time that is not in this log. The serial line was the path used
+for the shutdown. This note does not record a cause. VGA+ bind 1 and a
+responsive serial shell are not a keystroke. The driver sources do not
+program the keyboard controller. No module change is made from this
+report. A read-only userspace snapshot is described in
+`docs/s6d-offline-2026-11-05.txt`. It has not been run on the 755C.
+

@@ -6,3 +6,6 @@ test_s6
 test_s6b
 test_s6d_bank
 test_s6d_thrash
+test_s6d_fault
+wd24s6d-mmap
+wd24x-client

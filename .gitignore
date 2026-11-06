@@ -25,4 +25,12 @@ lowmem.bin
 /modules/wd24adv/tests/test_engine
 /modules/wd24adv/tests/test_s1
 /modules/wd24adv/tests/test_s2
+/modules/wd24adv/tests/test_cmap_life
+/modules/wd24adv/tests/test_cmap_life_asan
+/modules/wd24adv/tests/test_glyph_bank
+/modules/wd24adv/tests/.glyph-mock-*
+/modules/wd24adv/tests/.cmap1-mock-*
+/modules/wd24adv/tests/.c23-*
+/modules/wd24adv/tests/test_cmap_check
+/modules/wd24adv/tests/test_cmap_abi
 /.venv*/
