@@ -59,11 +59,13 @@ these lines have passed.
 
 ## M2 — fbcon, still under trial
 
-One insmod with `s6d_bind=1`, `s6d_cmap=1`, trial 180. A short `cat` of
-a text file on the new console, then the script kills the client and
-waits for expiry. Pass: session ON, thrash 0, latched 0, expiry 0,
-mismatches 0, in_text 1, VGA+ bind 1. This does not judge whether
-scroll looks snappy.
+Script: `docs/s6d-fbcon-run.sh`. It is not part of the module already
+built for the desktop and Doom run. One insmod with `s6d_bind=1`,
+`s6d_cmap=1`, trial 180. It writes one line to `/dev/tty0` and does
+not start X. Pass: session ON, thrash 0, latched 0, expiry 0,
+mismatches 0, in_text 1, VGA+ bind 1, `WD24X-FBCON-RUN done`.
+Scroll speed is not judged here. `fb_copyarea` is still empty, so a
+scroll is a CPU fill through the bank window.
 
 ## M3 — X start and stop, still under trial
 
@@ -75,17 +77,21 @@ failed one.
 
 ## M4 — BITBLT for fb_fillrect and fb_copyarea
 
-Not started. The host engine stays out of the module. The first live
-step, when written, is one off-screen fill using only the sequence
-already in the S4 log and in docs/WD90C24.md, with read-back, a
-timeout that restores, and `accel=0` as the default. fbcon and X do
-not call it until that one shot returns mismatches 0 and the off-screen
-read matches. Mono expansion for glyphs is a later shot, same rule.
+The one-shot already ran. `docs/s4-live-2026-11-05.txt`: 11 of 11
+operations verified, idle polls 0, restore 1002/1002, mismatches 0.
+That sequence is the XFree86 wd90c31BitBlt path cited in
+`docs/WD90C24.md`, not a new register set. It is not connected to
+`fb_fillrect` or `fb_copyarea`. Those two still use the CPU window
+(`fb_copyarea` returns without writing). The host-only engine stays
+out of the module. The next live step is `accel=0` by default and one
+off-screen fill through that same S4 sequence, read back, then
+restore. fbcon and X do not call it until that shot matches.
+Mono expansion for glyphs is the shot after that.
 
 ## M5 — hardware cursor
 
-Not started. Block 2 is UNPROVEN in the S0 notes. No cursor register
-is added on the strength of the Win98 driver having one.
+Not started. The S3 entry check requires the cursor enable bit clear,
+and the S0 notes mark block 2 UNPROVEN. No cursor register is added.
 
 ## M6 — 800x600x4 external, blank, DPMS, APM
 
