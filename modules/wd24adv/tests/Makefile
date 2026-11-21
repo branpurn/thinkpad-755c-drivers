@@ -53,6 +53,7 @@ test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test
 	dash ./test_ko_exports.sh
 	dash ./test_fbcon_run.sh
 	dash ./test_accel_run.sh
+	dash ./test_scroll_run.sh
 	$(CC) $(CFLAGS) -I.. -I../../../tools/wd24-doom -o /tmp/wd24-test-present-thrash test_present_thrash.c
 	/tmp/wd24-test-present-thrash
 	$(CC) $(CFLAGS) -o /tmp/wd24-test-fb-api test_fb_api_61857.c

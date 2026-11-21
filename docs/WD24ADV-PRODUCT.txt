@@ -94,6 +94,11 @@ the same rule as the S4 one-shot. A refusal before the start does
 fall back to CPU stores. Glyphs stay on the CPU: the S5 guard accepts
 only its canned host words, not an arbitrary bitmap.
 
+fbcon scroll uses that copy when `accel=1` is still on after the gate
+(`FBINFO_HWACCEL_COPYAREA`). `ypanstep` stays 0: the S4 sequence does
+not program a CRTC start. `docs/s6d-scroll-run.sh` is the fbcon bind
+with the same gate, then one line on tty0.
+
 ## M5 — hardware cursor
 
 Not started. The S3 entry check requires the cursor enable bit clear,

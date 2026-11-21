@@ -2428,6 +2428,14 @@ static int s6d_pix(u32 x, u32 y, int wr, u8 *v)
 	return 0;
 }
 
+static void s6d_accel_cpu(void)
+{
+	accel = 0;
+	if (s6d_info)
+		s6d_info->flags &= ~(FBINFO_HWACCEL_COPYAREA |
+				     FBINFO_HWACCEL_FILLRECT);
+}
+
 /*
  * Known S4 fill: 64x16 at (16,112), colour 0x3c. CPU bytes, then the
  * same rectangle programmed, then the bytes go back. Caller holds hw.
@@ -2442,8 +2450,11 @@ static void s6d_accel_gate(void)
 
 	s6d_agate = accel_gate ? 1 : 0;
 	s6d_amatch = 0;
-	if (!accel || !accel_gate || !s4fb || !s6d_st || !s6d_st->active)
+	if (!accel || !accel_gate || !s4fb || !s6d_st || !s6d_st->active) {
+		if (accel_gate)
+			s6d_accel_cpu();
 		return;
+	}
 	saved = kmalloc(W * H, GFP_KERNEL);
 	cpu = kmalloc(W * H, GFP_KERNEL);
 	got = kmalloc(W * H, GFP_KERNEL);
@@ -2494,7 +2505,7 @@ done:
 	kfree(cpu);
 	kfree(got);
 	if (!vram_dead && s6d_amatch != W * H)
-		accel = 0;
+		s6d_accel_cpu();
 }
 
 static void s6d_fillrect(struct fb_info *info, const struct fb_fillrect *r)
@@ -2891,8 +2902,11 @@ static int s6d_setup(void)
 	fix->line_length = WD24S6D_LINE;
 	fix->smem_start = 0;			/* no contiguous phys */
 	fix->smem_len = WD24S6D_MMAP_LEN;
+	/* The S4 sequence does not move the CRTC start. Scroll is a copy. */
 	fix->ypanstep = 0;
 	fix->ywrapstep = 0;
+	if (s4fb && accel_gate)
+		info->flags |= FBINFO_HWACCEL_COPYAREA | FBINFO_HWACCEL_FILLRECT;
 
 #ifndef WD24S1_QEMU_FAKE
 	s6b_io = &s6_live_io;
