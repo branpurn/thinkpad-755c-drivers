@@ -7,10 +7,13 @@
  * boundary is the livelock case, so every copy here stops at the
  * boundary. Bytes at and past 0x4b000 are the guard, not the frame.
  *
- * Letterbox: each source pixel is a 2x2 block. The picture is 640x400
- * with 40 rows of index 0 above and below. Framebuffer pixels are
- * square, so the picture is 8:5, the raw buffer aspect. A CRT showed
- * 320x200 as 4:3 by using tall pixels. This choice does not do that.
+ * Letterbox is the timedemo path. Each source pixel is a 2x2 block.
+ * The picture is 640x400 with 40 rows of index 0 above and below.
+ * A source row is expanded once with aligned 32-bit stores (two
+ * pixels per store) and emitted twice. The caller may write the bars
+ * once per session; this function still writes them. Framebuffer
+ * pixels are square, so the picture is 8:5. A CRT showed 320x200 as
+ * 4:3 by using tall pixels. This choice does not do that.
  *
  * Fill: 2x horizontally, and vertically 2 or 3 rows in the repeating
  * pattern 2,3,2,2,3 (12 destination rows for each 5 source rows,
@@ -144,6 +147,55 @@ static inline void wd24x_doom_emit(uint8_t *dst, unsigned off,
 	}
 }
 
+/* Two source pixels become one aligned 32-bit store: a,a,b,b. */
+static inline void wd24x_doom_expand2(uint8_t *dst, const uint8_t *src)
+{
+	unsigned x;
+
+	for (x = 0; x < WD24X_DOOM_SRC_W; x += 2) {
+		uint32_t a = src[x];
+		uint32_t b = src[x + 1];
+		uint32_t v = a | (a << 8) | (b << 16) | (b << 24);
+
+		memcpy(dst + x * 2, &v, 4);
+	}
+}
+
+/* Index 0 bars. 40 rows above the picture and 40 below. */
+static inline void wd24x_doom_letter_bars(uint8_t *dst,
+					  struct wd24x_bank_stat *st)
+{
+	uint8_t row[WD24X_DOOM_DST_W] __attribute__((aligned(4)));
+	unsigned y;
+
+	memset(row, 0, sizeof row);
+	for (y = 0; y < WD24X_DOOM_LETTER_Y; y++)
+		wd24x_doom_emit(dst, y * WD24X_DOOM_DST_W, row,
+				WD24X_DOOM_DST_W, st);
+	for (y = WD24X_DOOM_LETTER_Y + WD24X_DOOM_SRC_H * 2u;
+	     y < WD24X_DOOM_DST_H; y++)
+		wd24x_doom_emit(dst, y * WD24X_DOOM_DST_W, row,
+				WD24X_DOOM_DST_W, st);
+}
+
+/* 200 source rows, each expanded once and stored as two dest rows. */
+static inline void wd24x_doom_letter_picture(const uint8_t *src, uint8_t *dst,
+					     struct wd24x_bank_stat *st)
+{
+	uint8_t row[WD24X_DOOM_DST_W] __attribute__((aligned(4)));
+	unsigned sy;
+
+	for (sy = 0; sy < WD24X_DOOM_SRC_H; sy++) {
+		unsigned y = WD24X_DOOM_LETTER_Y + sy * 2u;
+
+		wd24x_doom_expand2(row, src + sy * WD24X_DOOM_SRC_W);
+		wd24x_doom_emit(dst, y * WD24X_DOOM_DST_W, row,
+				WD24X_DOOM_DST_W, st);
+		wd24x_doom_emit(dst, (y + 1u) * WD24X_DOOM_DST_W, row,
+				WD24X_DOOM_DST_W, st);
+	}
+}
+
 static inline void wd24x_doom_present(int mode, const uint8_t *src,
 				      uint8_t *dst, struct wd24x_bank_stat *st)
 {
@@ -151,26 +203,30 @@ static inline void wd24x_doom_present(int mode, const uint8_t *src,
 
 	if (st)
 		memset(st, 0, sizeof *st);
-	for (y = 0; y < WD24X_DOOM_DST_H; y++) {
-		uint8_t row[WD24X_DOOM_DST_W];
-		unsigned x;
-		unsigned sy;
-		const uint8_t *srow;
+	if (mode != WD24X_DOOM_FILL) {
+		/* Top, picture, bottom. Bottom before the picture would
+		 * switch to the last window and back. */
+		{
+			uint8_t row[WD24X_DOOM_DST_W] __attribute__((aligned(4)));
+			unsigned y;
 
-		if (mode == WD24X_DOOM_FILL) {
-			sy = wd24x_doom_fill_src_y(y);
-		} else if (y < WD24X_DOOM_LETTER_Y ||
-			   y >= WD24X_DOOM_LETTER_Y + WD24X_DOOM_SRC_H * 2u) {
 			memset(row, 0, sizeof row);
-			wd24x_doom_emit(dst, y * WD24X_DOOM_DST_W, row,
-					WD24X_DOOM_DST_W, st);
-			continue;
-		} else {
-			sy = (y - WD24X_DOOM_LETTER_Y) / 2u;
+			for (y = 0; y < WD24X_DOOM_LETTER_Y; y++)
+				wd24x_doom_emit(dst, y * WD24X_DOOM_DST_W, row,
+						WD24X_DOOM_DST_W, st);
+			wd24x_doom_letter_picture(src, dst, st);
+			for (y = WD24X_DOOM_LETTER_Y + WD24X_DOOM_SRC_H * 2u;
+			     y < WD24X_DOOM_DST_H; y++)
+				wd24x_doom_emit(dst, y * WD24X_DOOM_DST_W, row,
+						WD24X_DOOM_DST_W, st);
 		}
-		srow = src + sy * WD24X_DOOM_SRC_W;
-		for (x = 0; x < WD24X_DOOM_DST_W; x++)
-			row[x] = srow[x / 2u];
+		return;
+	}
+	for (y = 0; y < WD24X_DOOM_DST_H; y++) {
+		uint8_t row[WD24X_DOOM_DST_W] __attribute__((aligned(4)));
+		unsigned sy = wd24x_doom_fill_src_y(y);
+
+		wd24x_doom_expand2(row, src + sy * WD24X_DOOM_SRC_W);
 		wd24x_doom_emit(dst, y * WD24X_DOOM_DST_W, row,
 				WD24X_DOOM_DST_W, st);
 	}

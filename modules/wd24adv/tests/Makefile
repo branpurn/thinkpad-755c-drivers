@@ -43,6 +43,13 @@ test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test
 	/tmp/wd24-test-tty-own
 	$(CC) $(CFLAGS) -I.. -o /tmp/wd24-test-trial-nomap test_trial_nomap.c
 	/tmp/wd24-test-trial-nomap
+	$(CC) $(CFLAGS) -I.. -o /tmp/wd24-test-cmap-cache test_cmap_cache.c
+	/tmp/wd24-test-cmap-cache
+	$(CC) $(CFLAGS) -I. -o /tmp/wd24-test-xproto test_xproto.c
+	/tmp/wd24-test-xproto
+	$(CC) $(CFLAGS) -I. -o /tmp/wd24-test-xcmp wd24x-xcmp.c
+	dash ./test_desktop_run.sh
+	dash ./test_doom_run.sh
 
 test_core: test_core.c $(CORE) ../wd24adv_core.h
 	$(CC) $(CFLAGS) -o $@ test_core.c $(CORE)

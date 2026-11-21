@@ -1,0 +1,278 @@
+#!/bin/sh
+# Doom on the phase 2/3 module. One shot. Does not start by being copied.
+# Do not set WD24X_MOCK on the target.
+#   sh s6d-doom-run.sh demo1
+#   sh s6d-doom-run.sh demo2
+#   sh s6d-doom-run.sh demo3
+#   sh s6d-doom-run.sh eyes
+# demoN is -timedemo with no tty input. eyes opts into WD24X_DOOM_INPUT=tty
+# and is the keyboard test, not the unattended run. Trial is 600s, the
+# module maximum. The engine's completed timedemo exits 255: I_Error prints
+# "timed N gametics in N realtics" and then exit(-1). That 255 is this
+# script's success, together with the gametics line. No VGA register writes
+# beyond the module's existing mode and colormap path.
+P=${WD24X_MOCK:-}
+owned=
+mode=${1:-}
+finishing=
+cleanup_rc=0
+
+hash_ok() {
+	case "$(sha256sum "$1")" in
+	"$2"*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+need_tmp() {
+	case "$1" in
+	/tmp/*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+pinned() {
+	[ -n "$1" ] && [ "$1" != "UNPINNED" ]
+}
+
+stop() {
+	echo "WD24X-DOOM-RUN stop $1"
+	exit 1
+}
+
+own_cleanup() {
+	rmst=0
+	if [ -n "$finishing" ]; then
+		return "$cleanup_rc"
+	fi
+	finishing=1
+	if [ -r "$P/proc/wd24adv/live" ]; then
+		echo "WD24X-DOOM-RUN live"
+		cat "$P/proc/wd24adv/live"
+	fi
+	if [ -r "$P/proc/wd24adv/s6d" ]; then
+		echo "WD24X-DOOM-RUN s6d"
+		cat "$P/proc/wd24adv/s6d"
+	fi
+	if [ "$owned" = 1 ] && grep -q '^wd24adv ' "$P/proc/modules" 2>/dev/null; then
+		rmmod wd24adv
+		rmst=$?
+		echo "RM=$rmst"
+		if [ "$rmst" != 0 ]; then
+			cleanup_rc=1
+			return 1
+		fi
+	fi
+	dmesg > "$P/tmp/wd24x-doom-dmesg.txt" 2>/dev/null
+	return "$cleanup_rc"
+}
+
+fail() {
+	echo "WD24X-DOOM-RUN stop $1"
+	own_cleanup || echo "WD24X-DOOM-RUN executor finish rmmod"
+	exit 1
+}
+
+console_ok() {
+	fb=$(cat "$P/proc/fb" 2>/dev/null)
+	name=$(cat "$P/sys/class/vtconsole/vtcon0/name" 2>/dev/null)
+	bind=$(cat "$P/sys/class/vtconsole/vtcon0/bind" 2>/dev/null)
+	echo "FB=[$fb]"
+	echo "VT=$name"
+	echo "BIND=$bind"
+	[ -z "$fb" ] || return 1
+	case "$name" in
+	*VGA+*) ;;
+	*) return 1 ;;
+	esac
+	[ "$bind" = "1" ] || return 1
+	[ ! -e "$P/sys/class/vtconsole/vtcon1" ] || return 1
+	return 0
+}
+
+live_ok() {
+	live=$(cat "$P/proc/wd24adv/live" 2>/dev/null) || return 1
+	echo "$live"
+	case "$live" in
+	*"wd24adv live: trial expiry -> 0"*) ;;
+	*) return 1 ;;
+	esac
+	case "$live" in
+	*"readback mismatches 0;"*) ;;
+	*) return 1 ;;
+	esac
+	case "$live" in
+	*"in_text 1;"*) ;;
+	*) return 1 ;;
+	esac
+	return 0
+}
+
+s6d_after() {
+	s6d=$(cat "$P/proc/wd24adv/s6d" 2>/dev/null) || return 1
+	echo "$s6d"
+	case "$s6d" in
+	*"s6d: armed 0 active "*) ;;
+	*) return 1 ;;
+	esac
+	case "$s6d" in
+	*" thrash 0 latched 0 "*) ;;
+	*) return 1 ;;
+	esac
+	return 0
+}
+
+have_line() {
+	hit=0
+	while IFS= read -r line; do
+		if [ "$line" = "$2" ]; then
+			hit=1
+		fi
+	done < "$1"
+	[ "$hit" = 1 ]
+}
+
+case "$mode" in
+demo1|demo2|demo3|eyes) ;;
+*) stop "mode" ;;
+esac
+
+if [ -z "${WD24X_CANDIDATE_ENV:-}" ]; then
+	WD24X_CANDIDATE_ENV=$(dirname "$0")/s6d-candidate.env
+fi
+if [ -z "${WD24X_DOOM_ENV:-}" ]; then
+	WD24X_DOOM_ENV=$(dirname "$0")/s6d-doom.env
+fi
+[ -f "$WD24X_CANDIDATE_ENV" ] || stop "candidate env"
+[ -f "$WD24X_DOOM_ENV" ] || stop "doom env"
+. "$WD24X_CANDIDATE_ENV"
+. "$WD24X_DOOM_ENV"
+pinned "${WD24X_CANDIDATE_SHA:-}" || stop "candidate unpinned"
+pinned "${WD24X_DOOM_SHA:-}" || stop "doom unpinned"
+need_tmp "${WD24X_CANDIDATE_KO:-}" || stop "candidate path"
+need_tmp "${WD24X_DOOM_BIN:-}" || stop "doom path"
+need_tmp "${WD24X_WAD:-}" || stop "wad path"
+case "${WD24X_CANDIDATE_KO:-}" in
+*pr14*) stop "baseline" ;;
+esac
+KO="$P$WD24X_CANDIDATE_KO"
+BIN="$P$WD24X_DOOM_BIN"
+WAD="$P$WD24X_WAD"
+
+[ -f "$KO" ] || stop "module missing"
+[ -x "$BIN" ] || stop "doom missing"
+[ -f "$WAD" ] || stop "wad missing"
+hash_ok "$KO" "$WD24X_CANDIDATE_SHA" || stop "module hash"
+hash_ok "$BIN" "$WD24X_DOOM_SHA" || stop "doom hash"
+sz=$(wc -c < "$WAD" | tr -d ' ')
+[ "$sz" = "$WD24X_WAD_SIZE" ] || stop "wad size"
+hash_ok "$WAD" "$WD24X_WAD_SHA" || stop "wad hash"
+if [ -f "$P/tmp/default.cfg" ] || [ -f "$P/tmp/doom.cfg" ]; then
+	stop "config"
+fi
+console_ok || stop "console"
+if [ -S "$P/tmp/.X11-unix/X1" ] || [ -f "$P/tmp/.X1-lock" ]; then
+	stop "stale X1"
+fi
+if grep -q '^wd24adv ' "$P/proc/modules" 2>/dev/null; then
+	stop "wd24adv loaded"
+fi
+if grep -q '^vga16fb ' "$P/proc/modules" 2>/dev/null; then
+	stop "vga16fb"
+fi
+if grep -q '^wd90c24fb ' "$P/proc/modules" 2>/dev/null; then
+	stop "wd90c24fb"
+fi
+
+insmod "$KO" dryrun=0 live=1 mode=640x480-8 trial=600 s6d=1 s6d_cmap=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
+rc=$?
+echo "RC=$rc"
+[ "$rc" = "0" ] || stop "insmod"
+owned=1
+dmesg -c >/dev/null
+start=$(date +%s 2>/dev/null || echo 0)
+echo "WD24X-DOOM-RUN mode $mode"
+
+if [ "$mode" = "eyes" ]; then
+	WD24X_DOOM_FB=mmap WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=letterbox \
+		WD24X_DOOM_INPUT=tty WD24X_DOOM_FRAMES= \
+		"$BIN" -iwad "$WAD" -nosound -nogui \
+		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
+else
+	WD24X_DOOM_FB=mmap WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=letterbox \
+		WD24X_DOOM_INPUT= WD24X_DOOM_FRAMES= \
+		"$BIN" -iwad "$WAD" -timedemo "$mode" -nosound -nogui \
+		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
+fi
+dr=$?
+echo "DR=$dr"
+cat "$P/tmp/wd24x-doom.out"
+cat "$P/tmp/wd24x-doom.err"
+if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM fb mmap 640 480 index"; then
+	fail "mmap"
+fi
+if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM present letterbox"; then
+	fail "present"
+fi
+if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM blit letterbox dword"; then
+	fail "blit"
+fi
+if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM palette put 256"; then
+	fail "palette"
+fi
+
+if [ "$mode" = "eyes" ]; then
+	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM input tty"; then
+		fail "input"
+	fi
+else
+	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM input tty"; then
+		fail "input"
+	fi
+	found=
+	for log in "$P/tmp/wd24x-doom.out" "$P/tmp/wd24x-doom.err"; do
+		while IFS= read -r line; do
+			case "$line" in
+			"timed "*" gametics in "*" realtics") found=$line ;;
+			esac
+		done < "$log"
+	done
+	[ -n "$found" ] || fail "timedemo"
+	if [ "$dr" != "0" ] && [ "$dr" != "255" ]; then
+		fail "doom rc"
+	fi
+	set -- $found
+	gt=$2
+	rt=$5
+	[ "$rt" -gt 0 ] || fail "realtics"
+	echo "WD24X-DOOM-FPS gametics $gt realtics $rt fps_x100 $((gt * 3500 / rt))"
+fi
+
+now=$(date +%s 2>/dev/null || echo 0)
+left=600
+if [ "$start" != "0" ] && [ "$now" != "0" ]; then
+	used=$((now - start))
+	if [ "$used" -lt 0 ]; then
+		used=0
+	fi
+	left=$((600 - used))
+fi
+if [ "$left" -lt 5 ]; then
+	left=5
+fi
+if [ "$left" -gt 600 ]; then
+	left=600
+fi
+echo "WD24X-DOOM-RUN wait $left"
+sleep "$left"
+if ! live_ok || ! s6d_after || ! console_ok; then
+	echo "WD24X-DOOM-RUN stop expiry"
+	own_cleanup || echo "WD24X-DOOM-RUN executor finish rmmod"
+	exit 1
+fi
+own_cleanup || exit 1
+console_ok || {
+	echo "WD24X-DOOM-RUN stop console after rmmod"
+	exit 1
+}
+echo "WD24X-DOOM-RUN done"

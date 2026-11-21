@@ -286,4 +286,16 @@ all exported by the floppy kernel: `mod_timer`, `timer_delete_sync`,
 `jiffies`, `queue_work_on`, `cancel_work_sync`. Phase 2 and phase 3
 read the path and hash from `docs/s6d-candidate.env` and refuse to
 insmod if the file does not match. Phase 1 stays on `92591b1e`.
-This file has not been run. It is not an acceptance of hue or the keyboard.
+
+## 2026-11-21 16:15 ET phase 2 and phase 3 pass
+
+Floppy kernel, module `fdf30c77`, scripts from `a143000`. Phase 2 and
+phase 3 both returned `SCRIPT_RC`, `RC`, and `CL` 0. GET printed
+`entries 256 shift10 1`. SET printed `index 7 put 1 cache 1`. Faults,
+switches, thrash, and latched were 0. `cmap_param`, `published`, and
+`frozen` were 1/1/1. Expiry was `wd24adv live: trial expiry -> 0`,
+data 899, index 357, mismatches 0, in_text 1. dmesg ended
+`S6d: end (trial expiry): faults 0 switches 0 thrash 0`. rmmod printed
+`live text: 0` with data 896, index 336, mismatches 0. TTY snapshots
+before and after matched: kd 0, fg 1, VGA+, bind 1. Hue on the panel
+is still not a pass. The next bundle is `docs/s6d-product.txt`.

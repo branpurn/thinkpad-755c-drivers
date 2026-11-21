@@ -69,6 +69,29 @@ int main(void)
 	T(st.crossed == 0 && st.past_frame == 0 && st.back == 0, "letter banks");
 	T(st.switches == 4 && st.max_consec == 1, "letter forward switches");
 	T(dst[WD24X_DOOM_FRAME] == 0xa5, "letter guard");
+	{
+		uint8_t exp[WD24X_DOOM_DST_W];
+		uint8_t pair[WD24X_DOOM_SRC_W];
+
+		memset(pair, 0, sizeof pair);
+		pair[0] = 1;
+		pair[1] = 2;
+		wd24x_doom_expand2(exp, pair);
+		T(exp[0] == 1 && exp[1] == 1 && exp[2] == 2 && exp[3] == 2,
+		  "dword expand");
+	}
+	memset(dst, 0x5a, sizeof dst);
+	wd24x_doom_letter_bars(dst, NULL);
+	T(dst[0] == 0 && dst[39 * 640] == 0 && dst[440 * 640] == 0, "bars");
+	T(dst[40 * 640] == 0x5a, "bars leave picture");
+	wd24x_doom_letter_picture(src, dst, NULL);
+	T(dst[0] == 0 && dst[40 * 640] == 15 && dst[41 * 640 + 1] == 15,
+	  "picture");
+	src[0] = 4;
+	wd24x_doom_letter_picture(src, dst, NULL);
+	T(dst[0] == 0 && dst[440 * 640] == 0 && dst[40 * 640] == 4,
+	  "second picture keeps bars");
+	src[0] = 15;
 
 	memset(dst, 0xa5, sizeof dst);
 	wd24x_doom_present(WD24X_DOOM_FILL, src, dst, &st);

@@ -46,6 +46,8 @@ static struct wd24x_keys keys;
 static int have_up;
 static unsigned char pending_up;
 static volatile sig_atomic_t got_sig;
+static int bars_sent;
+static int sum_frames;
 
 static int cap_of(void)
 {
@@ -202,6 +204,8 @@ void DG_Init(void)
 	}
 	printf("WD24X-DOOM present %s\n",
 	       present_mode == WD24X_DOOM_FILL ? "fill" : "letterbox");
+	if (present_mode == WD24X_DOOM_LETTER)
+		printf("WD24X-DOOM blit letterbox dword\n");
 	if (wd24x_doom_palette_put(getenv("WD24X_DOOM_PALETTE")) &&
 	    !wd24x_doom_fb_opt_in(getenv("WD24X_DOOM_FB"))) {
 		printf("WD24X-DOOM palette put needs mmap\n");
@@ -211,6 +215,17 @@ void DG_Init(void)
 		printf("WD24X-DOOM display file\n");
 	else if (open_fb() != 0)
 		exit(1);
+	{
+		const char *sum_s = getenv("WD24X_DOOM_SUM");
+
+		if (sum_s && sum_s[0] == '1')
+			sum_frames = 1;
+		else if (sum_s && sum_s[0] == '0')
+			sum_frames = 0;
+		else
+			sum_frames = fb ? 0 : 1;
+	}
+	printf("WD24X-DOOM sum %s\n", sum_frames ? "on" : "off");
 	if (!wd24x_doom_input_opt_in(getenv("WD24X_DOOM_INPUT"))) {
 		printf("WD24X-DOOM input none\n");
 		return;
@@ -237,10 +252,22 @@ void DG_DrawFrame(void)
 	idx = (const uint8_t *)DG_ScreenBuffer;
 	frames++;
 	index_sum = fnv(idx, WD24X_DOOM_SRC_W * WD24X_DOOM_SRC_H);
-	wd24x_doom_present(present_mode, idx, present, NULL);
-	present_sum = fnv(present, WD24X_DOOM_FRAME);
-	if (fb)
-		wd24x_doom_emit(fb, 0, present, WD24X_DOOM_FRAME, NULL);
+	if (fb && present_mode == WD24X_DOOM_LETTER) {
+		if (!bars_sent) {
+			wd24x_doom_present(present_mode, idx, fb, NULL);
+			bars_sent = 1;
+		} else {
+			wd24x_doom_letter_picture(idx, fb, NULL);
+		}
+		if (sum_frames)
+			wd24x_doom_present(present_mode, idx, present, NULL);
+	} else {
+		wd24x_doom_present(present_mode, idx, present, NULL);
+		if (fb)
+			wd24x_doom_emit(fb, 0, present, WD24X_DOOM_FRAME, NULL);
+	}
+	if (sum_frames)
+		present_sum = fnv(present, WD24X_DOOM_FRAME);
 	if (wd24x_doom_palette_put(getenv("WD24X_DOOM_PALETTE")))
 		put_playpal();
 	if (frame_cap && (int)frames >= frame_cap) {

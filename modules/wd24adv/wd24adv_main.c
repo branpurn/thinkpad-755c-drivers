@@ -39,6 +39,7 @@
  *   /proc/wd24adv/s6b      - s6b=1 only: S6b session log (/dev/wd24s6b, dual-window mmap + copy)
  *   /proc/wd24adv/live     - live log; read uses trylock
  *   /proc/wd24adv/s6d      - s6d=1 only: fault/switch counters (trylock)
+ *   /proc/wd24adv/cmap     - s6d_cmap=1 only: published cache, no port I/O
  *
  * S6d: s6d=1 arms after 640x480-8.
  *   s6d_fbcon=0 — do not register_framebuffer (bars stay; no fbdev node).
@@ -114,6 +115,7 @@
 #include "wd24adv_s6d.h"
 #include "wd24adv_ioctl.h"
 #include "wd24adv_dac_entry.h"
+#include "wd24adv_cmap_cache.h"
 #include "wd24adv_trial.h"
 #include <linux/fb.h>
 #include <linux/fs.h>
@@ -2698,6 +2700,55 @@ static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 static const struct proc_ops s6d_ops = {
 	.proc_read = s6d_read, .proc_lseek = default_llseek };
 
+/* Published cache only. lock_fb_info waits out fb_setcmap's copy.
+ * No hw_lock and no DAC ports: a second /dev/fb0 open would be -EBUSY
+ * and its close would drop the mapped client's PTEs. */
+static ssize_t cmap_read(struct file *f, char __user *ubuf, size_t count,
+			 loff_t *p)
+{
+	u16 red[256], green[256], blue[256];
+	char *text;
+	unsigned int i;
+	int len;
+	ssize_t n;
+
+	(void)f;
+	if (!s6d_info)
+		return rd(ubuf, count, p, WD24_CMAP_ABSENT,
+			  sizeof(WD24_CMAP_ABSENT) - 1);
+	if (!lock_fb_info(s6d_info))
+		return rd(ubuf, count, p, WD24_CMAP_BUSY,
+			  sizeof(WD24_CMAP_BUSY) - 1);
+	if (!s6d_cmap_published || s6d_info->cmap.len != 256 ||
+	    !s6d_info->cmap.red || !s6d_info->cmap.green ||
+	    !s6d_info->cmap.blue) {
+		unlock_fb_info(s6d_info);
+		return rd(ubuf, count, p, WD24_CMAP_ABSENT,
+			  sizeof(WD24_CMAP_ABSENT) - 1);
+	}
+	for (i = 0; i < 256; i++) {
+		red[i] = s6d_info->cmap.red[i];
+		green[i] = s6d_info->cmap.green[i];
+		blue[i] = s6d_info->cmap.blue[i];
+	}
+	unlock_fb_info(s6d_info);
+	text = kmalloc(8192, GFP_KERNEL);
+	if (!text)
+		return -ENOMEM;
+	len = wd24_cmap_cache_render(text, 8192, red, green, blue);
+	if (len < 0) {
+		kfree(text);
+		return rd(ubuf, count, p, WD24_CMAP_BAD,
+			  sizeof(WD24_CMAP_BAD) - 1);
+	}
+	n = rd(ubuf, count, p, text, (size_t)len);
+	kfree(text);
+	return n;
+}
+
+static const struct proc_ops cmap_ops = {
+	.proc_read = cmap_read, .proc_lseek = default_llseek };
+
 
 /* live: claim the ports, map A0000, save the text state */
 static int live_start(void)
@@ -3003,6 +3054,7 @@ static int __init wd24adv_init(void)
 	    (s6 && !proc_create_data("s6", 0444, pdir, &s6_ops, NULL)) ||
 	    (s6b && !proc_create_data("s6b", 0444, pdir, &s6b_ops, NULL)) ||
 	    (s6d && !proc_create_data("s6d", 0444, pdir, &s6d_ops, NULL)) ||
+	    (s6d && s6d_cmap && !proc_create_data("cmap", 0444, pdir, &cmap_ops, NULL)) ||
 	    (live && (!proc_create_data("live", 0444, pdir, &live_ops, NULL) ||
 		      !proc_create_data("control", 0200, pdir, &control_ops, NULL)))) {
 		if (live && !hw_dead) {

@@ -31,6 +31,8 @@ lowmem.bin
 /modules/wd24adv/tests/.glyph-mock-*
 /modules/wd24adv/tests/.cmap1-mock-*
 /modules/wd24adv/tests/.c23-*
+/modules/wd24adv/tests/.desk-*
+/modules/wd24adv/tests/.doom-*
 /modules/wd24adv/tests/test_cmap_check
 /modules/wd24adv/tests/test_cmap_abi
 /.venv*/
