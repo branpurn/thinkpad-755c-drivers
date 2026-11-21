@@ -265,8 +265,11 @@ if [ "$cl" != "0" ] || ! exact_mark; then
 	fail "client"
 fi
 
-# 5s plus 15s are already slept. 170s more passes trial=180.
-sleep 170
+# Client is already reaped. Sleep a full trial from here. The earlier
+# 5s and 15s can be cut short when that child exits, so they are not
+# part of the deadline. The timer is armed inside insmod, before it
+# returns, so 180s here is past trial=180.
+sleep 180
 if ! live_ok || ! s6d_ok || ! console_ok; then
 	echo "WD24X-CMAP-P3-RUN stop expiry"
 	own_cleanup || echo "WD24X-CMAP-P3-RUN executor finish rmmod"

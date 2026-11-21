@@ -259,3 +259,20 @@ it, is the existing S6d line plus `s6d_cmap=1`:
 A successful open has published a DAC read that matched the load snapshot.
 That is still not a panel reading of hue, a fifth square, a glyph, or
 the keyboard. The baseline hash stays the module that has already run.
+
+## 2026-11-21 phase 2, floppy kernel
+
+Candidate `92591b1e` with `s6d_cmap=1` and no mmap client published
+(`entries 256 shift10 1`, faults 0) and stayed `trial PENDING` after the
+script's wait. Close had left `armed 1 active 0 stopping 1 fb_reg 1`.
+`fb_release` holds `info->lock` and the old release took `console_lock`
+there to end the banking session. A publish-only close no longer does
+that. The trial timer is `mod_timer` on the CPU that armed it, and
+expiry does not look at the fault count. Phase 1's mapped close still
+unmaps immediately and ends the session from a work item after
+`fb_release` returns. This is not a new acceptance of hue or the keyboard.
+
+The CF file `vmlinuz.x` (same version string) refused that module:
+unknown `vmf_insert_pfn`, `unmap_mapping_range`, `zap_vma_ptes`. The
+floppy kernel is the one those symbols exist on. Do not load this
+module into the CF kernel.

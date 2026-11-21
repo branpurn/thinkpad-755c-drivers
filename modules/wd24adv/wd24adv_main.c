@@ -103,6 +103,7 @@
 #include <linux/sched.h>
 #include <linux/workqueue.h>
 #include <linux/jiffies.h>
+#include <linux/timer.h>
 
 #include "wd24adv_core.h"
 #include "wd24adv_s2.h"
@@ -113,6 +114,7 @@
 #include "wd24adv_s6d.h"
 #include "wd24adv_ioctl.h"
 #include "wd24adv_dac_entry.h"
+#include "wd24adv_trial.h"
 #include <linux/fb.h>
 #include <linux/fs.h>
 #include <linux/device.h>
@@ -242,6 +244,8 @@ static bool hw_nested(void)
  * a draw; that touched the aperture mid-critical-section. */
 static bool s6d_registering;
 static bool wd24_exiting;
+static struct wd24s6d *s6d_st;
+static struct vm_area_struct *s6d_vma;
 static struct task_struct *s6d_ender;
 
 static void s6d_yield_ender(void)
@@ -277,7 +281,9 @@ static char *s3_txt;
 static size_t s3_len;
 static u8 *s3_mem;	/* 3 x 64 KiB: pre, model, read buffer */
 static void trial_fn(struct work_struct *w);
-static DECLARE_DELAYED_WORK(trial_work, trial_fn);
+static void trial_timer_fn(struct timer_list *t);
+static DEFINE_TIMER(trial_timer, trial_timer_fn);
+static DECLARE_WORK(trial_work, trial_fn);
 
 static bool other_module_loaded(const char *name)
 {
@@ -685,7 +691,7 @@ static int hw_mode(const struct wd24_mode *m)
 
 	if (!m || m->status != WD24_PROVEN)
 		return -EINVAL;
-	if (!hw->in_text || delayed_work_pending(&trial_work))
+	if (!hw->in_text || timer_pending(&trial_timer) || work_pending(&trial_work))
 		return -EBUSY;	/* text first; one trial timer at a time */
 	if (hw->nmismatch)
 		return -EIO;	/* after any readback mismatch: text/rmmod only */
@@ -693,23 +699,43 @@ static int hw_mode(const struct wd24_mode *m)
 		return -EIO;
 	err = hw_run(OP_MODE, m);
 	if (!err) {
-		queue_delayed_work_on(WORK_CPU_UNBOUND, system_percpu_wq,
-				      &trial_work, (unsigned long)trial * HZ);
+		/* Local timer base. queue_delayed_work_on(WORK_CPU_UNBOUND)
+		 * can park the timer on a housekeeping CPU this UP build
+		 * never runs. mod_timer stays on the CPU that armed it.
+		 * A cmap publish with no mmap must not be required to fire it. */
+		mod_timer(&trial_timer, jiffies + (unsigned long)trial * HZ);
 		pr_info("%s set: write \"confirm\" to /proc/wd24adv/control within %u s or it reverts to text\n",
 			m->name, trial);
 	}
 	return err;
 }
 
+static void trial_timer_fn(struct timer_list *t)
+{
+	(void)t;
+	queue_work(system_percpu_wq, &trial_work);
+}
+
 static void trial_fn(struct work_struct *w)
 {
+	struct wd24_trial_gate gate;
+
 	hw_acq();
+	gate.pending = hw && hw->trial_pending;
+	gate.faults = s6d_st ? (int)s6d_st->nfault : 0;
+	gate.has_vma = s6d_vma != NULL;
+	gate.stopping = s6d_st && s6d_st->stopping;
+	gate.active = s6d_st && s6d_st->active;
 	/* register_framebuffer may have dropped hw_lock. Do not tear the
-	 * session down under it; run this expiry once registration returns. */
-	if (s6d_registering && !READ_ONCE(wd24_exiting)) {
+	 * session down under it; run this expiry once registration returns.
+	 * faults == 0 is not a reason to wait. */
+	if (!wd24_trial_expire_now(&gate, s6d_registering, READ_ONCE(wd24_exiting))) {
+		if (s6d_registering && !READ_ONCE(wd24_exiting) && gate.pending) {
+			hw_rel();
+			mod_timer(&trial_timer, jiffies + HZ);
+			return;
+		}
 		hw_rel();
-		queue_delayed_work_on(WORK_CPU_UNBOUND, system_percpu_wq,
-				      &trial_work, HZ);
 		return;
 	}
 	s6d_yield_ender();
@@ -1805,12 +1831,10 @@ static void s6b_arm(const struct wd24_mode *m) { }
 
 
 /* ---- S6d fault-banked fbdev (visual: binds fbcon) ---- */
-static struct wd24s6d *s6d_st;
 static struct wd24s6b *s6d_b;
 static struct fb_info *s6d_info;
 static bool s6d_armed, s6d_busy;
 static bool s6d_cmap_published, s6d_cmap_frozen;
-static struct vm_area_struct *s6d_vma;	/* exclusive single mapper */
 
 /* Drop every userspace PTE before the aperture is reprogrammed or the
  * module's vm_ops go away. Caller holds hw_lock. Order matches
@@ -1882,6 +1906,17 @@ static void s6d_end_locked(const char *why)
 	s6d_ender = NULL;
 	hw_acq();
 }
+
+static void s6d_release_work_fn(struct work_struct *w)
+{
+	(void)w;
+	hw_acq();
+	/* fb_release already returned and dropped info->lock. */
+	s6d_end_locked("fb release");
+	hw_rel();
+}
+
+static DECLARE_WORK(s6d_release_work, s6d_release_work_fn);
 
 static void s6d_stop(const char *why)
 {
@@ -2238,15 +2273,32 @@ static int s6d_fb_open(struct fb_info *info, int user)
 
 static int s6d_fb_release(struct fb_info *info, int user)
 {
+	struct wd24_trial_gate gate;
+
 	if (!user)
 		return 0;
+	/* Caller (fb_release) holds info->lock. console_lock from here
+	 * inverts fbcon's order and can stall the trial worker. A mapped
+	 * fd still has to drop PTEs now; the banking end runs after this
+	 * returns. A publish-only fd never mapped, so it must not set
+	 * stopping or end the session: the trial timer still owns the mode. */
 	hw_acq();
 	s6d_cmap_frozen = true;
+	gate.pending = hw && hw->trial_pending;
+	gate.faults = s6d_st ? (int)s6d_st->nfault : 0;
+	gate.has_vma = s6d_vma != NULL;
+	gate.stopping = s6d_st && s6d_st->stopping;
+	gate.active = s6d_st && s6d_st->active;
+	wd24_trial_note_release(&gate);
 	s6d_yield_ender();
-	/* munmap already ran on process exit; this also covers close()
-	 * while a VMA still exists. */
-	s6d_drop_maps();
-	s6d_end_locked("fb release");
+	if (gate.has_vma) {
+		s6d_drop_maps();
+		s6d_busy = false;
+		hw_rel();
+		if (!READ_ONCE(wd24_exiting))
+			schedule_work(&s6d_release_work);
+		return 0;
+	}
 	s6d_busy = false;
 	hw_rel();
 	return 0;
@@ -3040,9 +3092,12 @@ static void __exit wd24adv_exit(void)
 			proc_remove(pdir);
 		pdir = NULL;
 		WRITE_ONCE(wd24_exiting, true);
-		cancel_delayed_work_sync(&trial_work);
-		/* trial_fn may have queued one more delay as it exited. */
-		cancel_delayed_work_sync(&trial_work);
+		timer_delete_sync(&trial_timer);
+		cancel_work_sync(&trial_work);
+		cancel_work_sync(&s6d_release_work);
+		/* trial_timer_fn may have queued the work as it was deleted. */
+		timer_delete_sync(&trial_timer);
+		cancel_work_sync(&trial_work);
 		hw_acq();
 		/* not reached while pinned; defensive: registers only if locked */
 		if (!vram_gate("rmmod: plane restore") || !hw->in_text)

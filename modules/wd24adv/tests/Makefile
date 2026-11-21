@@ -41,6 +41,8 @@ test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test
 	/tmp/wd24-test-doom-present
 	$(CC) $(CFLAGS) -I../../../tools/wd24-doom -o /tmp/wd24-test-tty-own ../../../tools/wd24-doom/test_tty_own.c ../../../tools/wd24-doom/wd24x-tty-own.c -lutil
 	/tmp/wd24-test-tty-own
+	$(CC) $(CFLAGS) -I.. -o /tmp/wd24-test-trial-nomap test_trial_nomap.c
+	/tmp/wd24-test-trial-nomap
 
 test_core: test_core.c $(CORE) ../wd24adv_core.h
 	$(CC) $(CFLAGS) -o $@ test_core.c $(CORE)
