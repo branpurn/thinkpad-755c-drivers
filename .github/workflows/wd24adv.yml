@@ -1,0 +1,51 @@
+name: wd24adv
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  module:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 gcc-14-multilib flex bison bc libssl-dev libelf-dev
+          echo 'int f(void){return 0;}' > /tmp/t.c
+          if gcc-14 -Werror=frame-larger-than -c /tmp/t.c -o /tmp/t.o 2>/tmp/bare.err; then
+            echo "bare -Werror=frame-larger-than was accepted"
+            exit 1
+          fi
+          grep -q "no option" /tmp/bare.err
+          gcc-14 -Werror=frame-larger-than=1280 -c /tmp/t.c -o /tmp/t.o
+
+      - name: linux 6.18.57 headers
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/linux"
+          curl -fL -o "$RUNNER_TEMP/linux/linux-6.18.57.tar.xz" \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.57.tar.xz
+          echo "5bd9acdc82ec5efc3790ae840e5aaa40dfde7efff261cf6dde902dc570acf98c  $RUNNER_TEMP/linux/linux-6.18.57.tar.xz" | sha256sum -c
+          tar -C "$RUNNER_TEMP/linux" -xf "$RUNNER_TEMP/linux/linux-6.18.57.tar.xz"
+          SRC="$RUNNER_TEMP/linux/linux-6.18.57"
+          KO="$RUNNER_TEMP/linux/kbuild"
+          make -s -C "$SRC" O="$KO" ARCH=i386 tinyconfig
+          KCONFIG_CONFIG="$KO/.config" "$SRC/scripts/kconfig/merge_config.sh" -m -O "$KO" \
+            "$KO/.config" config/wd24adv-ci.fragment >/dev/null
+          make -s -C "$SRC" O="$KO" ARCH=i386 olddefconfig
+          make -s -C "$SRC" O="$KO" ARCH=i386 -j"$(nproc)" modules_prepare
+          echo "KDIR=$KO" >> "$GITHUB_ENV"
+          echo "KSRC=$SRC" >> "$GITHUB_ENV"
+
+      - name: build wd24adv
+        run: |
+          set -eu
+          make -C "$KDIR" ARCH=i386 M="$GITHUB_WORKSPACE/modules/wd24adv" CC=gcc-14 -j"$(nproc)" modules
+          if nm -u modules/wd24adv/wd24adv.ko | grep -q __kmalloc_large_noprof; then
+            echo "module imports __kmalloc_large_noprof"
+            exit 1
+          fi
+          sh scripts/check-ko-exports.sh modules/wd24adv/wd24adv.ko

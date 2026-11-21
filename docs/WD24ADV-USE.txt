@@ -13,6 +13,8 @@ CF file `vmlinuz.x`. It does not export `vmf_insert_pfn`,
 Build this commit against the floppy tree. Vermagic
 `6.18.57-tc755x mod_unload 486`. After it links, run
 `sh scripts/check-ko-exports.sh wd24adv.ko`. It must exit 0.
+The stack flag in `modules/wd24adv/Kbuild` is
+`-Werror=frame-larger-than=1280`. The bare form is not a gcc option.
 `__kmalloc_large_noprof` is not an allowed import. Put the file where
 `docs/s6d-desktop.env` names it and replace `WD24X_CANDIDATE_SHA`.
 Leave `docs/s6d-candidate.env` on `fdf30c77`. Phase 2 and 3 still use

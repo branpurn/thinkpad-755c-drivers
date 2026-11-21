@@ -19,7 +19,23 @@ if grep -q '__kmalloc_large_noprof' "$LIST"; then bad "list has large"; else ok;
 if grep -q 'kmalloc(WD24S6D_PRESENT_SRC' "$MAIN"; then bad "present kmalloc"; else ok; fi
 if grep -E 'kmalloc\((8192|64000|65536)[,)]' "$MAIN"; then bad "big kmalloc"; else ok; fi
 if grep -q 'vmalloc(WD24S6D_PRESENT_SRC)' "$MAIN"; then ok; else bad "present vmalloc"; fi
-if grep -q -- '-Werror=frame-larger-than' "$ROOT/modules/wd24adv/Kbuild"; then ok; else bad "frame flag"; fi
+if grep -q -- '-Werror=frame-larger-than=1280' "$ROOT/modules/wd24adv/Kbuild"; then ok; else bad "frame flag"; fi
+if grep -E '(^|[[:space:]])-Werror=frame-larger-than([[:space:]]|$)' "$ROOT/modules/wd24adv/Kbuild"; then
+	bad "bare frame flag"
+else
+	ok
+fi
+echo 'int f(void){return 0;}' > "$tmp/t.c"
+if gcc -Werror=frame-larger-than -c "$tmp/t.c" -o "$tmp/t.o" 2>"$tmp/bare.err"; then
+	bad "compiler accepted bare flag"
+else
+	ok
+fi
+if gcc -Werror=frame-larger-than=1280 -c "$tmp/t.c" -o "$tmp/t.o" 2>"$tmp/sized.err"; then
+	ok
+else
+	bad "compiler rejected sized flag"
+fi
 rm -rf "$tmp"
 echo "test_ko_exports: $pass passed, $fail failed"
 [ "$fail" = 0 ]
