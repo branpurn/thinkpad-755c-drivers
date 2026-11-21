@@ -1839,6 +1839,10 @@ static struct fb_info *s6d_info;
 static bool s6d_armed, s6d_busy;
 static bool s6d_cmap_published, s6d_cmap_frozen;
 static u32 s6d_pf_frames, s6d_pf_last, s6d_pf_total;
+/* One 64000-byte buffer for the blit. vmalloc, not kmalloc: a fixed
+ * allocation above 8 KiB on i386 is __kmalloc_large_noprof, which this
+ * floppy kernel does not export. Not freed per frame. */
+static u8 *s6d_present_src;
 
 /* Drop every userspace PTE before the aperture is reprogrammed or the
  * module's vm_ops go away. Caller holds hw_lock. Order matches
@@ -2492,7 +2496,6 @@ static int s6d_present_now(const u8 *src, u32 *nsw)
 static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
 {
 	struct wd24s6d_present req;
-	u8 *src;
 	u32 nsw = 0;
 	int err = 0;
 
@@ -2515,24 +2518,20 @@ static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long ar
 		if (wd24_blit_allow(&chk))
 			return -EINVAL;
 	}
-	src = kmalloc(WD24S6D_PRESENT_SRC, GFP_KERNEL);
-	if (!src)
+	if (!s6d_present_src)
 		return -ENOMEM;
-	if (copy_from_user(src, (void __user *)(unsigned long)req.pixels,
-			   WD24S6D_PRESENT_SRC)) {
-		kfree(src);
+	if (copy_from_user(s6d_present_src,
+			   (void __user *)(unsigned long)req.pixels,
+			   WD24S6D_PRESENT_SRC))
 		return -EFAULT;
-	}
 	hw_acq();
 	if (!s6d_st || !s6d_st->active || !s6d_armed || s6d_st->stopping ||
 	    !vmem || !hw || hw->in_text || hw_dead) {
 		hw_rel();
-		kfree(src);
 		return -ENODEV;
 	}
 	if (s6d_vma) {
 		hw_rel();
-		kfree(src);
 		return -EBUSY;
 	}
 	hw_rel();
@@ -2551,7 +2550,7 @@ static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long ar
 		hw->tag = "S6d: present";
 	}
 #endif
-	err = s6d_present_now(src, &nsw);
+	err = s6d_present_now(s6d_present_src, &nsw);
 #ifndef WD24S1_QEMU_FAKE
 	if (hw)
 		hw->be->end(hw);
@@ -2566,7 +2565,6 @@ out:
 #ifndef WD24S1_QEMU_FAKE
 	console_unlock();
 #endif
-	kfree(src);
 	if (err)
 		return err;
 	req.switches = nsw;
@@ -2614,8 +2612,10 @@ static void s6d_free(void)
 	}
 	vfree(s6d_st);
 	vfree(s6d_b);
+	vfree(s6d_present_src);
 	s6d_st = NULL;
 	s6d_b = NULL;
+	s6d_present_src = NULL;
 }
 
 static int s6d_setup(void)
@@ -2630,7 +2630,8 @@ static int s6d_setup(void)
 	}
 	s6d_st = vmalloc(sizeof(*s6d_st));
 	s6d_b = vmalloc(sizeof(*s6d_b));
-	if (!s6d_st || !s6d_b)
+	s6d_present_src = vmalloc(WD24S6D_PRESENT_SRC);
+	if (!s6d_st || !s6d_b || !s6d_present_src)
 		return -ENOMEM;
 	memset(s6d_b, 0, sizeof(*s6d_b));
 	wd24s6d_init(s6d_st, s6d_b, s6d_thrash_bound);
@@ -2837,11 +2838,18 @@ static const struct proc_ops s6d_ops = {
 static ssize_t cmap_read(struct file *f, char __user *ubuf, size_t count,
 			 loff_t *p)
 {
-	u16 red[256], green[256], blue[256];
+	struct wd24_cmap_snap {
+		u16 red[256];
+		u16 green[256];
+		u16 blue[256];
+	} *snap;
 	char *text;
 	unsigned int i;
 	int len;
 	ssize_t n;
+	/* Both sizes stay in the kmalloc caches. 8192 and above can become
+	 * __kmalloc_large_noprof, which this floppy kernel does not export. */
+	enum { WD24_CMAP_TEXT = 6144 };
 
 	(void)f;
 	/* 6.18.57 lock_fb_info() returns void. The older helper returned
@@ -2849,9 +2857,18 @@ static ssize_t cmap_read(struct file *f, char __user *ubuf, size_t count,
 	if (!s6d_info)
 		return rd(ubuf, count, p, WD24_CMAP_ABSENT,
 			  sizeof(WD24_CMAP_ABSENT) - 1);
+	snap = kmalloc(sizeof(*snap), GFP_KERNEL);
+	text = kmalloc(WD24_CMAP_TEXT, GFP_KERNEL);
+	if (!snap || !text) {
+		kfree(snap);
+		kfree(text);
+		return -ENOMEM;
+	}
 	lock_fb_info(s6d_info);
 	if (!s6d_info->fbops) {
 		unlock_fb_info(s6d_info);
+		kfree(snap);
+		kfree(text);
 		return rd(ubuf, count, p, WD24_CMAP_BUSY,
 			  sizeof(WD24_CMAP_BUSY) - 1);
 	}
@@ -2859,25 +2876,27 @@ static ssize_t cmap_read(struct file *f, char __user *ubuf, size_t count,
 	    !s6d_info->cmap.red || !s6d_info->cmap.green ||
 	    !s6d_info->cmap.blue) {
 		unlock_fb_info(s6d_info);
+		kfree(snap);
+		kfree(text);
 		return rd(ubuf, count, p, WD24_CMAP_ABSENT,
 			  sizeof(WD24_CMAP_ABSENT) - 1);
 	}
 	for (i = 0; i < 256; i++) {
-		red[i] = s6d_info->cmap.red[i];
-		green[i] = s6d_info->cmap.green[i];
-		blue[i] = s6d_info->cmap.blue[i];
+		snap->red[i] = s6d_info->cmap.red[i];
+		snap->green[i] = s6d_info->cmap.green[i];
+		snap->blue[i] = s6d_info->cmap.blue[i];
 	}
 	unlock_fb_info(s6d_info);
-	text = kmalloc(8192, GFP_KERNEL);
-	if (!text)
-		return -ENOMEM;
-	len = wd24_cmap_cache_render(text, 8192, red, green, blue);
+	len = wd24_cmap_cache_render(text, WD24_CMAP_TEXT, snap->red,
+				     snap->green, snap->blue);
 	if (len < 0) {
+		kfree(snap);
 		kfree(text);
 		return rd(ubuf, count, p, WD24_CMAP_BAD,
 			  sizeof(WD24_CMAP_BAD) - 1);
 	}
 	n = rd(ubuf, count, p, text, (size_t)len);
+	kfree(snap);
 	kfree(text);
 	return n;
 }

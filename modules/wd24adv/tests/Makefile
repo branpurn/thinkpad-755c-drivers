@@ -50,6 +50,7 @@ test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test
 	$(CC) $(CFLAGS) -I. -o /tmp/wd24-test-xcmp wd24x-xcmp.c
 	dash ./test_desktop_run.sh
 	dash ./test_doom_run.sh
+	dash ./test_ko_exports.sh
 	$(CC) $(CFLAGS) -I.. -I../../../tools/wd24-doom -o /tmp/wd24-test-present-thrash test_present_thrash.c
 	/tmp/wd24-test-present-thrash
 	$(CC) $(CFLAGS) -o /tmp/wd24-test-fb-api test_fb_api_61857.c
