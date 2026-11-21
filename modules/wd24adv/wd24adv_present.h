@@ -23,6 +23,35 @@
 #define WD24_PRESENT_LETTER_Y	40u
 #define WD24_PRESENT_WINS	8u
 
+struct wd24_blit_check {
+	u32 src_w;
+	u32 src_h;
+	u32 dst_x;
+	u32 dst_y;
+	u32 scale;
+	u32 op;
+	u32 nbytes;
+	u32 have_pixels;
+};
+
+/* 0, or -22. No hardware. LETTER2X is the only op. */
+static inline int wd24_blit_allow(const struct wd24_blit_check *r)
+{
+	if (!r || !r->have_pixels)
+		return -22;
+	if (r->op != 0)
+		return -22;
+	if (r->src_w != WD24_PRESENT_SRC_W || r->src_h != WD24_PRESENT_SRC_H)
+		return -22;
+	if (r->dst_x != 0 || r->dst_y != 0 || r->scale != 2)
+		return -22;
+	if (r->nbytes != WD24_PRESENT_SRC)
+		return -22;
+	if (r->src_w * r->src_h != r->nbytes)
+		return -22;
+	return 0;
+}
+
 struct wd24_present_win {
 	u32 start;
 	u32 end;

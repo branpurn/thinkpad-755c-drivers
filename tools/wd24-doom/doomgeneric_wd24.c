@@ -274,7 +274,13 @@ void DG_DrawFrame(void)
 
 		memset(&req, 0, sizeof req);
 		req.pixels = (uint64_t)(uintptr_t)idx;
-		req.mode = WD24S6D_PRESENT_LETTER;
+		req.src_w = 320;
+		req.src_h = 200;
+		req.dst_x = 0;
+		req.dst_y = 0;
+		req.scale = 2;
+		req.op = WD24ADV_BLIT_LETTER2X;
+		req.nbytes = WD24S6D_PRESENT_SRC;
 		if (ioctl(fb_fd, WD24S6D_IOC_PRESENT, &req) != 0) {
 			printf("WD24X-DOOM present refused\n");
 			exit(1);

@@ -2501,8 +2501,20 @@ static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long ar
 		return -ENOTTY;
 	if (copy_from_user(&req, (void __user *)arg, sizeof(req)))
 		return -EFAULT;
-	if (req.mode != WD24S6D_PRESENT_LETTER || !req.pixels)
-		return -EINVAL;
+	{
+		struct wd24_blit_check chk;
+
+		chk.src_w = req.src_w;
+		chk.src_h = req.src_h;
+		chk.dst_x = req.dst_x;
+		chk.dst_y = req.dst_y;
+		chk.scale = req.scale;
+		chk.op = req.op;
+		chk.nbytes = req.nbytes;
+		chk.have_pixels = req.pixels != 0;
+		if (wd24_blit_allow(&chk))
+			return -EINVAL;
+	}
 	src = kmalloc(WD24S6D_PRESENT_SRC, GFP_KERNEL);
 	if (!src)
 		return -ENOMEM;

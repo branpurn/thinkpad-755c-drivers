@@ -2,7 +2,7 @@
 /*
  * wd24adv user API - placeholder.  This header is independent of
  * wd90c24fb_ioctl.h and does not include or alter it.  No ioctl is
- * implemented yet; numbers are reserved here so they cannot collide with
+ * implemented yet except WD24S6D_IOC_PRESENT; numbers are reserved here so they cannot collide with
  * wd90c24fb ('W' 0x24-0x26).  Mode switching will use the standard
  * FBIOPUT_VSCREENINFO / FBIOPAN_DISPLAY.
  */
@@ -31,19 +31,27 @@ struct wd24adv_modeinfo {
 #define WD24ADV_IOC_MODEINFO	_IOWR('W', 0x30, struct wd24adv_modeinfo)
 
 /*
- * S6d letterbox present. pixels is a userspace pointer to 320*200
- * indices. The kernel writes the 640x480 frame. One hardware window
- * per 64 KiB. Does not use the fault thrash counter. mode 0 is the
- * only accepted mode. switches and bytes are outputs.
+ * One blit. pixels is a userspace pointer to nbytes index bytes.
+ * The only op accepted today is LETTER2X: 320x200, scale 2, destination
+ * 0,0, nbytes 64000. Anything else is -EINVAL and touches no register.
+ * The kernel writes the 640x480 frame through the already proven window
+ * program, one 64 KiB window at a time. switches and bytes are outputs.
  */
 struct wd24s6d_present {
 	__u64 pixels;
-	__u32 mode;
+	__u32 src_w;
+	__u32 src_h;
+	__u32 dst_x;
+	__u32 dst_y;
+	__u32 scale;
+	__u32 op;
+	__u32 nbytes;
 	__u32 switches;
 	__u32 bytes;
 	__u32 reserved;
 };
-#define WD24S6D_PRESENT_LETTER	0u
+#define WD24ADV_BLIT_LETTER2X	0u
+#define WD24S6D_PRESENT_LETTER	WD24ADV_BLIT_LETTER2X
 #define WD24S6D_PRESENT_SRC	64000u
 #define WD24S6D_IOC_PRESENT	_IOWR('W', 0x40, struct wd24s6d_present)
 /*

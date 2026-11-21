@@ -1,0 +1,69 @@
+wd24adv on the 755C. Install, use, recover. This is the development
+driver. `modprobe wd24adv` with no arguments does not touch the panel.
+A working console, startx, and Doom without the trial timer are the
+product in docs/WD24ADV-PRODUCT.txt. They are not this load.
+
+Floppy kernel only (`6.18.57-tc755x`). Do not load the module into the
+CF file `vmlinuz.x`. It does not export `vmf_insert_pfn`,
+`unmap_mapping_range`, or `zap_vma_ptes`. Leave `wd90c24fb` unloaded.
+`/proc/fb` empty before insmod. One script at a time.
+
+## Install
+
+Build this commit against the floppy tree. Vermagic
+`6.18.57-tc755x mod_unload 486`. Put the file where
+`docs/s6d-desktop.env` names it and replace `WD24X_CANDIDATE_SHA`.
+Leave `docs/s6d-candidate.env` on `fdf30c77`. Phase 2 and 3 still use
+that file.
+
+Userspace, static i486 musl, from the repo root:
+
+```
+sh tools/wd24-doom/build.sh
+```
+
+Copy `/tmp/wd24x-doom.s` to `/tmp/wd24x-doom` and put its sha256 in
+`docs/s6d-doom.env`. The xcmp client is built from
+`modules/wd24adv/tests/wd24x-xcmp.c` with `-static -march=i486` and
+pinned in `docs/s6d-desktop.env`. Copy `s6d-desktop.env`,
+`s6d-desktop-run.sh`, `s6d-doom.env`, and `s6d-doom-run.sh` into the
+same directory. Both scripts refuse to insmod while a sha256 is
+`UNPINNED`.
+
+Shareware `doom1.wad` v1.9, 4196020 bytes, sha256
+`1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771`.
+Not in this tree. Delete `/tmp/default.cfg` and `/tmp/doom.cfg` if
+they exist.
+
+## Use
+
+```
+sh /tmp/s6d-desktop-run.sh
+sh /tmp/s6d-doom-run.sh demo1
+sh /tmp/s6d-doom-run.sh demo2
+sh /tmp/s6d-doom-run.sh demo3
+```
+
+Run `demo2` and `demo3` only after `WD24X-DOOM-RUN done`. Doom sets
+`WD24X_DOOM_FB=ioctl`. That is the blit: 320 by 200, scale 2, 64000
+bytes. The pass line is `WD24X-DOOM present switches 5`. Faults stay
+0 and the thrash latch stays clear. A completed timedemo exits 255
+because the engine reports the timing and then exits. That 255 with
+the gametics line is success.
+
+`sh /tmp/s6d-doom-run.sh eyes` is the keyboard run. Only while someone
+is watching. It does not call `KDSETMODE`.
+
+The Win98 comparison is the same wad, screen size 9, high detail, no
+config file, `doom -timedemo demo1`. `fps_x100` is
+`gametics * 3500 / realtics`. No number in this tree is that bar.
+`600000` in the zone line is a hex print of 6 MiB. `couldn't open
+demo1.lmp` is the external-file probe. The demo in the wad still runs.
+
+## Recover
+
+Read the script's `stop` line. Do not insmod again while `wd24adv` is
+listed in `/proc/modules`. If the shell answers and the trial has not
+expired, wait. The timer restores text. `rmmod` after a clean script
+prints `RM=0`. Do not `kill -9` a mapped client. The shell being dead
+is the power-cycle.

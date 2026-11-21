@@ -21,6 +21,11 @@ Doom), direct mapping and, later, page flipping on the **internal panel only**.
 - **There is no panel/CRT routing at all.** The scaffold's routing and panel
   power sequences were deleted. `allow_routing` and `allow_crt` are refused
   (`-EPERM`) whatever their value.
+- The product target, and the gated steps still between this tree and
+  `modprobe` / `startx` / Doom with no trial harness, are
+  [`docs/WD24ADV-PRODUCT.txt`](../../docs/WD24ADV-PRODUCT.txt).
+  What to run on the machine today is
+  [`docs/WD24ADV-USE.txt`](../../docs/WD24ADV-USE.txt).
 
 ## Files
 

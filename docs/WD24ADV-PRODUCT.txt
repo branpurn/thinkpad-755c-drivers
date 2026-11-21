@@ -1,0 +1,96 @@
+wd24adv product roadmap. wd90c24fb is not part of this work and is not
+modified. The trial timer is the development net. It is not the product.
+The product is a normal fbdev driver: modprobe brings up the console,
+startx brings up the desktop, Doom runs. That default stays dry-run
+until the milestones below have passed on the 755C. Guessed registers
+are not added. A new port write needs a public source already cited
+here and a read-back plus restore in the same gated script.
+
+Sources already used by this tree, and the ones a later stage may use:
+
+- docs/WD90C24.md. The 640x480x8 packed settings are the XFree86
+  256-colour values (CR13, CR14, CR17, PR4, PR31, PR30A) at the
+  25.175 MHz clock. BITBLT there is the XFree86 wd90c31BitBlt sequence
+  on the 23C0h block. MCLK (PR68 bits 2:0, PR69) is explicitly not
+  programmed.
+- docs/ROADMAP.md. Points at XFree86 3.3.6 SVGA `wd`, the VGADOC
+  Paradise chapter, and 86Box `vid_paradise.c` for banking and the C31
+  blitter. Those are references, not a licence to copy an unproven
+  sequence into wd24adv.
+- docs/WD24ADV-DESKTOP-DESIGN.md. Public WD90C31/C24 books, XFree86, and
+  live proofs on this machine. No IBM register sequence is in this
+  repo. The S0 engine (23C0h block 1 BITBLT, block 2 cursor) is host
+  only. `WD24X_LIVE_ALLOWED` is 0. test_engine refuses any live source
+  that names that engine. Cursor registers are marked UNPROVEN there.
+- Live proofs already on the 755C: text save/restore, 640x480-8, S6
+  banking, S6d mmap, and the 16:15 ET colormap pass (publish, one PUT,
+  GET, expiry, rmmod). S4/S5 BITBLT logs exist as experiments. They are
+  not wired into fb_copyarea.
+
+What stays out until its own milestone: panel power (PR57, PR4 b5),
+routing (PR18/PR19), clocks (PR68/PR69), 800x600, DPMS, and the
+hardware cursor. wd90c24fb already has blanking and APM. wd24adv does
+not copy those sequences across.
+
+## M0 — in this tree
+
+6.18.57 `lock_fb_info()` returns void. The cmap proc does not use a
+return value. `WD24S6D_IOC_PRESENT` is the blit. It accepts only
+LETTER2X: 320 by 200, scale 2, destination 0,0, 64000 bytes. Any other
+width, height, scale, op, or size returns -EINVAL and programs no
+window. The accepted op writes the 640x480 frame with one window
+program per 64 KiB and 32-bit stores. It does not call the thrash
+counter. The bound stays 32. The mmap path is unchanged and is not the
+Doom script. Phase 2 and 3 stay on `fdf30c77`.
+
+## M1 — next hardware run (serial)
+
+Rebuild this commit. Pin `docs/s6d-desktop.env`. Rebuild `wd24x-doom`
+with `sh tools/wd24-doom/build.sh` and pin `docs/s6d-doom.env`. Steps
+and pass lines are in docs/WD24ADV-USE.txt. Fail closed. Do not raise
+the thrash bound. Do not load the module into the CF kernel.
+
+## M2 — fbcon, still under trial
+
+One insmod with `s6d_bind=1`, `s6d_cmap=1`, trial 180. A short `cat` of
+a text file on the new console, then the script kills the client and
+waits for expiry. Pass: session ON, thrash 0, latched 0, expiry 0,
+mismatches 0, in_text 1, VGA+ bind 1. This does not judge whether
+scroll looks snappy.
+
+## M3 — X start and stop, still under trial
+
+The desktop script in M1 is the short form. M3 repeats it once more
+and then one longer client, still inside the trial, still no second
+fb open. Pass is the same cmap match and the same text restore.
+A VT switch away and back is a separate insmod, not piled onto a
+failed one.
+
+## M4 — BITBLT for fb_fillrect and fb_copyarea
+
+Not started. The host engine stays out of the module. The first live
+step, when written, is one off-screen fill using only the sequence
+already in the S4 log and in docs/WD90C24.md, with read-back, a
+timeout that restores, and `accel=0` as the default. fbcon and X do
+not call it until that one shot returns mismatches 0 and the off-screen
+read matches. Mono expansion for glyphs is a later shot, same rule.
+
+## M5 — hardware cursor
+
+Not started. Block 2 is UNPROVEN in the S0 notes. No cursor register
+is added on the strength of the Win98 driver having one.
+
+## M6 — 800x600x4 external, blank, DPMS, APM
+
+Not started. Those modes are UNPROVEN in the wd24adv table. Blank and
+APM stay in wd90c24fb until a cited sequence is gated on its own.
+
+## M7 — drop the trial harness as the default
+
+Only after M1, M2, and M3 pass, and only in a commit that says so.
+`debug=1` keeps the timer. Until that commit, `dryrun=1` remains the
+default and a live load still requires `dryrun=0 live=1`.
+
+Eyes-on, after the serial gates, in one sitting: hue of the X desktop,
+fbcon scroll, Doom smoothness, and the keyboard. The serial scripts do
+not decide those.

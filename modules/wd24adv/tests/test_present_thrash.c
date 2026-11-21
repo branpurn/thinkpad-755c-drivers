@@ -45,6 +45,31 @@ int main(void)
 	T(off == WD24_PRESENT_FRAME, "letter pixels match");
 	T(wd24_present_letter_dword(src, 40u * 640u) ==
 	  (15u | (15u << 8) | (0u << 16) | (0u << 24)), "first dword");
+	{
+		struct wd24_blit_check okc = {
+			320, 200, 0, 0, 2, 0, 64000, 1
+		};
+		struct wd24_blit_check bad = okc;
+
+		T(wd24_blit_allow(&okc) == 0, "letter contract");
+		bad.have_pixels = 0;
+		T(wd24_blit_allow(&bad) == -22, "no pointer");
+		bad = okc;
+		bad.src_w = 321;
+		T(wd24_blit_allow(&bad) == -22, "width");
+		bad = okc;
+		bad.scale = 1;
+		T(wd24_blit_allow(&bad) == -22, "scale");
+		bad = okc;
+		bad.op = 1;
+		T(wd24_blit_allow(&bad) == -22, "other op");
+		bad = okc;
+		bad.nbytes = 63999;
+		T(wd24_blit_allow(&bad) == -22, "nbytes");
+		bad = okc;
+		bad.dst_x = 1;
+		T(wd24_blit_allow(&bad) == -22, "dst");
+	}
 
 	printf("test_present_thrash: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;

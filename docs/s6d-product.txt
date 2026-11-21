@@ -3,6 +3,9 @@ Floppy kernel only: `6.18.57-tc755x`. The CF file `vmlinuz.x` does not
 export `vmf_insert_pfn`, `unmap_mapping_range`, or `zap_vma_ptes`.
 Do not load an S6d module into it.
 
+The staged product is `docs/WD24ADV-PRODUCT.txt`. Install, the commands,
+and recovery are `docs/WD24ADV-USE.txt`. This file is the next hardware run.
+
 Phase 2 and phase 3 passed at 16:15 ET on `fdf30c77` with the `a143000`
 scripts. Leave `docs/s6d-candidate.env` on that file. Desktop and Doom
 both load the module named in `docs/s6d-desktop.env`. That build must
