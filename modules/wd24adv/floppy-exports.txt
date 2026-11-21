@@ -33,6 +33,7 @@ param_ops_charp
 param_ops_int
 param_ops_uint
 pgprot_framebuffer
+_printk
 proc_create_data
 proc_mkdir
 proc_remove
@@ -44,8 +45,6 @@ __request_region
 schedule_timeout_uninterruptible
 scnprintf
 snprintf
-__stack_chk_fail
-__stack_chk_guard
 strcmp
 strlen
 strncmp
