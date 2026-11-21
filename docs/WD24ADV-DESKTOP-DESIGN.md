@@ -348,7 +348,7 @@ still cheaper than whole-frame copies.
 | 00000h–4AFFFh (300 KiB) | 0–479 | Visible frame |
 | 4B000h–4BFFFh | ~480–486 | Guard gap (never allocated) |
 | 4C000h–4CFFFh | ~486–492 | Engine self-test / scratch (S3–S5). Kept for runtime self-test on load |
-| 4D000h–4D0FFh | | Cursor pattern slot (256 B) |
+| 4D000h–4D0FFh | | Design-only cursor slot (256 B). Not programmed. The pattern wd90c24fb uses, and the 755C read back, is 50000h (data book 8.6.1; registers 1=000 2=014). |
 | 4E000h–FFFFFh (~712 KiB) | ~499–1637 | 2D offscreen pool at pitch 640 for pixmaps, saved-under bits and (if Q2 allows) a mono glyph cache |
 
 - The allocator is simple first fit over row bands, with LRU eviction back

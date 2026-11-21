@@ -103,7 +103,15 @@ enum {
 #define WD24X_GUARD		0x4b000u	/* never a BITBLT target */
 #define WD24X_SCRATCH		0x4c000u
 #define WD24X_SCRATCH_END	0x4d000u
-#define WD24X_CURSOR		0x4d000u	/* 256 bytes, CPU-written only */
+/*
+ * Design section 4 reserved 4D000h as a BITBLT-excluded slot. Nothing
+ * in wd24adv has programmed it. The pattern wd90c24fb stores, and the
+ * 755C read back, is 50000h: data book 8.6.1 (doubleword address),
+ * registers 1=000 2=014. S6 also uses 50000h as off-screen bank X.
+ * This constant stays 4D000h so the S0 validator still refuses a blit
+ * into the design slot.
+ */
+#define WD24X_CURSOR		0x4d000u
 #define WD24X_CURSOR_END	0x4d100u
 #define WD24X_POOL		0x4e000u
 #define WD24X_POOL_END		0x100000u
