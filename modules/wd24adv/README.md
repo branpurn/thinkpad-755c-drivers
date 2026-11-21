@@ -27,6 +27,18 @@ Doom), direct mapping and, later, page flipping on the **internal panel only**.
   What to run on the machine today is
   [`docs/WD24ADV-USE.txt`](../../docs/WD24ADV-USE.txt).
 
+## On the machine
+
+`modprobe wd24adv` with no arguments does not touch the panel.
+`docs/s6d-desktop-run.sh` is the startx stand-in (Xfbdev, palette
+check, trial restore). `docs/s6d-doom-run.sh` is the timedemo.
+`docs/s6d-fbcon-run.sh` is the console, and it waits until those done
+lines exist. `accel=0` is the default. `docs/s6d-accel-run.sh` and
+`docs/s6d-scroll-run.sh` are the next build, pinned in
+`docs/s6d-accel.env`, not the in-flight module. There is no
+`fb_cursor`: `docs/WD90C24.md` says which cursor writes are still
+missing. Recovery, including a blitter timeout, is in the USE file.
+
 ## Files
 
 | file | what |
