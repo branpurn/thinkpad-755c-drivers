@@ -45,10 +45,17 @@ Doom script. Phase 2 and 3 stay on `fdf30c77`.
 
 ## M1 — next hardware run (serial)
 
-Rebuild this commit. Pin `docs/s6d-desktop.env`. Rebuild `wd24x-doom`
-with `sh tools/wd24-doom/build.sh` and pin `docs/s6d-doom.env`. Steps
-and pass lines are in docs/WD24ADV-USE.txt. Fail closed. Do not raise
-the thrash bound. Do not load the module into the CF kernel.
+Rebuild the commit that CI builds, not `1cc8015` and not `ff7a9fc`.
+`ff7a9fc` modposts, then `scripts/check-ko-exports.sh` fails because
+the allowlist was short, and its Kbuild flag is not valid on gcc 14.2.
+The flag is `-Werror=frame-larger-than=1280`. After the link,
+`sh scripts/check-ko-exports.sh wd24adv.ko` must exit 0.
+`__kmalloc_large_noprof` is not imported. Pin `docs/s6d-desktop.env`.
+Rebuild `wd24x-doom` with `sh tools/wd24-doom/build.sh` and pin
+`docs/s6d-doom.env`. Steps and pass lines are in
+docs/WD24ADV-USE.txt. Fail closed. Do not raise the thrash bound.
+Do not load the module into the CF kernel. Do not start M2 until
+these lines have passed.
 
 ## M2 — fbcon, still under trial
 
