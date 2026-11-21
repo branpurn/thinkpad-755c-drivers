@@ -272,7 +272,18 @@ expiry does not look at the fault count. Phase 1's mapped close still
 unmaps immediately and ends the session from a work item after
 `fb_release` returns. This is not a new acceptance of hue or the keyboard.
 
-The CF file `vmlinuz.x` (same version string) refused that module:
-unknown `vmf_insert_pfn`, `unmap_mapping_range`, `zap_vma_ptes`. The
-floppy kernel is the one those symbols exist on. Do not load this
-module into the CF kernel.
+The CF kernel file `vmlinuz.x` (same version string) does not export
+`vmf_insert_pfn`, `unmap_mapping_range`, or `zap_vma_ptes`. Do not
+load an S6d module into that kernel. The floppy kernel is the one
+that exports them.
+
+Commit `36347b6`, rebuilt on that floppy tree. The same recipe still
+rebuilds `92591b1e` bit-exact from the earlier commit. The new file is
+`/tmp/wd24adv-cmap-fdf30c77.ko`, sha256
+`fdf30c7743df6149cc0750c96118d50cfcd55c4c8104e88a2b5b9240da7e6d63`,
+size 133088, vermagic `6.18.57-tc755x mod_unload 486`. New imports,
+all exported by the floppy kernel: `mod_timer`, `timer_delete_sync`,
+`jiffies`, `queue_work_on`, `cancel_work_sync`. Phase 2 and phase 3
+read the path and hash from `docs/s6d-candidate.env` and refuse to
+insmod if the file does not match. Phase 1 stays on `92591b1e`.
+This file has not been run. It is not an acceptance of hue or the keyboard.

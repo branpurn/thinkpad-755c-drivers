@@ -87,8 +87,14 @@ need("0x0001" in get_code and "0x0001" in set_code, "prefill")
 
 need("Xfbdev" not in p2 and "Xfbdev" not in p3, "phase scripts start X")
 need("s6d_cmap=1" in p2 and "s6d_cmap=1" in p3, "cmap param")
+env = (root / "docs/s6d-candidate.env").read_text()
+need("/tmp/wd24adv-cmap-fdf30c77.ko" in env, "candidate path")
+need("fdf30c7743df6149cc0750c96118d50cfcd55c4c8104e88a2b5b9240da7e6d63" in env,
+     "candidate sha")
+need("s6d-candidate.env" in p2 and "s6d-candidate.env" in p3, "scripts source env")
+need("92591b1e" not in p2 and "92591b1e" not in p3, "old candidate hardcoded")
 insmods = [ln for ln in p2.splitlines() if ln.startswith("insmod ")]
-need(len(insmods) == 1 and "92591b1e" in insmods[0] and "pr14" not in insmods[0],
+need(len(insmods) == 1 and '"$KO"' in insmods[0] and "pr14" not in insmods[0],
      "phase 2 loads baseline")
 need("cmap_param 1 published 1 frozen" in p2, "published gate")
 need('wd24adv live: trial expiry -> 0' in p2, "exact expiry line")

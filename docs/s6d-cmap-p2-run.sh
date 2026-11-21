@@ -212,9 +212,16 @@ exact_mark() {
 	[ "$lines" = 1 ] && [ "$hit" = 1 ]
 }
 
-[ -f "$P/tmp/wd24adv-cmap-92591b1e.ko" ] || stop "module missing"
+if [ -z "${WD24X_CANDIDATE_ENV:-}" ]; then
+	WD24X_CANDIDATE_ENV=$(dirname "$0")/s6d-candidate.env
+fi
+[ -f "$WD24X_CANDIDATE_ENV" ] || stop "candidate env"
+. "$WD24X_CANDIDATE_ENV"
+[ -n "${WD24X_CANDIDATE_KO:-}" ] && [ -n "${WD24X_CANDIDATE_SHA:-}" ] || stop "candidate env"
+KO="$P$WD24X_CANDIDATE_KO"
+[ -f "$KO" ] || stop "module missing"
 [ -x "$P/tmp/wd24x-cmap-get" ] || stop "get client missing"
-hash_ok "$P/tmp/wd24adv-cmap-92591b1e.ko" 92591b1e26c3888868285a4a50d602cf969dfa9bdd53c9f868f21fef03d6a8ae || stop "module hash"
+hash_ok "$KO" "$WD24X_CANDIDATE_SHA" || stop "module hash"
 hash_ok "$P/tmp/wd24x-cmap-get" 159c93efff1142ebf31632c7f1ccf1f403cfc53019214c414b9fe048ce3f2857 || stop "get hash"
 if [ -f "$P/tmp/wd24adv-pr14.ko" ]; then
 	hash_ok "$P/tmp/wd24adv-pr14.ko" 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36 || stop "baseline hash"
@@ -233,7 +240,7 @@ if grep -q '^wd90c24fb ' "$P/proc/modules" 2>/dev/null; then
 	stop "wd90c24fb"
 fi
 
-insmod "$P/tmp/wd24adv-cmap-92591b1e.ko" dryrun=0 live=1 mode=640x480-8 trial=180 s6d=1 s6d_cmap=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
+insmod "$KO" dryrun=0 live=1 mode=640x480-8 trial=180 s6d=1 s6d_cmap=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
 rc=$?
 echo "RC=$rc"
 # rc 0 is this insertion. A later wd24adv line is not proof of it.

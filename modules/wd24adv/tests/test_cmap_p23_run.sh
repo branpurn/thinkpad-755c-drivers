@@ -33,7 +33,7 @@ b=$(basename "$1")
 case "$b" in
 wd24x-cmap-get) h=159c93efff1142ebf31632c7f1ccf1f403cfc53019214c414b9fe048ce3f2857 ;;
 wd24x-cmap-set) h=1a26c1c92e6c36d50175cbfce164506482495d3a1f2bc5a81192f5d1044a8c1f ;;
-wd24adv-cmap-92591b1e.ko) h=92591b1e26c3888868285a4a50d602cf969dfa9bdd53c9f868f21fef03d6a8ae ;;
+wd24adv-cmap-fdf30c77.ko) h=fdf30c7743df6149cc0750c96118d50cfcd55c4c8104e88a2b5b9240da7e6d63 ;;
 wd24adv-pr14.ko) h=7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36 ;;
 *) h=000 ;;
 esac
@@ -71,7 +71,7 @@ echo "WD24X-CMAP-SET index 7 put 1 cache 1" > "$WD24X_MOCK/tmp/wd24x-cmap-p3.out
 exit 0
 EOF
 	chmod 755 "$M/bin/"* "$M/tmp/wd24x-cmap-get" "$M/tmp/wd24x-cmap-set"
-	echo x > "$M/tmp/wd24adv-cmap-92591b1e.ko"
+	echo x > "$M/tmp/wd24adv-cmap-fdf30c77.ko"
 }
 
 run() {
@@ -87,14 +87,14 @@ M=$ROOT/modules/wd24adv/tests/.c23-ok2
 grep -q "WD24X-CMAP-P2-RUN done" "$M/out" && ok || bad "p2 done"
 [ "$rc" = 0 ] && ok || bad "p2 rc"
 grep -q "s6d_cmap=1" "$M/insmod.args" && ok || bad "p2 cmap arg"
-grep -q "wd24adv-cmap-92591b1e.ko" "$M/insmod.args" && ok || bad "p2 ko"
+grep -q "wd24adv-cmap-fdf30c77.ko" "$M/insmod.args" && ok || bad "p2 ko"
 grep -q "wd24adv-pr14.ko" "$M/insmod.args" && bad "p2 baseline" || ok
 [ -f "$M/tmp/wd24x-cmap-p2.out" ] && ok || bad "p2 log"
-[ -f "$M/tmp/wd24adv-cmap-92591b1e.ko" ] && ok || bad "p2 ko kept"
+[ -f "$M/tmp/wd24adv-cmap-fdf30c77.ko" ] && ok || bad "p2 ko kept"
 
 setup "$ROOT/modules/wd24adv/tests/.c23-hash"
 M=$ROOT/modules/wd24adv/tests/.c23-hash
-echo nope > "$M/tmp/wd24adv-cmap-92591b1e.ko"
+echo nope > "$M/tmp/wd24adv-cmap-fdf30c77.ko"
 cat > "$M/bin/sha256sum" <<'EOF'
 #!/bin/sh
 exec /usr/bin/sha256sum "$@"
