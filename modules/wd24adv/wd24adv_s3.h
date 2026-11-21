@@ -202,6 +202,12 @@ void wd24s3_init(struct wd24s3 *s, const struct wd24s1_io *io,
 /* before wd24s3_run only: select the stage program (S3 is the default) */
 void wd24s3_set_prog(struct wd24s3 *s, const struct wd24s3_prog *p);
 int wd24s3_run(struct wd24s3 *s);	/* 0 = OK */
+/*
+ * One fill or copy built by wd24s4_make_*. 0 = done, registers put back.
+ * 1 = not started: the caller may use CPU stores. 2 = the operation was
+ * started and did not finish: the caller must not touch video memory.
+ */
+int wd24s4_kick(struct wd24s3 *s, const struct wd24s3_op *op);
 /* after TIMEOUT: reads only (23C0h must still be 1001h, then <= SPINS
  * 23C2h reads); 1 = CNTRL1 ACT seen clear (sets idle_seen), 0 = busy or
  * unknown.  Not dead or already idle: 1, no access. */

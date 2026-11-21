@@ -834,6 +834,115 @@ final:
 	return res == WD24S3_OK ? 0 : -EIO;
 }
 
+int wd24s4_kick(struct wd24s3 *s, const struct wd24s3_op *op)
+{
+	struct wd24s3_prog prog;
+	struct wd24s3_op held;
+	unsigned int p;
+	u16 a, b, v = 0;
+	u32 spins = 0;
+
+	if (!s || !op || s->dead || !s->io)
+		return s && s->dead ? 2 : 1;
+	held = *op;
+	memset(&prog, 0, sizeof(prog));
+	prog.ops = &held;
+	prog.nops = 1;
+	prog.max_ix = 800;
+	prog.max_data = 200;
+	prog.stage = "rect";
+	prog.param = "accel";
+	s->prog = &prog;
+	s->op = 0;
+	s->restored = false;
+	s->have_saved = false;
+	s->snap_ok = false;
+	s->armed = false;
+	s->go = false;
+	s->wix = 0;
+	s->wdata = 0;
+	s->wgo = 0;
+	s->whost = 0;
+	s->nlog = 0;
+	s->host_n = 0;
+	a = in16(s, WD24S1_P_INDEX);
+	b = in16(s, WD24S1_P_INDEX);
+	if (a != b || a != WD24S2_S) {
+		s->prog = NULL;
+		return 1;
+	}
+	s->saved = a;
+	s->have_saved = true;
+	if (snapshot(s)) {
+		out16(s, WD24S1_P_INDEX, s->saved & IDX_WR);
+		s->restored = true;
+		s->prog = NULL;
+		return 1;
+	}
+	s->snap_ok = true;
+	if (s->snap[0] & WD24S1_ACT || (s->snap[CC_K] & WD24S2_CC_EN)) {
+		out16(s, WD24S1_P_INDEX, s->saved & IDX_WR);
+		s->restored = true;
+		s->prog = NULL;
+		return 1;
+	}
+	s->armed = true;
+	if (sel_rb(s, SEL_CNTRL1) || wait_idle(s, &spins, NULL, &v)) {
+		if (v & WD24S1_ACT) {
+			s->dead = true;
+			s->armed = false;
+			s->res = WD24S3_TIMEOUT;
+			s->why = "busy before the rectangle";
+			s->prog = NULL;
+			return 2;
+		}
+		goto unstarted;
+	}
+	for (p = 0; p < held.npar; p++) {
+		u16 w = (u16)(held.par[p].idx << 12) | held.par[p].val;
+
+		if (sel_rb(s, sel1(held.par[p].idx)))
+			goto unstarted;
+		s->dirty[held.par[p].idx] = true;
+		if (out16(s, WD24S1_P_DATA, w) || in16(s, WD24S1_P_DATA) != w)
+			goto unstarted;
+	}
+	if (sel_rb(s, SEL_CNTRL1) || (in16(s, WD24S1_P_DATA) & WD24S1_ACT))
+		goto unstarted;
+	s->go = true;
+	if (out16(s, WD24S1_P_DATA, held.cntrl1)) {
+		s->go = false;
+		goto unstarted;
+	}
+	s->go = false;
+	s->wgo++;
+	if (wait_idle(s, &spins, NULL, &v)) {
+		s->dead = true;
+		s->armed = false;
+		s->res = WD24S3_TIMEOUT;
+		s->why = "rect still busy";
+		s->prog = NULL;
+		return 2;
+	}
+	s->op = -1;
+	restore_dirty(s);
+	out16(s, WD24S1_P_INDEX, s->saved & IDX_WR);
+	s->armed = false;
+	s->restored = true;
+	s->res = WD24S3_OK;
+	s->prog = NULL;
+	return 0;
+unstarted:
+	s->go = false;
+	s->op = -1;
+	restore_dirty(s);
+	out16(s, WD24S1_P_INDEX, s->saved & IDX_WR);
+	s->armed = false;
+	s->restored = true;
+	s->prog = NULL;
+	return 1;
+}
+
 #ifdef __KERNEL__
 #ifdef WD24S1_QEMU_FAKE
 #include <linux/moduleparam.h>

@@ -109,6 +109,7 @@
 #include "wd24adv_core.h"
 #include "wd24adv_s2.h"
 #include "wd24adv_s3.h"
+#include "wd24adv_s4fb.h"
 #include "wd24adv_s1.h"
 #include "wd24adv_s6.h"
 #include "wd24adv_s6b.h"
@@ -270,6 +271,7 @@ static bool hw_dead;	/* a live load failed after writing: restored, inert */
 static bool vram_dead;
 static bool s3_pinned;
 static struct wd24s3 *s3st;
+static struct wd24s3 *s4fb;
 static int vram_gate(const char *what);
 static struct wd24_io hw_io;
 static char *live_txt;
@@ -419,6 +421,13 @@ MODULE_PARM_DESC(s6d_bind, "S6d with s6d_fbcon=1: 1 (default) allow fb_open(info
 static bool s6d_cmap;
 module_param(s6d_cmap, bool, 0444);
 MODULE_PARM_DESC(s6d_cmap, "S6d RAMDAC fb_setcmap, default 0 (no hook, baseline palette). 1 requires s6d=1 s6d_fbcon=1 s6d_bind=0 dryrun=0 live=1 mode=640x480-8 and no other stage. No colour write at register, in text, or while frozen");
+
+static unsigned int accel;
+module_param(accel, uint, 0444);
+MODULE_PARM_DESC(accel, "S6d: 1 programs packed fills and copies the way the S4 one-shot does. 0 (default) uses CPU stores through the window. Any busy-before-start falls back to those stores");
+static unsigned int accel_gate;
+module_param(accel_gate, uint, 0444);
+MODULE_PARM_DESC(accel_gate, "With accel=1: one 64x16 fill at (16,112), CPU readback against the programmed fill, then those bytes are put back. 0 skips it");
 
 static struct wd24s6 *s6st;
 static u8 *s6_save;
@@ -1225,32 +1234,45 @@ static int vram_gate(const char *what)
 {
 	bool got = false;
 
-	if (!vram_dead && s3st && s3st->dead && !s3st->idle_seen) {
-		if (!s3_region && request_region(WD24S1_P_INDEX, 4, "wd24adv s3 idle"))
-			got = true;
-		if (s3_region || got)
-			wd24s3_idle_poll(s3st);
-		if (got)
-			release_region(WD24S1_P_INDEX, 4);
-		if (s3st->idle_seen) {
-			pr_info("S3: BITBLT seen idle (%s; %u polls): video memory unlocked\n",
-				what, s3st->idle_last_spins);
-			if (s3_pinned) {
-				module_put(THIS_MODULE);
-				s3_pinned = false;
-			}
-		} else {
-			vram_dead = true;
-			pr_crit("S3: BITBLT still busy (%s; 23C0h %04x, CNTRL1 %04x): video memory LOCKED, registers-only restore, rmmod refused: power cycle required\n",
-				what, s3st->idle_last_ix, s3st->idle_last_c1);
+	if (!vram_dead) {
+		struct wd24s3 *b = NULL;
+		const char *who = NULL;
+
+		if (s3st && s3st->dead && !s3st->idle_seen) {
+			b = s3st;
+			who = "S3";
+		} else if (s4fb && s4fb->dead && !s4fb->idle_seen) {
+			b = s4fb;
+			who = "accel";
 		}
-		if (s3_txt)
-			s3_report(NULL);
+		if (b) {
+			if (!s3_region && request_region(WD24S1_P_INDEX, 4, "wd24adv s3 idle"))
+				got = true;
+			if (s3_region || got)
+				wd24s3_idle_poll(b);
+			if (got)
+				release_region(WD24S1_P_INDEX, 4);
+			if (b->idle_seen) {
+				pr_info("%s: BITBLT seen idle (%s; %u polls): video memory unlocked\n",
+					who, what, b->idle_last_spins);
+				if (s3_pinned) {
+					module_put(THIS_MODULE);
+					s3_pinned = false;
+				}
+			} else {
+				vram_dead = true;
+				pr_crit("%s: BITBLT still busy (%s; 23C0h %04x, CNTRL1 %04x): video memory LOCKED, registers-only restore, rmmod refused: power cycle required\n",
+					who, what, b->idle_last_ix, b->idle_last_c1);
+			}
+			if (s3_txt && b == s3st)
+				s3_report(NULL);
+		}
 	}
 	if (vram_dead) {
 		if (hw)
 			hw->no_vram = true;
-		pr_err("%s: video memory access refused (S3 BITBLT timeout): power cycle required\n", what);
+		pr_err("%s: video memory access refused (BITBLT timeout)\n",
+		       what);
 		return -EIO;
 	}
 	return 0;
@@ -1843,6 +1865,7 @@ static u32 s6d_pf_frames, s6d_pf_last, s6d_pf_total;
  * allocation above 8 KiB on i386 is __kmalloc_large_noprof, which this
  * floppy kernel does not export. Not freed per frame. */
 static u8 *s6d_present_src;
+static unsigned int s6d_agate, s6d_amatch;
 
 /* Drop every userspace PTE before the aperture is reprogrammed or the
  * module's vm_ops go away. Caller holds hw_lock. Order matches
@@ -2326,7 +2349,7 @@ static bool s6d_draw_enter(bool *took)
 	hw_acq();
 	/* Do not yield here. fbcon calls this with console_lock held, and
 	 * the end path is waiting for that lock. */
-	if (!s6d_st || !s6d_st->active || s6d_st->stopping || !vmem) {
+	if (!s6d_st || !s6d_st->active || s6d_st->stopping || !vmem || vram_dead) {
 		hw_rel();
 		return false;
 	}
@@ -2366,6 +2389,114 @@ static int s6d_ensure_off(u32 off)
 	return 0;
 }
 
+/* 0 done, 1 caller may use CPU stores, 2 do not touch video memory. */
+static int s6d_accel_do(const struct wd24s3_op *op)
+{
+	int r;
+
+	if (s4fb && s4fb->dead)
+		return 2;
+	if (!accel || !s4fb || !op)
+		return 1;
+	if (!request_region(WD24S1_P_INDEX, 4, "wd24adv accel"))
+		return 1;
+#ifndef WD24S1_QEMU_FAKE
+	if (hw)
+		hw->be->begin(hw);
+#endif
+	r = wd24s4_kick(s4fb, op);
+#ifndef WD24S1_QEMU_FAKE
+	if (hw)
+		hw->be->end(hw);
+#endif
+	release_region(WD24S1_P_INDEX, 4);
+	return r;
+}
+
+static int s6d_pix(u32 x, u32 y, int wr, u8 *v)
+{
+	u32 off = y * WD24S6D_LINE + x;
+	u32 local;
+
+	if (!s6d_st || s6d_ensure_off(off))
+		return -EIO;
+	local = off - (s6d_st->mapped_base << 12);
+	if (wr)
+		writeb(*v, vmem + local);
+	else
+		*v = readb(vmem + local);
+	return 0;
+}
+
+/*
+ * Known S4 fill: 64x16 at (16,112), colour 0x3c. CPU bytes, then the
+ * same rectangle programmed, then the bytes go back. Caller holds hw.
+ */
+static void s6d_accel_gate(void)
+{
+	enum { W = 64, H = 16, X = 16, Y = 112 };
+	u8 *saved, *cpu, *got, px;
+	unsigned int i, n = 0;
+	struct wd24s3_op op;
+	int r;
+
+	s6d_agate = accel_gate ? 1 : 0;
+	s6d_amatch = 0;
+	if (!accel || !accel_gate || !s4fb || !s6d_st || !s6d_st->active)
+		return;
+	saved = kmalloc(W * H, GFP_KERNEL);
+	cpu = kmalloc(W * H, GFP_KERNEL);
+	got = kmalloc(W * H, GFP_KERNEL);
+	if (!saved || !cpu || !got)
+		goto done;
+	for (i = 0; i < W * H; i++) {
+		if (s6d_pix(X + i % W, Y + i / W, 0, &saved[i]))
+			goto done;
+	}
+	px = 0x3c;
+	for (i = 0; i < W * H; i++) {
+		if (s6d_pix(X + i % W, Y + i / W, 1, &px))
+			goto restore;
+	}
+	for (i = 0; i < W * H; i++) {
+		if (s6d_pix(X + i % W, Y + i / W, 0, &cpu[i]))
+			goto restore;
+	}
+	for (i = 0; i < W * H; i++)
+		s6d_pix(X + i % W, Y + i / W, 1, &saved[i]);
+	if (wd24s4_make_fill(&op, X, Y, W, H, 0x3c))
+		goto restore;
+	r = s6d_accel_do(&op);
+	if (r == 2) {
+		__module_get(THIS_MODULE);
+		s3_pinned = true;
+		s6d_agate = 2;
+		vram_gate("after the accel timeout");
+		if (vram_dead)
+			goto done;
+		s6d_agate = 1;
+	} else if (r != 0) {
+		goto restore;
+	}
+	for (i = 0; i < W * H; i++) {
+		if (s6d_pix(X + i % W, Y + i / W, 0, &got[i]))
+			goto restore;
+		n += got[i] == cpu[i];
+	}
+restore:
+	if (vram_dead)
+		goto done;
+	for (i = 0; i < W * H; i++)
+		s6d_pix(X + i % W, Y + i / W, 1, &saved[i]);
+	s6d_amatch = n;
+done:
+	kfree(saved);
+	kfree(cpu);
+	kfree(got);
+	if (!vram_dead && s6d_amatch != W * H)
+		accel = 0;
+}
+
 static void s6d_fillrect(struct fb_info *info, const struct fb_fillrect *r)
 {
 	u32 x, y, w, h, color, row, col;
@@ -2386,6 +2517,25 @@ static void s6d_fillrect(struct fb_info *info, const struct fb_fillrect *r)
 
 		if (!s6d_draw_enter(&took))
 			return;
+		if (accel && !vram_dead) {
+			struct wd24s3_op op;
+			int ar;
+
+			if (!wd24s4_make_fill(&op, x, y, w, h, (u8)color)) {
+				ar = s6d_accel_do(&op);
+				if (ar == 2) {
+					__module_get(THIS_MODULE);
+					s3_pinned = true;
+					vram_gate("after the accel timeout");
+					s6d_draw_leave(took);
+					return;
+				}
+				if (ar == 0) {
+					s6d_draw_leave(took);
+					return;
+				}
+			}
+		}
 		for (row = 0; row < h && !why; row++) {
 			for (col = 0; col < w; col++) {
 				u32 off = (y + row) * WD24S6D_LINE + x + col;
@@ -2405,11 +2555,71 @@ static void s6d_fillrect(struct fb_info *info, const struct fb_fillrect *r)
 	}
 }
 
+static void s6d_cpu_copy(u32 sx, u32 sy, u32 dx, u32 dy, u32 w, u32 h)
+{
+	int back = (dy * WD24S6D_LINE + dx) > (sy * WD24S6D_LINE + sx);
+	u32 row, col;
+
+	for (row = 0; row < h; row++) {
+		u32 rs = back ? h - 1 - row : row;
+
+		for (col = 0; col < w; col++) {
+			u32 cs = back ? w - 1 - col : col;
+			u8 px;
+
+			if (s6d_pix(sx + cs, sy + rs, 0, &px) ||
+			    s6d_pix(dx + cs, dy + rs, 1, &px))
+				return;
+		}
+	}
+}
+
 static void s6d_copyarea(struct fb_info *info, const struct fb_copyarea *a)
 {
-	/* First cut: no soft copyarea across banks; fbcon scrolls via fill+blit */
+	struct wd24s3_op op;
+	bool took = false;
+	u32 sx, sy, dx, dy, w, h;
+	int ar;
+
 	(void)info;
-	(void)a;
+	if (!accel || !a || !a->width || !a->height || vram_dead)
+		return;
+	sx = a->sx;
+	sy = a->sy;
+	dx = a->dx;
+	dy = a->dy;
+	w = a->width;
+	h = a->height;
+	if (sx >= WD24S6D_XRES || sy >= WD24S6D_YRES ||
+	    dx >= WD24S6D_XRES || dy >= WD24S6D_YRES)
+		return;
+	if (sx + w > WD24S6D_XRES)
+		w = WD24S6D_XRES - sx;
+	if (sy + h > WD24S6D_YRES)
+		h = WD24S6D_YRES - sy;
+	if (dx + w > WD24S6D_XRES)
+		w = WD24S6D_XRES - dx;
+	if (dy + h > WD24S6D_YRES)
+		h = WD24S6D_YRES - dy;
+	if (!s6d_draw_enter(&took))
+		return;
+	if (!wd24s4_make_copy(&op, sx, sy, dx, dy, w, h)) {
+		ar = s6d_accel_do(&op);
+		if (ar == 2) {
+			__module_get(THIS_MODULE);
+			s3_pinned = true;
+			vram_gate("after the accel timeout");
+			s6d_draw_leave(took);
+			return;
+		}
+		if (ar == 0) {
+			s6d_draw_leave(took);
+			return;
+		}
+	}
+	if (!vram_dead)
+		s6d_cpu_copy(sx, sy, dx, dy, w, h);
+	s6d_draw_leave(took);
 }
 
 static void s6d_imageblit(struct fb_info *info, const struct fb_image *img)
@@ -2418,6 +2628,10 @@ static void s6d_imageblit(struct fb_info *info, const struct fb_image *img)
 	u32 x, y, w, h, fg, bg, row, col, src_stride;
 
 	(void)info;
+	/*
+	 * Mono expand stays on the CPU. The S5 guard accepts only the
+	 * canned host words, not an arbitrary glyph.
+	 */
 	if (!img || !img->data || img->depth != 1)
 		return;
 	x = img->dx; y = img->dy; w = img->width; h = img->height;
@@ -2526,7 +2740,7 @@ static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long ar
 		return -EFAULT;
 	hw_acq();
 	if (!s6d_st || !s6d_st->active || !s6d_armed || s6d_st->stopping ||
-	    !vmem || !hw || hw->in_text || hw_dead) {
+	    !vmem || !hw || hw->in_text || hw_dead || vram_dead) {
 		hw_rel();
 		return -ENODEV;
 	}
@@ -2540,7 +2754,7 @@ static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long ar
 #endif
 	hw_acq();
 	if (!s6d_st || !s6d_st->active || !s6d_armed || s6d_st->stopping ||
-	    !vmem || s6d_vma) {
+	    !vmem || s6d_vma || vram_dead) {
 		err = s6d_vma ? -EBUSY : -ENODEV;
 		goto out;
 	}
@@ -2613,9 +2827,11 @@ static void s6d_free(void)
 	vfree(s6d_st);
 	vfree(s6d_b);
 	vfree(s6d_present_src);
+	vfree(s4fb);
 	s6d_st = NULL;
 	s6d_b = NULL;
 	s6d_present_src = NULL;
+	s4fb = NULL;
 }
 
 static int s6d_setup(void)
@@ -2631,8 +2847,14 @@ static int s6d_setup(void)
 	s6d_st = vmalloc(sizeof(*s6d_st));
 	s6d_b = vmalloc(sizeof(*s6d_b));
 	s6d_present_src = vmalloc(WD24S6D_PRESENT_SRC);
-	if (!s6d_st || !s6d_b || !s6d_present_src)
+	if (accel && !s3 && !s4 && !s5)
+		s4fb = vmalloc(sizeof(*s4fb));
+	else
+		accel = 0;
+	if (!s6d_st || !s6d_b || !s6d_present_src || (accel && !s4fb))
 		return -ENOMEM;
+	if (s4fb)
+		wd24s3_init(s4fb, &wd24s3_kernel_io, &s3_memops, NULL, NULL, NULL);
 	memset(s6d_b, 0, sizeof(*s6d_b));
 	wd24s6d_init(s6d_st, s6d_b, s6d_thrash_bound);
 
@@ -2752,6 +2974,7 @@ static void s6d_arm(const struct wd24_mode *m)
 				node, err, s6d_thrash_bound);
 			pr_info("S6d: STOP if dmesg shows Console: switching to colour — bind was not refused\n");
 			hw_acq();
+			s6d_accel_gate();
 			return;
 		}
 		hw_rel();
@@ -2793,12 +3016,13 @@ static void s6d_arm(const struct wd24_mode *m)
 		pr_info("S6d: armed + registered fb%d (s6d_bind=1; fbcon may bind); thrash bound %u\n",
 			node, s6d_thrash_bound);
 		hw_acq();
+		s6d_accel_gate();
 	}
 }
 
 static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 {
-	char local[768];
+	char local[896];
 	int len;
 	static const char busy[] = "wd24adv s6d: hw busy; retry\n";
 
@@ -2813,7 +3037,8 @@ static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 			"faults %u switches %u thrash %u latched %u mapped_base 0x%x\n"
 			"why %s\n"
 			"cmap_param %d published %d frozen %d\n"
-			"present frames %u last %u total %u\n",
+			"present frames %u last %u total %u\n"
+			"accel %u gate %u match %u\n",
 			s6d_armed, s6d_st->active, s6d_st->stopping, s6d_busy,
 			s6d_st->fb_reg, s6d_info ? s6d_info->node : -1,
 			s6d_fbcon, s6d_bind,
@@ -2821,7 +3046,8 @@ static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 			s6d_st->thrash.latched, s6d_st->mapped_base,
 			s6d_st->why ? s6d_st->why : "-",
 			s6d_cmap, s6d_cmap_published, s6d_cmap_frozen,
-			s6d_pf_frames, s6d_pf_last, s6d_pf_total);
+			s6d_pf_frames, s6d_pf_last, s6d_pf_total,
+			accel, s6d_agate, s6d_amatch);
 	}
 	hw_rel();
 	if (len < 0)

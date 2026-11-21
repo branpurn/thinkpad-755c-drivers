@@ -80,13 +80,19 @@ failed one.
 The one-shot already ran. `docs/s4-live-2026-11-05.txt`: 11 of 11
 operations verified, idle polls 0, restore 1002/1002, mismatches 0.
 That sequence is the XFree86 wd90c31BitBlt path cited in
-`docs/WD90C24.md`, not a new register set. It is not connected to
-`fb_fillrect` or `fb_copyarea`. Those two still use the CPU window
-(`fb_copyarea` returns without writing). The host-only engine stays
-out of the module. The next live step is `accel=0` by default and one
-off-screen fill through that same S4 sequence, read back, then
-restore. fbcon and X do not call it until that shot matches.
-Mono expansion for glyphs is the shot after that.
+`docs/WD90C24.md`. `accel=0` (the default) keeps the CPU window for
+fills and does not copy. `accel=1` programs one rectangle with the
+same parameter order as that table. The gate is
+`docs/s6d-accel-run.sh`: the 64x16 fill at (16,112), colour 0x3c,
+which is S4 operation 1, on screen in bank 1. CPU bytes, then the
+programmed fill, then those bytes are put back. Pass is
+`accel 1 gate 1 match 1024` and the usual text restore.
+
+A timeout after the start does not touch video memory and does not
+fall back to the CPU. The module stays loaded until a power cycle,
+the same rule as the S4 one-shot. A refusal before the start does
+fall back to CPU stores. Glyphs stay on the CPU: the S5 guard accepts
+only its canned host words, not an arbitrary bitmap.
 
 ## M5 — hardware cursor
 
