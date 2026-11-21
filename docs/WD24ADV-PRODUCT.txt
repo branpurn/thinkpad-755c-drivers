@@ -101,8 +101,12 @@ with the same gate, then one line on tty0.
 
 ## M5 — hardware cursor
 
-Not started. The S3 entry check requires the cursor enable bit clear,
-and the S0 notes mark block 2 UNPROVEN. No cursor register is added.
+Not implemented. `docs/WD90C24.md` records why. The wd90c24fb cursor
+(data book section 8, pattern at 0x50000, 755C readback
+`0=820 1=000 2=014 3=00f 4=000 5=000 6=140 7=0f0`) is not a wd24adv
+sequence. S2 restored cursor registers with the enable bit clear and
+never wrote the enable or the pattern address. The S3 guard refuses
+block 2 data writes. No `fb_cursor`, and no new cursor parameter.
 
 ## M6 — 800x600x4 external, blank, DPMS, APM
 
