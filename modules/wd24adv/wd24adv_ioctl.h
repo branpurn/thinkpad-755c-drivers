@@ -29,6 +29,23 @@ struct wd24adv_modeinfo {
 
 /* reserved, not implemented yet */
 #define WD24ADV_IOC_MODEINFO	_IOWR('W', 0x30, struct wd24adv_modeinfo)
+
+/*
+ * S6d letterbox present. pixels is a userspace pointer to 320*200
+ * indices. The kernel writes the 640x480 frame. One hardware window
+ * per 64 KiB. Does not use the fault thrash counter. mode 0 is the
+ * only accepted mode. switches and bytes are outputs.
+ */
+struct wd24s6d_present {
+	__u64 pixels;
+	__u32 mode;
+	__u32 switches;
+	__u32 bytes;
+	__u32 reserved;
+};
+#define WD24S6D_PRESENT_LETTER	0u
+#define WD24S6D_PRESENT_SRC	64000u
+#define WD24S6D_IOC_PRESENT	_IOWR('W', 0x40, struct wd24s6d_present)
 /*
  * 'W' 0x31 was a panel/CRT routing ioctl in the scaffold.  Runtime routing
  * was removed for good: 0x31 stays reserved and must never be assigned.

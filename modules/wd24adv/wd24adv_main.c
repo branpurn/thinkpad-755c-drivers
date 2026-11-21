@@ -116,6 +116,7 @@
 #include "wd24adv_ioctl.h"
 #include "wd24adv_dac_entry.h"
 #include "wd24adv_cmap_cache.h"
+#include "wd24adv_present.h"
 #include "wd24adv_trial.h"
 #include <linux/fb.h>
 #include <linux/fs.h>
@@ -1837,6 +1838,7 @@ static struct wd24s6b *s6d_b;
 static struct fb_info *s6d_info;
 static bool s6d_armed, s6d_busy;
 static bool s6d_cmap_published, s6d_cmap_frozen;
+static u32 s6d_pf_frames, s6d_pf_last, s6d_pf_total;
 
 /* Drop every userspace PTE before the aperture is reprogrammed or the
  * module's vm_ops go away. Caller holds hw_lock. Order matches
@@ -2452,11 +2454,122 @@ static void s6d_imageblit(struct fb_info *info, const struct fb_image *img)
 	}
 }
 
+/* One SETWIN per 64 KiB window, then aligned 32-bit stores. No fault,
+ * no thrash note. Caller holds hw_lock. console_lock is the caller's. */
+static int s6d_present_now(const u8 *src, u32 *nsw)
+{
+	struct wd24_present_win w[WD24_PRESENT_WINS];
+	unsigned int n, i;
+	u32 off;
+
+	n = wd24_present_wins(w, WD24_PRESENT_WINS);
+	if (!n || n > WD24_PRESENT_WINS)
+		return -EINVAL;
+	*nsw = 0;
+	for (i = 0; i < n; i++) {
+		int err = wd24s6b_setwin(s6d_b, w[i].w0, w[i].w1);
+
+		if (err) {
+			s6d_st->mapped_base = ~0u;
+			s6d_st->why = "present SETWIN";
+			return err;
+		}
+		s6d_st->mapped_base = w[i].base;
+		s6d_st->nswitch++;
+		(*nsw)++;
+		for (off = w[i].start; off < w[i].end; off += 4) {
+			u32 v = wd24_present_letter_dword(src, off);
+
+			writel(v, vmem + (off - w[i].start));
+		}
+	}
+	return 0;
+}
+
+/* fb_ioctl on 6.18.57 is called with info->lock held. Do not take that
+ * lock again. Drop hw before console_lock: the trial worker takes
+ * console_lock, then hw_lock. */
+static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
+{
+	struct wd24s6d_present req;
+	u8 *src;
+	u32 nsw = 0;
+	int err = 0;
+
+	(void)info;
+	if (cmd != WD24S6D_IOC_PRESENT)
+		return -ENOTTY;
+	if (copy_from_user(&req, (void __user *)arg, sizeof(req)))
+		return -EFAULT;
+	if (req.mode != WD24S6D_PRESENT_LETTER || !req.pixels)
+		return -EINVAL;
+	src = kmalloc(WD24S6D_PRESENT_SRC, GFP_KERNEL);
+	if (!src)
+		return -ENOMEM;
+	if (copy_from_user(src, (void __user *)(unsigned long)req.pixels,
+			   WD24S6D_PRESENT_SRC)) {
+		kfree(src);
+		return -EFAULT;
+	}
+	hw_acq();
+	if (!s6d_st || !s6d_st->active || !s6d_armed || s6d_st->stopping ||
+	    !vmem || !hw || hw->in_text || hw_dead) {
+		hw_rel();
+		kfree(src);
+		return -ENODEV;
+	}
+	if (s6d_vma) {
+		hw_rel();
+		kfree(src);
+		return -EBUSY;
+	}
+	hw_rel();
+#ifndef WD24S1_QEMU_FAKE
+	console_lock();
+#endif
+	hw_acq();
+	if (!s6d_st || !s6d_st->active || !s6d_armed || s6d_st->stopping ||
+	    !vmem || s6d_vma) {
+		err = s6d_vma ? -EBUSY : -ENODEV;
+		goto out;
+	}
+#ifndef WD24S1_QEMU_FAKE
+	if (hw) {
+		hw->be->begin(hw);
+		hw->tag = "S6d: present";
+	}
+#endif
+	err = s6d_present_now(src, &nsw);
+#ifndef WD24S1_QEMU_FAKE
+	if (hw)
+		hw->be->end(hw);
+#endif
+	if (!err) {
+		s6d_pf_frames++;
+		s6d_pf_last = nsw;
+		s6d_pf_total += nsw;
+	}
+out:
+	hw_rel();
+#ifndef WD24S1_QEMU_FAKE
+	console_unlock();
+#endif
+	kfree(src);
+	if (err)
+		return err;
+	req.switches = nsw;
+	req.bytes = WD24_PRESENT_FRAME;
+	if (copy_to_user((void __user *)arg, &req, sizeof(req)))
+		return -EFAULT;
+	return 0;
+}
+
 static const struct fb_ops s6d_fbops = {
 	.owner		= THIS_MODULE,
 	.fb_open	= s6d_fb_open,
 	.fb_release	= s6d_fb_release,
 	.fb_mmap	= s6d_fb_mmap,
+	.fb_ioctl	= s6d_fb_ioctl,
 	.fb_fillrect	= s6d_fillrect,
 	.fb_copyarea	= s6d_copyarea,
 	.fb_imageblit	= s6d_imageblit,
@@ -2467,6 +2580,7 @@ static const struct fb_ops s6d_fbops_cmap = {
 	.fb_open	= s6d_fb_open,
 	.fb_release	= s6d_fb_release,
 	.fb_mmap	= s6d_fb_mmap,
+	.fb_ioctl	= s6d_fb_ioctl,
 	.fb_fillrect	= s6d_fillrect,
 	.fb_copyarea	= s6d_copyarea,
 	.fb_imageblit	= s6d_imageblit,
@@ -2578,6 +2692,9 @@ static void s6d_arm(const struct wd24_mode *m)
 	}
 	s6d_st->active = true;
 	s6d_st->stopping = false;
+	s6d_pf_frames = 0;
+	s6d_pf_last = 0;
+	s6d_pf_total = 0;
 	s6d_busy = false;	/* userspace open is separate from the arm session */
 	if (!s6d_fbcon) {
 		/* Unchanged: no fbdev node, so no fbcon and no mmap. */
@@ -2668,7 +2785,7 @@ static void s6d_arm(const struct wd24_mode *m)
 
 static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 {
-	char local[640];
+	char local[768];
 	int len;
 	static const char busy[] = "wd24adv s6d: hw busy; retry\n";
 
@@ -2682,14 +2799,16 @@ static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 			"fbcon_param %d bind_param %d\n"
 			"faults %u switches %u thrash %u latched %u mapped_base 0x%x\n"
 			"why %s\n"
-			"cmap_param %d published %d frozen %d\n",
+			"cmap_param %d published %d frozen %d\n"
+			"present frames %u last %u total %u\n",
 			s6d_armed, s6d_st->active, s6d_st->stopping, s6d_busy,
 			s6d_st->fb_reg, s6d_info ? s6d_info->node : -1,
 			s6d_fbcon, s6d_bind,
 			s6d_st->nfault, s6d_st->nswitch, s6d_st->nthrash,
 			s6d_st->thrash.latched, s6d_st->mapped_base,
 			s6d_st->why ? s6d_st->why : "-",
-			s6d_cmap, s6d_cmap_published, s6d_cmap_frozen);
+			s6d_cmap, s6d_cmap_published, s6d_cmap_frozen,
+			s6d_pf_frames, s6d_pf_last, s6d_pf_total);
 	}
 	hw_rel();
 	if (len < 0)
@@ -2713,12 +2832,17 @@ static ssize_t cmap_read(struct file *f, char __user *ubuf, size_t count,
 	ssize_t n;
 
 	(void)f;
+	/* 6.18.57 lock_fb_info() returns void. The older helper returned
+	 * int. Do not use the value. */
 	if (!s6d_info)
 		return rd(ubuf, count, p, WD24_CMAP_ABSENT,
 			  sizeof(WD24_CMAP_ABSENT) - 1);
-	if (!lock_fb_info(s6d_info))
+	lock_fb_info(s6d_info);
+	if (!s6d_info->fbops) {
+		unlock_fb_info(s6d_info);
 		return rd(ubuf, count, p, WD24_CMAP_BUSY,
 			  sizeof(WD24_CMAP_BUSY) - 1);
+	}
 	if (!s6d_cmap_published || s6d_info->cmap.len != 256 ||
 	    !s6d_info->cmap.red || !s6d_info->cmap.green ||
 	    !s6d_info->cmap.blue) {

@@ -299,3 +299,15 @@ data 899, index 357, mismatches 0, in_text 1. dmesg ended
 `live text: 0` with data 896, index 336, mismatches 0. TTY snapshots
 before and after matched: kd 0, fg 1, VGA+, bind 1. Hue on the panel
 is still not a pass. The next bundle is `docs/s6d-product.txt`.
+
+## 2026-11-21 18:10 ET
+
+`c6ca389` did not compile on the floppy 6.18.57 tree: `lock_fb_info()`
+returns void and the cmap proc used the value. Desktop did not run.
+Doom demo1 on `fdf30c77` printed the letterbox preamble, then
+`Bus error`. Proc showed `thrash 1 latched 1`, faults 32, switches 32,
+`why thrash latch`, `mapped_base 0x10`, cmap 1/1/1, trial still
+PENDING, rmmod `RM=0`. The bound stays 32. The replacement present
+does not mmap and does not call that counter. `600000` in the zone
+line is `%x` for 6 MiB. `couldn't open demo1.lmp` is the external
+probe; the wad lump is the demo.

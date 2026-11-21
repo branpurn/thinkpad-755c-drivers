@@ -12,6 +12,9 @@ int main(void)
 	T(!wd24x_doom_fb_opt_in("1"), "fb one");
 	T(!wd24x_doom_fb_opt_in("MMAP"), "fb case");
 	T(wd24x_doom_fb_opt_in("mmap"), "fb mmap");
+	T(wd24x_doom_fb_is_ioctl("ioctl"), "fb ioctl");
+	T(!wd24x_doom_fb_is_ioctl("mmap"), "ioctl is not mmap");
+	T(!wd24x_doom_fb_is_mmap("ioctl"), "mmap is not ioctl");
 	T(!wd24x_doom_input_opt_in(0), "in null");
 	T(!wd24x_doom_input_opt_in("1"), "in one");
 	T(!wd24x_doom_input_opt_in("TTY"), "in case");

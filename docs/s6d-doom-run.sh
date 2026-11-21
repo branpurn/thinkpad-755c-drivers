@@ -1,5 +1,6 @@
 #!/bin/sh
-# Doom on the phase 2/3 module. One shot. Does not start by being copied.
+# Doom on the desktop-env module. One shot. Does not start by being copied.
+# WD24X_DOOM_FB=ioctl. Does not mmap. fdf30c77 has no present ioctl.
 # Do not set WD24X_MOCK on the target.
 #   sh s6d-doom-run.sh demo1
 #   sh s6d-doom-run.sh demo2
@@ -138,7 +139,7 @@ demo1|demo2|demo3|eyes) ;;
 esac
 
 if [ -z "${WD24X_CANDIDATE_ENV:-}" ]; then
-	WD24X_CANDIDATE_ENV=$(dirname "$0")/s6d-candidate.env
+	WD24X_CANDIDATE_ENV=$(dirname "$0")/s6d-desktop.env
 fi
 if [ -z "${WD24X_DOOM_ENV:-}" ]; then
 	WD24X_DOOM_ENV=$(dirname "$0")/s6d-doom.env
@@ -194,12 +195,12 @@ start=$(date +%s 2>/dev/null || echo 0)
 echo "WD24X-DOOM-RUN mode $mode"
 
 if [ "$mode" = "eyes" ]; then
-	WD24X_DOOM_FB=mmap WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=letterbox \
+	WD24X_DOOM_FB=ioctl WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=letterbox \
 		WD24X_DOOM_INPUT=tty WD24X_DOOM_FRAMES= \
 		"$BIN" -iwad "$WAD" -nosound -nogui \
 		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
 else
-	WD24X_DOOM_FB=mmap WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=letterbox \
+	WD24X_DOOM_FB=ioctl WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=letterbox \
 		WD24X_DOOM_INPUT= WD24X_DOOM_FRAMES= \
 		"$BIN" -iwad "$WAD" -timedemo "$mode" -nosound -nogui \
 		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
@@ -208,8 +209,11 @@ dr=$?
 echo "DR=$dr"
 cat "$P/tmp/wd24x-doom.out"
 cat "$P/tmp/wd24x-doom.err"
-if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM fb mmap 640 480 index"; then
-	fail "mmap"
+if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM fb ioctl 320 200"; then
+	fail "ioctl"
+fi
+if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM present switches 5"; then
+	fail "switches"
 fi
 if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM present letterbox"; then
 	fail "present"

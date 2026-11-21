@@ -4,12 +4,25 @@ export `vmf_insert_pfn`, `unmap_mapping_range`, or `zap_vma_ptes`.
 Do not load an S6d module into it.
 
 Phase 2 and phase 3 passed at 16:15 ET on `fdf30c77` with the `a143000`
-scripts. That module stays the Doom module. The desktop script needs a
-new build: a second open of `/dev/fb0` while X is mapped returns
-`-EBUSY`, and the close drops X's pages. `/proc/wd24adv/cmap` is the
-published cache, which is what `FBIOGETCMAP` would return, and it is
-filled only after `fb_setcmap` read `3C9` back. The proc does not touch
-a port.
+scripts. Leave `docs/s6d-candidate.env` on that file. Desktop and Doom
+both load the module named in `docs/s6d-desktop.env`. That build must
+compile on 6.18.57, where `lock_fb_info()` returns void. It also has
+the present ioctl. A second open of `/dev/fb0` while X is mapped
+returns `-EBUSY`, and the close drops X's pages. `/proc/wd24adv/cmap`
+is the published cache, which is what `FBIOGETCMAP` would return, and
+it is filled only after `fb_setcmap` read `3C9` back. The proc does
+not touch a port.
+
+At 18:10 ET, `c6ca389` did not compile (`lock_fb_info` used as an int)
+and Doom on `fdf30c77` took `Bus error`. The mmap path faults once per
+64 KiB window and never faults twice in the same window, so the
+consecutive-switch counter reaches 32 within the first frames and the
+fault returns SIGBUS. The bound stays 32. The timedemo does not mmap.
+`WD24X_DOOM_FB=ioctl` sends the 320x200 buffer. The kernel programs
+each 64 KiB window once and writes it with 32-bit stores. `present
+switches 5` is that count. `zone memory: ... 600000` is the engine's
+`%x` of 6 MiB. `couldn't open demo1.lmp` is the external-file probe;
+play continues from the wad.
 
 Nothing here writes a speculative VGA register. Each script hash-checks
 its inputs, stops on the first failure, and waits out the trial so text
@@ -20,7 +33,8 @@ comes back with mismatches 0. `trial` cannot exceed 600.
 Module, same floppy tree and recipe as `fdf30c77`. Vermagic must be
 `6.18.57-tc755x mod_unload 486`. Copy it to the path in
 `docs/s6d-desktop.env` and replace that file's `WD24X_CANDIDATE_SHA`.
-Leave `docs/s6d-candidate.env` on `fdf30c77`. Doom loads that file.
+Leave `docs/s6d-candidate.env` on `fdf30c77`. The Doom script reads
+the desktop env for the module.
 
 Userspace, static i486 musl. From `modules/wd24adv/tests`:
 
@@ -66,18 +80,18 @@ timedemo exits 255 because the engine reports the timing through
 N realtics` line is success, not a driver fault. No fps number in this
 tree is the bar. The Win98 timedemo on this machine is the bar.
 
-The blit used for that run is letterbox, 320x200 doubled into the
-640x400 band at rows 40..439. Two source pixels per aligned 32-bit
-store, the row emitted twice, bars on the first frame only, each copy
-stopping at a 64 KiB edge. No write-combining register, no per-pixel
-bank test. Fill stays available and is not the timedemo. Further
-changes wait on `fps_x100`.
+The timedemo blit is letterbox, 320x200 doubled into the 640x400 band
+at rows 40..439, done in the kernel. Five window programs per frame.
+Two source pixels per aligned 32-bit store. No mmap fault on that
+path. `WD24X_DOOM_FB=mmap` still exists and is not what the script
+sets. Fill stays available and is not the timedemo.
 
 ## Order
 
 One script at a time. `/proc/fb` empty, no X socket, no `wd24adv` in
 `/proc/modules`. Copy the script next to its env file and run it with
-`sh`. Do not export `WD24X_MOCK`.
+`sh`. The Doom script also needs `s6d-desktop.env` in that same
+directory. Do not export `WD24X_MOCK`.
 
 1. Desktop, after the new module and `wd24x-xcmp` are pinned.
    `sh /tmp/s6d-desktop-run.sh`
@@ -94,14 +108,17 @@ One script at a time. `/proc/fb` empty, no X socket, no `wd24adv` in
    `WD24X-DESKTOP-RUN done`
    This is not a long-lived X session and not a panel reading of hue.
 
-2. Doom timedemo, on `fdf30c77`, after `wd24x-doom` is pinned.
-   `sh /tmp/s6d-doom-run.sh demo1`
+2. Doom timedemo, after the new module and `wd24x-doom` are pinned.
+   Do not use `fdf30c77` for this. `sh /tmp/s6d-doom-run.sh demo1`
    Then, only after `WD24X-DOOM-RUN done`, `demo2`, then `demo3`.
    Each is its own insmod, trial 600. Input stays off. Pass adds
-   `WD24X-DOOM fb mmap 640 480 index`,
+   `WD24X-DOOM fb ioctl 320 200`,
+   `WD24X-DOOM present switches 5`,
    `WD24X-DOOM blit letterbox dword`,
    `WD24X-DOOM palette put 256`,
    the gametics line, and `WD24X-DOOM-RUN done`.
+   `/proc/wd24adv/s6d` grows `present frames N last 5 total ...`.
+   Faults stay 0. The thrash latch stays clear.
 
 3. Normal play, only while someone is watching the panel.
    `sh /tmp/s6d-doom-run.sh eyes`

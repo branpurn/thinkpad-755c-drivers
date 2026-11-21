@@ -31,6 +31,7 @@
 #include "wd24x-doom-pick.h"
 #include "wd24x-doom-present.h"
 #include "wd24x-tty-own.h"
+#include "../../modules/wd24adv/wd24adv_ioctl.h"
 
 static unsigned frames;
 static unsigned index_sum;
@@ -41,6 +42,8 @@ static int present_mode;
 static uint8_t present[WD24X_DOOM_FRAME];
 static uint8_t *fb;
 static int fb_fd = -1;
+static int fb_ioctl;
+static unsigned present_switches;
 static struct wd24x_tty_own tty_own;
 static struct wd24x_keys keys;
 static int have_up;
@@ -115,7 +118,7 @@ static void arm_signals(void)
 	sigaction(SIGINT, &sa, NULL);
 }
 
-static int open_fb(void)
+static int open_fb_fd(void)
 {
 	struct fb_fix_screeninfo fix;
 	struct fb_var_screeninfo var;
@@ -131,6 +134,13 @@ static int open_fb(void)
 		fb_fd = -1;
 		return -1;
 	}
+	return 0;
+}
+
+static int open_fb(void)
+{
+	if (open_fb_fd() != 0)
+		return -1;
 	fb = mmap(NULL, WD24X_DOOM_FRAME, PROT_READ | PROT_WRITE, MAP_SHARED,
 		  fb_fd, 0);
 	if (fb == MAP_FAILED) {
@@ -211,9 +221,14 @@ void DG_Init(void)
 		printf("WD24X-DOOM palette put needs mmap\n");
 		exit(2);
 	}
+	fb_ioctl = wd24x_doom_fb_is_ioctl(getenv("WD24X_DOOM_FB"));
 	if (!wd24x_doom_fb_opt_in(getenv("WD24X_DOOM_FB")))
 		printf("WD24X-DOOM display file\n");
-	else if (open_fb() != 0)
+	else if (fb_ioctl) {
+		if (open_fb_fd() != 0)
+			exit(1);
+		printf("WD24X-DOOM fb ioctl 320 200\n");
+	} else if (open_fb() != 0)
 		exit(1);
 	{
 		const char *sum_s = getenv("WD24X_DOOM_SUM");
@@ -223,7 +238,7 @@ void DG_Init(void)
 		else if (sum_s && sum_s[0] == '0')
 			sum_frames = 0;
 		else
-			sum_frames = fb ? 0 : 1;
+			sum_frames = (fb || fb_ioctl) ? 0 : 1;
 	}
 	printf("WD24X-DOOM sum %s\n", sum_frames ? "on" : "off");
 	if (!wd24x_doom_input_opt_in(getenv("WD24X_DOOM_INPUT"))) {
@@ -252,7 +267,23 @@ void DG_DrawFrame(void)
 	idx = (const uint8_t *)DG_ScreenBuffer;
 	frames++;
 	index_sum = fnv(idx, WD24X_DOOM_SRC_W * WD24X_DOOM_SRC_H);
-	if (fb && present_mode == WD24X_DOOM_LETTER) {
+	if (fb_fd >= 0 && wd24x_doom_palette_put(getenv("WD24X_DOOM_PALETTE")))
+		put_playpal();
+	if (fb_ioctl) {
+		struct wd24s6d_present req;
+
+		memset(&req, 0, sizeof req);
+		req.pixels = (uint64_t)(uintptr_t)idx;
+		req.mode = WD24S6D_PRESENT_LETTER;
+		if (ioctl(fb_fd, WD24S6D_IOC_PRESENT, &req) != 0) {
+			printf("WD24X-DOOM present refused\n");
+			exit(1);
+		}
+		present_switches = req.switches;
+		if (frames == 1)
+			printf("WD24X-DOOM present switches %u\n",
+			       present_switches);
+	} else if (fb && present_mode == WD24X_DOOM_LETTER) {
 		if (!bars_sent) {
 			wd24x_doom_present(present_mode, idx, fb, NULL);
 			bars_sent = 1;
@@ -268,8 +299,6 @@ void DG_DrawFrame(void)
 	}
 	if (sum_frames)
 		present_sum = fnv(present, WD24X_DOOM_FRAME);
-	if (wd24x_doom_palette_put(getenv("WD24X_DOOM_PALETTE")))
-		put_playpal();
 	if (frame_cap && (int)frames >= frame_cap) {
 		report();
 		exit(0);
