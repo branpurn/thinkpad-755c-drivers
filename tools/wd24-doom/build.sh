@@ -16,10 +16,17 @@ fi
 # WD24X_DOOM_FAST empty keeps this command line. omitfp, direct, unroll,
 # or all add the measured i486 opts. direct and unroll rewrite copies
 # of i_video.c and r_draw.c; the fetched pin is not edited.
+# unroll covers R_DrawColumn and R_DrawSpan. Low detail is separate:
+# WD24X_DOOM_DETAIL=low (not the default, and not part of FAST=all).
 FAST=${WD24X_DOOM_FAST:-}
 case "$FAST" in
 ''|omitfp|direct|unroll|all) ;;
 *) echo "WD24X_DOOM_FAST must be empty, omitfp, direct, unroll, or all"; exit 1 ;;
+esac
+DETAIL=${WD24X_DOOM_DETAIL:-high}
+case "$DETAIL" in
+high|low) ;;
+*) echo "WD24X_DOOM_DETAIL must be high or low"; exit 1 ;;
 esac
 EXTRA=
 DRAWDEF=
@@ -36,6 +43,11 @@ direct|unroll|all)
 	python3 "$ROOT/fast-src.py" "$SRC" "$FASTSRC" "$FAST"
 	;;
 esac
+if [ "$DETAIL" = "low" ]; then
+	FASTSRC=${FASTSRC:-/tmp/wd24-doom-fastsrc}
+	mkdir -p "$FASTSRC"
+	sed 's/detailLevel = 0;/detailLevel = 1;/' "$SRC/m_menu.c" > "$FASTSRC/m_menu.c"
+fi
 CFLAGS="-static -march=i486 -mtune=i486 -O2 -DNDEBUG $EXTRA -std=gnu11 -Wall -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable -Wno-missing-field-initializers -Wno-format -Wno-unused-but-set-variable -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE -DCMAP256 -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 $DRAWDEF -I$SRC -I$ROOT"
 echo "WD24X-DOOM-BUILD fast ${FAST:-off}"
 objs=

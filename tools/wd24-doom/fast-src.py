@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # Copy two doomgeneric sources and apply the opt-in fast edits.
 # direct: I_FinishUpdate does not copy when the index frame is already
-#         the 320x200 buffer. unroll: R_DrawColumn writes four pixels
-#         per trip, same pixels as the original do/while.
+#         the 320x200 buffer. unroll: R_DrawColumn and R_DrawSpan write
+#         four pixels per trip, same pixels as the original do/while.
 import pathlib
 import sys
 
@@ -49,6 +49,58 @@ col_new = """\
 	}
     }
 """
+span_old = """\
+    do
+    {
+	// Calculate current texture index in u,v.
+        ytemp = (position >> 4) & 0x0fc0;
+        xtemp = (position >> 26);
+        spot = xtemp | ytemp;
+
+	// Lookup pixel from flat texture tile,
+	//  re-index using light/colormap.
+	*dest++ = ds_colormap[ds_source[spot]];
+
+        position += step;
+
+    } while (count--);
+"""
+span_new = """\
+    {
+	int left = count + 1;
+
+	while (left >= 4) {
+	    ytemp = (position >> 4) & 0x0fc0;
+	    xtemp = (position >> 26);
+	    spot = xtemp | ytemp;
+	    *dest++ = ds_colormap[ds_source[spot]];
+	    position += step;
+	    ytemp = (position >> 4) & 0x0fc0;
+	    xtemp = (position >> 26);
+	    spot = xtemp | ytemp;
+	    *dest++ = ds_colormap[ds_source[spot]];
+	    position += step;
+	    ytemp = (position >> 4) & 0x0fc0;
+	    xtemp = (position >> 26);
+	    spot = xtemp | ytemp;
+	    *dest++ = ds_colormap[ds_source[spot]];
+	    position += step;
+	    ytemp = (position >> 4) & 0x0fc0;
+	    xtemp = (position >> 26);
+	    spot = xtemp | ytemp;
+	    *dest++ = ds_colormap[ds_source[spot]];
+	    position += step;
+	    left -= 4;
+	}
+	while (left--) {
+	    ytemp = (position >> 4) & 0x0fc0;
+	    xtemp = (position >> 26);
+	    spot = xtemp | ytemp;
+	    *dest++ = ds_colormap[ds_source[spot]];
+	    position += step;
+	}
+    }
+"""
 
 iv = (src / "i_video.c").read_text()
 rd = (src / "r_draw.c").read_text()
@@ -86,7 +138,9 @@ if "direct" in mode or mode == "all":
 if "unroll" in mode or mode == "all":
     if rd.count(col_old) != 1:
         sys.exit("r_draw.c column loop changed")
-    rd = rd.replace(col_old, col_new, 1)
+    if rd.count(span_old) != 1:
+        sys.exit("r_draw.c span loop changed")
+    rd = rd.replace(col_old, col_new, 1).replace(span_old, span_new, 1)
 (dst / "i_video.c").write_text(iv)
 (dst / "r_draw.c").write_text(rd)
 print("fast-src", mode)
