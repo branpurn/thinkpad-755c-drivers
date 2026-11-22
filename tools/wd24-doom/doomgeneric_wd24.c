@@ -2,9 +2,11 @@
 /*
  * Indexed Doom backend. Render stays 320x200 palette indices.
  * Every frame is also composed into a private 640x480 buffer.
- * /dev/fb0 is opened only when WD24X_DOOM_FB=mmap, and only when the
- * fixed screen is 640x480x8 with line length 640 and room for 0x4b000
- * bytes. WD24X_DOOM_PALETTE=put then sends PLAYPAL through FBIOPUTCMAP.
+ * /dev/fb0 is opened only when WD24X_DOOM_FB=mmap or ioctl. mmap requires
+ * 640x480x8. WD24X_DOOM_PRESENT=13h asks for 320x200x8 (FBIOPUT_VSCREENINFO
+ * or the direct present ioctl) and falls back to letterbox if that is
+ * refused on a 640x480 frame. WD24X_DOOM_PALETTE=put then sends PLAYPAL
+ * through FBIOPUTCMAP.
  * Any other palette value does not. WD24X_DOOM_INPUT=tty owns the tty
  * termios and puts the saved struct back. KD mode is never changed.
  * The default path opens neither device.
@@ -45,6 +47,12 @@ static uint8_t present[WD24X_DOOM_FRAME];
 static uint8_t *fb;
 static int fb_fd = -1;
 static int fb_ioctl;
+static int use_13h;
+static int fb_start_640;
+static int fb_put_13h;
+static struct fb_var_screeninfo fb_var_saved;
+static struct fb_var_screeninfo fb_var_orig;
+static unsigned int fb_x, fb_y, fb_bpp, fb_line, fb_smem;
 static unsigned present_switches;
 static struct wd24x_tty_own tty_own;
 static struct wd24x_keys keys;
@@ -154,16 +162,48 @@ static void arm_signals(void)
 	sigaction(SIGINT, &sa, NULL);
 }
 
-static int open_fb_fd(void)
+static int read_fb_info(void)
 {
 	struct fb_fix_screeninfo fix;
 	struct fb_var_screeninfo var;
 
+	if (ioctl(fb_fd, FBIOGET_FSCREENINFO, &fix) != 0 ||
+	    ioctl(fb_fd, FBIOGET_VSCREENINFO, &var) != 0)
+		return -1;
+	fb_x = var.xres;
+	fb_y = var.yres;
+	fb_bpp = var.bits_per_pixel;
+	fb_line = fix.line_length;
+	fb_smem = fix.smem_len;
+	fb_var_saved = var;
+	return 0;
+}
+
+static int fb_is_640(void)
+{
+	return wd24x_doom_fb_geometry_ok(fb_x, fb_y, fb_bpp, fb_line, fb_smem);
+}
+
+static int fb_is_13h(void)
+{
+	return wd24x_doom_fb_geometry_13h(fb_x, fb_y, fb_bpp, fb_line, fb_smem);
+}
+
+static void restore_fb_var(const struct fb_var_screeninfo *saved)
+{
+	struct fb_var_screeninfo back;
+
+	if (!saved || fb_fd < 0)
+		return;
+	back = *saved;
+	if (ioctl(fb_fd, FBIOPUT_VSCREENINFO, &back) == 0)
+		read_fb_info();
+}
+
+static int open_fb_fd(void)
+{
 	fb_fd = open("/dev/fb0", O_RDWR);
-	if (fb_fd < 0 || ioctl(fb_fd, FBIOGET_FSCREENINFO, &fix) != 0 ||
-	    ioctl(fb_fd, FBIOGET_VSCREENINFO, &var) != 0 ||
-	    !wd24x_doom_fb_geometry_ok(var.xres, var.yres, var.bits_per_pixel,
-				       fix.line_length, fix.smem_len)) {
+	if (fb_fd < 0 || read_fb_info() != 0 || !fb_is_640()) {
 		printf("WD24X-DOOM fb refused\n");
 		if (fb_fd >= 0)
 			close(fb_fd);
@@ -171,6 +211,29 @@ static int open_fb_fd(void)
 		return -1;
 	}
 	return 0;
+}
+
+/* Opens /dev/fb0 and records the geometry. Does not require 640x480. */
+static int open_fb_any(void)
+{
+	fb_fd = open("/dev/fb0", O_RDWR);
+	if (fb_fd < 0 || read_fb_info() != 0) {
+		printf("WD24X-DOOM fb refused\n");
+		if (fb_fd >= 0)
+			close(fb_fd);
+		fb_fd = -1;
+		return -1;
+	}
+	return 0;
+}
+
+static void fall_back_letterbox(void)
+{
+	printf("WD24X-DOOM present 13h refused\n");
+	use_13h = 0;
+	present_mode = WD24X_DOOM_LETTER;
+	printf("WD24X-DOOM present letterbox\n");
+	printf("WD24X-DOOM blit letterbox dword\n");
 }
 
 static int open_fb(void)
@@ -249,8 +312,7 @@ void DG_Init(void)
 		printf("WD24X-DOOM present refused\n");
 		exit(2);
 	}
-	printf("WD24X-DOOM present %s\n",
-	       present_mode == WD24X_DOOM_FILL ? "fill" : "letterbox");
+	printf("WD24X-DOOM present %s\n", wd24x_doom_present_name(present_mode));
 	if (present_mode == WD24X_DOOM_LETTER)
 		printf("WD24X-DOOM blit letterbox dword\n");
 	if (wd24x_doom_palette_put(getenv("WD24X_DOOM_PALETTE")) &&
@@ -259,11 +321,52 @@ void DG_Init(void)
 		exit(2);
 	}
 	fb_ioctl = wd24x_doom_fb_is_ioctl(getenv("WD24X_DOOM_FB"));
+	if (present_mode == WD24X_DOOM_DIRECT && !fb_ioctl)
+		fall_back_letterbox();
 	if (!wd24x_doom_fb_opt_in(getenv("WD24X_DOOM_FB")))
 		printf("WD24X-DOOM display file\n");
 	else if (fb_ioctl) {
-		if (open_fb_fd() != 0)
+		int after;
+
+		if (open_fb_any() != 0)
 			exit(1);
+		fb_start_640 = fb_is_640();
+		after = fb_is_13h();
+		fb_var_orig = fb_var_saved;
+		if (present_mode == WD24X_DOOM_DIRECT && !after) {
+			struct fb_var_screeninfo req;
+
+			memset(&req, 0, sizeof(req));
+			req.xres = WD24X_DOOM_SRC_W;
+			req.yres = WD24X_DOOM_SRC_H;
+			req.xres_virtual = WD24X_DOOM_SRC_W;
+			req.yres_virtual = WD24X_DOOM_SRC_H;
+			req.bits_per_pixel = 8;
+			if (ioctl(fb_fd, FBIOPUT_VSCREENINFO, &req) == 0) {
+				fb_put_13h = 1;
+				if (read_fb_info() != 0)
+					after = 0;
+				else
+					after = fb_is_13h();
+			}
+		}
+		if (present_mode == WD24X_DOOM_DIRECT) {
+			int pick = wd24x_doom_13h_pick(fb_start_640, after, after);
+
+			if (pick == WD24X_DOOM_DIRECT) {
+				use_13h = 1;
+			} else if (pick == WD24X_DOOM_LETTER) {
+				if (fb_put_13h)
+					restore_fb_var(&fb_var_orig);
+				fall_back_letterbox();
+			} else {
+				printf("WD24X-DOOM present 13h refused\n");
+				exit(1);
+			}
+		} else if (!fb_start_640) {
+			printf("WD24X-DOOM fb refused\n");
+			exit(1);
+		}
 		printf("WD24X-DOOM fb ioctl 320 200\n");
 	} else if (open_fb() != 0)
 		exit(1);
@@ -312,7 +415,34 @@ void DG_DrawFrame(void)
 		put_playpal();
 	if (doom_time.every)
 		t_pal = mono_ns();
-	if (fb_ioctl) {
+	if (fb_ioctl && use_13h) {
+		struct wd24s6d_present req;
+
+		memset(&req, 0, sizeof(req));
+		req.pixels = (uint64_t)(uintptr_t)idx;
+		req.src_w = 320;
+		req.src_h = 200;
+		req.scale = 1;
+		req.op = WD24ADV_BLIT_DIRECT;
+		req.nbytes = WD24S6D_PRESENT_SRC;
+		if (ioctl(fb_fd, WD24S6D_IOC_PRESENT, &req) != 0) {
+			if (!fb_start_640) {
+				printf("WD24X-DOOM present 13h refused\n");
+				exit(1);
+			}
+			if (fb_put_13h)
+				restore_fb_var(&fb_var_orig);
+			fall_back_letterbox();
+		} else {
+			present_switches = req.switches;
+			if (frames == 1) {
+				printf("WD24X-DOOM blit direct 64000\n");
+				printf("WD24X-DOOM present switches %u\n",
+				       present_switches);
+			}
+		}
+	}
+	if (fb_ioctl && !use_13h) {
 		struct wd24s6d_present req;
 
 		memset(&req, 0, sizeof req);
@@ -332,7 +462,7 @@ void DG_DrawFrame(void)
 		if (frames == 1)
 			printf("WD24X-DOOM present switches %u\n",
 			       present_switches);
-	} else if (fb && present_mode == WD24X_DOOM_LETTER) {
+	} else if (!fb_ioctl && fb && present_mode == WD24X_DOOM_LETTER) {
 		if (!bars_sent) {
 			wd24x_doom_present(present_mode, idx, fb, NULL);
 			bars_sent = 1;
@@ -341,7 +471,7 @@ void DG_DrawFrame(void)
 		}
 		if (sum_frames)
 			wd24x_doom_present(present_mode, idx, present, NULL);
-	} else {
+	} else if (!fb_ioctl) {
 		wd24x_doom_present(present_mode, idx, present, NULL);
 		if (fb)
 			wd24x_doom_emit(fb, 0, present, WD24X_DOOM_FRAME, NULL);

@@ -36,7 +36,8 @@
 
 enum {
 	WD24X_DOOM_LETTER = 0,
-	WD24X_DOOM_FILL = 1
+	WD24X_DOOM_FILL = 1,
+	WD24X_DOOM_DIRECT = 2
 };
 
 struct wd24x_bank_stat {
@@ -57,7 +58,18 @@ static inline int wd24x_doom_present_mode(const char *s)
 		return WD24X_DOOM_LETTER;
 	if (strcmp(s, "fill") == 0)
 		return WD24X_DOOM_FILL;
+	if (strcmp(s, "13h") == 0)
+		return WD24X_DOOM_DIRECT;
 	return -1;
+}
+
+static inline const char *wd24x_doom_present_name(int mode)
+{
+	if (mode == WD24X_DOOM_FILL)
+		return "fill";
+	if (mode == WD24X_DOOM_DIRECT)
+		return "13h";
+	return "letterbox";
 }
 
 /* The 64000-byte index hash feeds only the sum line. */
@@ -73,6 +85,33 @@ static inline int wd24x_doom_fb_geometry_ok(unsigned x, unsigned y,
 {
 	return x == WD24X_DOOM_DST_W && y == WD24X_DOOM_DST_H && bpp == 8u &&
 	       line == WD24X_DOOM_DST_W && smem >= WD24X_DOOM_FRAME;
+}
+
+/* Chain-4 320x200. smem is the 64000-byte frame, not the 640x480 map. */
+static inline int wd24x_doom_fb_geometry_13h(unsigned int x, unsigned int y,
+					     unsigned int bpp, unsigned int line,
+					     unsigned int smem)
+{
+	return x == WD24X_DOOM_SRC_W && y == WD24X_DOOM_SRC_H && bpp == 8u &&
+	       line == WD24X_DOOM_SRC_W &&
+	       smem >= WD24X_DOOM_SRC_W * WD24X_DOOM_SRC_H &&
+	       smem < WD24X_DOOM_FRAME;
+}
+
+/*
+ * DIRECT when the fb is 320x200x8 and the direct ioctl succeeded.
+ * LETTER when the fb started as 640x480 and 13h was refused, so the
+ * letterbox ioctl is still the right present. -1 means stop: do not
+ * letterbox a session that is not the 640x480 frame.
+ */
+static inline int wd24x_doom_13h_pick(int start_640, int after_13h,
+				      int direct_ok)
+{
+	if (after_13h && direct_ok)
+		return WD24X_DOOM_DIRECT;
+	if (start_640)
+		return WD24X_DOOM_LETTER;
+	return -1;
 }
 
 /* Top 6 bits, stored the way the colormap candidate shifts them back. */

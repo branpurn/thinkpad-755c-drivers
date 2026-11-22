@@ -127,6 +127,17 @@ int main(void)
 	T(fnv(src, sizeof src) != 0, "src nonzero");
 	T(wd24x_doom_index_hashed(0) == 0, "sum off skips the index hash");
 	T(wd24x_doom_index_hashed(1) == 1, "sum on keeps the index hash");
+	T(wd24x_doom_present_mode("13h") == WD24X_DOOM_DIRECT, "13h mode");
+	T(wd24x_doom_present_mode("letterbox") == WD24X_DOOM_LETTER, "letter mode");
+	T(strcmp(wd24x_doom_present_name(WD24X_DOOM_DIRECT), "13h") == 0, "13h name");
+	T(wd24x_doom_fb_geometry_13h(320, 200, 8, 320, 64000) == 1, "13h geom");
+	T(wd24x_doom_fb_geometry_13h(640, 480, 8, 640, 0x4b000) == 0, "640 is not 13h");
+	T(wd24x_doom_13h_pick(0, 1, 1) == WD24X_DOOM_DIRECT, "already 13h");
+	T(wd24x_doom_13h_pick(0, 1, 0) == -1, "13h ioctl fail stops");
+	T(wd24x_doom_13h_pick(1, 0, 0) == WD24X_DOOM_LETTER, "put refused");
+	T(wd24x_doom_13h_pick(1, 1, 0) == WD24X_DOOM_LETTER, "ioctl refused on 640");
+	T(wd24x_doom_13h_pick(1, 1, 1) == WD24X_DOOM_DIRECT, "put then direct");
+	T(wd24x_doom_13h_pick(0, 0, 0) == -1, "neither geometry");
 
 	{
 		struct wd24x_doom_time tm;
