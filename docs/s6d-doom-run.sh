@@ -221,6 +221,22 @@ have_line() {
 	[ "$hit" = 1 ]
 }
 
+need_scan() {
+	live=$(cat "$P/proc/wd24adv/live" 2>/dev/null) || fail "scan"
+	case "$live" in
+	*"scan mode "*) ;;
+	*) fail "scan" ;;
+	esac
+	case "$live" in
+	*"cr0c="*"cr0d="*"dw_bytes="*) ;;
+	*) fail "scan fields" ;;
+	esac
+	case "$live" in
+	*"cr0c=00 cr0d=00"*) echo "WD24X-DOOM-RUN scan start 0" ;;
+	*) echo "WD24X-DOOM-RUN scan start nonzero" ;;
+	esac
+}
+
 case "$mode" in
 demo1|demo2|demo3|eyes|timedemo13h|timedemo13hmap|timedemo13hcopy) ;;
 measure|measure13h) trial=180 ;;
@@ -419,6 +435,10 @@ elif [ "$mode" = "measure" ] || [ "$mode" = "measure13h" ]; then
 		fail "doom rc"
 	fi
 	if [ "$mode" = "measure13h" ]; then
+		if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM kd graphics"; then
+			fail "kd"
+		fi
+		need_scan
 		echo "WD24X-DOOM-RUN measure13h frames 60"
 	else
 		echo "WD24X-DOOM-RUN measure frames 60"
@@ -443,6 +463,10 @@ elif [ "$mode" = "timedemo13h" ] || [ "$mode" = "timedemo13hmap" ] ||
 	fi
 	echo "$found"
 	echo "WD24X-DOOM-FPS gametics $gt realtics $rt fps_x100 $((gt * 3500 / rt))"
+	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM kd graphics"; then
+		fail "kd"
+	fi
+	need_scan
 	finish_rmmod
 else
 	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM input tty"; then

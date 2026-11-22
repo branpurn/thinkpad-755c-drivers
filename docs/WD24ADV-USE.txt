@@ -103,13 +103,17 @@ after the blitter has started does not fall back to CPU stores.
 `timedemo13h` is the Doom run. It loads `mode=320x200-8` and
 `present_mode=13h`. The present is one 64000-byte copy, no expansion
 and no window program. Pass lines include `WD24X-DOOM blit direct
-64000`, `WD24X-DOOM present switches 0`, Doom's `timed N gametics in
-N realtics` line, and `WD24X-DOOM-RUN restore mismatches 0`. Faults
-stay 0 and the thrash latch stays clear. A completed timedemo exits
-255 because the engine reports the timing and then exits. That 255
-with the gametics line is success. There is no `default.cfg`, so the
-engine keeps `screenblocks` 10 and `detaillevel` 0. The command
-passes `-nosound -nogui`.
+64000`, `WD24X-DOOM present switches 0`, `WD24X-DOOM kd graphics`,
+Doom's `timed N gametics in N realtics` line, and `WD24X-DOOM-RUN
+restore mismatches 0`. `scan mode` in `/proc/wd24adv/live` is the
+live CR0C/CR0D read, and `cr0c=00 cr0d=00` is the start at byte 0.
+Faults stay 0 and the thrash latch stays clear. A completed timedemo
+exits 255 because the engine reports the timing and then exits. That
+255 with the gametics line is success. There is no `default.cfg`, so
+the engine keeps `screenblocks` 10 and `detaillevel` 0. The command
+passes `-nosound -nogui`. Before that run,
+`sh /tmp/s6d-scanpat-run.sh` leaves a 320x200 row-band picture up for
+10 seconds. The red block belongs at the top.
 
 On module `2436a39a` with `wd24x-doom` `f95ae448`, 60 frames of that
 path took 1735 ms to render, 1005 ms to present, and 16 ms of

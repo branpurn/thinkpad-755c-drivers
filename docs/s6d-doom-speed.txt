@@ -155,16 +155,33 @@ ioctl copy. The morning batch measures it. It does not replace the
 ioctl timedemo.
 
 `aperturecopy` must not copy with `rep movsl`. At `-O2 -march=i486`
-a normal store loop inlines to that string move. The chain-4 window
-does not take a string move the way it takes one `movl`, and the
-CRTC then shows the frame rotated: status bar at the top, weapon
-wrapped to the side. `wd24x_doom_copy_dwords` is one `movl` per
-dword, the same shape as the kernel `writel` on the ioctl path.
-A host render of one frame through ioctl, aperture, and aperturecopy
-is byte-identical, and rows 168..199 stay the status bar. The
-stripped `FAST=all` binary is `/tmp/wd24x-doom.s`, 557944 bytes,
-sha256 `f0857f0cae65f1165966a7fd0e67577982eccd6d8b2076594a49ac9a5d25d7e0`.
+a normal store loop inlines to that string move. `wd24x_doom_copy_dwords`
+is one `movl` per dword, the same shape as the kernel `writel` on the
+ioctl path. That codegen change is not the rotated picture. The same
+rotation is on the aperture path, which has no copy. A host render of
+one frame through ioctl, aperture, and aperturecopy is byte-identical,
+and rows 168..199 stay the status bar. The stripped `FAST=all` binary
+is `/tmp/wd24x-doom.s`, 557944 bytes, sha256
+`f0857f0cae65f1165966a7fd0e67577982eccd6d8b2076594a49ac9a5d25d7e0`.
 Put that sha in `WD24X_DOOM_SHA` before the next hardware run.
+
+The rotation matches vgacon still owning the VT. Linux 6.18.57
+`vgacon_scroll` calls `vga_set_mem_top`, and that is `write_vga(12,
+origin/2)`, which is CR0C then CR0D. The write is skipped when
+`vga_is_gfx` is set or `vc_mode` is not `KD_TEXT`. `KDSETMODE
+KD_GRAPHICS` is what sets both, through `do_blank_screen(1)`. Doom
+and this run script did not do that, and the module's trace does not
+record vgacon's `outw`. One 80-column text row is 160 bytes. The
+register stores half of that, and mode 13h doubleword multiplies by
+4, so one text row is 320 graphics bytes. 113 text rows are 36160
+bytes. Doom's status bar starts at buffer row 168, so it shows up at
+display row 55. That is the photo's "about rows 50-60" and "about
+36000". A whole text row does not move the picture sideways. 36000
+would be 112 rows plus 160 columns. `sh docs/s6d-scanpat-run.sh`
+draws the row bands and the corner markers for ten seconds. The live
+log's `scan mode` line is the CR0C/CR0D read after that graphics hold,
+not the write trace. A later `scan frame` or `scan unmap` line is the
+same registers after a frame. This has not been seen on the panel.
 
 ## Render bucket
 

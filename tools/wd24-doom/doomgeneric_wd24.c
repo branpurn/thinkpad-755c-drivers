@@ -12,8 +12,10 @@
  * map writes a VGA register. WD24X_DOOM_PALETTE=put then sends PLAYPAL
  * through FBIOPUTCMAP.
  * Any other palette value does not. WD24X_DOOM_INPUT=tty owns the tty
- * termios and puts the saved struct back. KD mode is never changed.
- * The default path opens neither device.
+ * termios and puts the saved struct back. A 13h session sets
+ * KD_GRAPHICS on the active VT so vgacon does not write CR0C/CR0D,
+ * and puts KD_TEXT back on the way out if this process was the one
+ * that changed it. The default path opens neither device.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -30,6 +32,7 @@
 #include <time.h>
 
 #include <linux/fb.h>
+#include <linux/kd.h>
 
 #include "doomgeneric.h"
 #include "doomkeys.h"
@@ -63,6 +66,8 @@ static struct fb_var_screeninfo fb_var_orig;
 static unsigned int fb_x, fb_y, fb_bpp, fb_line, fb_smem;
 static unsigned present_switches;
 static struct wd24x_tty_own tty_own;
+static int kd_fd = -1;
+static int kd_restore;
 static struct wd24x_keys keys;
 static int have_up;
 static unsigned char pending_up;
@@ -132,12 +137,52 @@ static void on_sig(int sig)
 	got_sig = sig;
 }
 
+static void kd_release(void)
+{
+	if (kd_fd < 0)
+		return;
+	if (kd_restore)
+		ioctl(kd_fd, KDSETMODE, KD_TEXT);
+	close(kd_fd);
+	kd_fd = -1;
+	kd_restore = 0;
+}
+
+/* vgacon_scroll writes CR0C/CR0D while the VT stays KD_TEXT. Graphics
+ * mode makes that return before the write. Linux 6.18.57 vt_kdsetmode.
+ */
+static void kd_hold(void)
+{
+	const char *dev = getenv("WD24X_TTY_DEV");
+	int mode = KD_TEXT;
+
+	if (kd_fd >= 0)
+		return;
+	if (!dev || !dev[0])
+		dev = "/dev/tty0";
+	kd_fd = open(dev, O_RDWR);
+	if (kd_fd < 0) {
+		printf("WD24X-DOOM kd refused\n");
+		return;
+	}
+	if (ioctl(kd_fd, KDGETMODE, &mode) != 0 ||
+	    (mode != KD_GRAPHICS && ioctl(kd_fd, KDSETMODE, KD_GRAPHICS) != 0)) {
+		printf("WD24X-DOOM kd refused\n");
+		close(kd_fd);
+		kd_fd = -1;
+		return;
+	}
+	kd_restore = mode != KD_GRAPHICS;
+	printf("WD24X-DOOM kd graphics\n");
+}
+
 static void restore_and_signal(void)
 {
 	int sig = got_sig;
 
 	if (!sig)
 		return;
+	kd_release();
 	wd24x_tty_own_end(&tty_own);
 	signal(sig, SIG_DFL);
 	raise(sig);
@@ -170,6 +215,7 @@ static void report(void)
 	if (reported)
 		return;
 	reported = 1;
+	kd_release();
 	wd24x_tty_own_end(&tty_own);
 	dump_window();
 	if (fb_fake) {
@@ -512,6 +558,8 @@ fake_ready:
 		else
 			sum_frames = (fb || fb_ioctl) ? 0 : 1;
 	}
+	if (!fb_fake && (fb_aperture || fb_apcopy || use_13h))
+		kd_hold();
 	printf("WD24X-DOOM sum %s\n", sum_frames ? "on" : "off");
 	if (!wd24x_doom_input_opt_in(getenv("WD24X_DOOM_INPUT"))) {
 		printf("WD24X-DOOM input none\n");

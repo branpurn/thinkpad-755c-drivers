@@ -36,6 +36,12 @@ EOF
 #!/bin/sh
 echo "$*" >> "$WD24X_MOCK/insmod.args"
 printf '%s\n' 'wd24adv 1 - Live' >> "$WD24X_MOCK/proc/modules"
+case " $* " in
+*mode=320x200-8*)
+	printf '%s\n' 'scan mode pr_locked=1 cr08=00 cr09=41 cr0c=00 cr0d=00 dw_bytes=0' \
+		>> "$WD24X_MOCK/proc/wd24adv/live"
+	;;
+esac
 exit 0
 EOF
 	cat > "$M/bin/rmmod" <<'EOF'
@@ -60,6 +66,7 @@ exit 0
 EOF
 	cat > "$M/tmp/wd24x-doom" <<'EOF'
 #!/bin/sh
+echo "WD24X-DOOM kd graphics"
 echo "INPUT=${WD24X_DOOM_INPUT-unset}" >> "$WD24X_MOCK/doom.args"
 echo "FB=${WD24X_DOOM_FB-unset}" >> "$WD24X_MOCK/doom.args"
 echo "PRESENT=${WD24X_DOOM_PRESENT-unset}" >> "$WD24X_MOCK/doom.args"
