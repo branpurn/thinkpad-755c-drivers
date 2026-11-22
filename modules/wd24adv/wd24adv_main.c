@@ -115,6 +115,7 @@
 #include "wd24adv_s6.h"
 #include "wd24adv_s6b.h"
 #include "wd24adv_s6d.h"
+#include "wd24adv_13h_map.h"
 #include "wd24adv_ioctl.h"
 #include "wd24adv_dac_entry.h"
 #include "wd24adv_cmap_cache.h"
@@ -2048,17 +2049,63 @@ static const struct vm_operations_struct s6d_vm_ops = {
 	.close = s6d_vma_close,
 };
 
+/*
+ * Close only. A fault here would be the banking handler, and SETWIN
+ * breaks chain-4. vm_iomap_memory installs every page, so a fault is
+ * not part of the path.
+ */
+static const struct vm_operations_struct s6d_13h_vm_ops = {
+	.close = s6d_vma_close,
+};
+
+/*
+ * Chain-4 window. Caller holds hw_lock. No SETWIN and no VGA write.
+ * The vma is the 64 KiB window. The frame is the first 64000 bytes.
+ */
+static int s6d_fb_mmap_13h(struct vm_area_struct *vma, unsigned long len)
+{
+	struct wd24_13h_map plan;
+	int err;
+
+	if (wd24_13h_map_plan((u32)vma->vm_pgoff, (u32)len, &plan))
+		return -EINVAL;
+	if (s6d_vma)
+		return -EBUSY;
+	vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP |
+		     VM_DONTCOPY);
+#ifndef WD24S1_QEMU_FAKE
+	vma->vm_page_prot = pgprot_framebuffer(vma->vm_page_prot,
+					       vma->vm_start, vma->vm_end,
+					       plan.phys);
+	err = vm_iomap_memory(vma, plan.phys, plan.map_len);
+#else
+	err = -ENODEV;
+#endif
+	if (err)
+		return err;
+	vma->vm_ops = &s6d_13h_vm_ops;
+	s6d_vma = vma;
+	/* 0 is this window, not a bank page. SETWIN did not run. */
+	s6d_st->mapped_base = 0;
+	return 0;
+}
+
 static int s6d_fb_mmap(struct fb_info *info, struct vm_area_struct *vma)
 {
 	unsigned long len = vma->vm_end - vma->vm_start;
+	int err;
 
 	if (vma->vm_pgoff || !len || len > WD24S6D_MMAP_LEN)
 		return -EINVAL;
 	hw_acq();
-	if (!s6d_st || !s6d_st->active || !s6d_armed || s6d_st->stopping ||
-	    s6d_13h) {
+	if (!s6d_st || !s6d_st->active || !s6d_armed || s6d_st->stopping) {
 		hw_rel();
 		return -ENODEV;
+	}
+	if (s6d_13h) {
+		err = s6d_fb_mmap_13h(vma, len);
+		hw_rel();
+		return err;
 	}
 	if (s6d_vma) {
 		hw_rel();
@@ -2338,7 +2385,12 @@ static int s6d_fb_release(struct fb_info *info, int user)
 		s6d_drop_maps();
 		s6d_busy = false;
 		hw_rel();
-		if (!READ_ONCE(wd24_exiting))
+		/*
+		 * 13h never called wd24s6b_begin. The end work reads and
+		 * writes the sequencer, graphics, and CRTC index ports.
+		 * Leave that to the trial / rmmod text restore.
+		 */
+		if (!s6d_13h && !READ_ONCE(wd24_exiting))
 			schedule_work(&s6d_release_work);
 		return 0;
 	}
@@ -3126,7 +3178,7 @@ static void s6d_arm(const struct wd24_mode *m)
 		 * std_13h already set chain-4 and left PR0A at the BIOS
 		 * value. Do not begin the dual window.
 		 */
-		pr_info("S6d: 320x200-8 present is the 64000-byte copy\n");
+		pr_info("S6d: 320x200-8; mmap A0000 64 KiB writes no register\n");
 	}
 	s6d_st->active = true;
 	s6d_st->stopping = false;

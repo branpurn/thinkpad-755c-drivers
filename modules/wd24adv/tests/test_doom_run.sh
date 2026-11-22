@@ -64,9 +64,21 @@ echo "INPUT=${WD24X_DOOM_INPUT-unset}" >> "$WD24X_MOCK/doom.args"
 echo "FB=${WD24X_DOOM_FB-unset}" >> "$WD24X_MOCK/doom.args"
 echo "PRESENT=${WD24X_DOOM_PRESENT-unset}" >> "$WD24X_MOCK/doom.args"
 echo "$*" >> "$WD24X_MOCK/doom.args"
-echo "WD24X-DOOM fb ioctl 320 200"
+if [ "${WD24X_DOOM_FB:-}" = "aperture" ]; then
+	echo "WD24X-DOOM fb mmap 320 200 aperture"
+	echo "WD24X-DOOM blit aperture 64000"
+	printf '%s\n' 's6d: armed 1 active 1 stopping 0 busy 1 fb_reg 1 node 0' \
+		'faults 0 switches 0 thrash 0 latched 0 mapped_base 0x0' \
+		'why -' \
+		'present frames 0 last 0 total 0 ns 0 copy_ns 0 mode 13h' \
+		> "$WD24X_MOCK/proc/wd24adv/s6d"
+else
+	echo "WD24X-DOOM fb ioctl 320 200"
+fi
 echo "WD24X-DOOM palette put 256"
-if [ "${WD24X_DOOM_PRESENT:-}" = "13h" ]; then
+if [ "${WD24X_DOOM_FB:-}" = "aperture" ]; then
+	echo "WD24X-DOOM present 13h"
+elif [ "${WD24X_DOOM_PRESENT:-}" = "13h" ]; then
 	echo "WD24X-DOOM present 13h"
 	echo "WD24X-DOOM blit direct 64000"
 	echo "WD24X-DOOM present switches 0"
@@ -205,6 +217,22 @@ grep -q "WD24X-DOOM-RUN restore mismatches 0" "$M/out" && ok || bad "td restore"
 grep -q "WD24X-DOOM-RUN wait" "$M/out" && bad "td waited" || ok
 grep -q "present 13h refused" "$M/out" && bad "td refused" || ok
 [ "$rc" = 0 ] && ok || bad "td rc"
+
+setup "$ROOT/modules/wd24adv/tests/.doom-map"
+rc=$(run "$ROOT/modules/wd24adv/tests/.doom-map" timedemo13hmap)
+M=$ROOT/modules/wd24adv/tests/.doom-map
+grep -q "WD24X-DOOM-RUN done" "$M/out" && ok || bad "map done"
+grep -q "mode=320x200-8" "$M/insmod.args" && ok || bad "map mode"
+grep -q "present_mode=13h" "$M/insmod.args" && ok || bad "map param"
+grep -q "FB=aperture" "$M/doom.args" && ok || bad "map fb"
+grep -q "PRESENT=13h" "$M/doom.args" && ok || bad "map present"
+grep -q "WD24X-DOOM fb mmap 320 200 aperture" "$M/out" && ok || bad "map line"
+grep -q "WD24X-DOOM blit aperture 64000" "$M/out" && ok || bad "map blit"
+grep -q "WD24X-DOOM blit direct 64000" "$M/out" && bad "map ioctl blit" || ok
+grep -q "timed 5026 gametics in 14978 realtics (11.744559 fps)" "$M/out" && ok || bad "map timed"
+grep -q "WD24X-DOOM-RUN restore mismatches 0" "$M/out" && ok || bad "map restore"
+grep -q "WD24X-DOOM-RUN wait" "$M/out" && bad "map waited" || ok
+[ "$rc" = 0 ] && ok || bad "map rc"
 
 echo "test_doom_run: $pass passed, $fail failed"
 [ "$fail" = 0 ]

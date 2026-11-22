@@ -105,10 +105,43 @@ divide helper `-Os` did not link. Do not pass `-fno-tree-vectorize`.
 which keeps the flags that built `f95ae448`. `omitfp` adds
 `-fomit-frame-pointer`. `direct` also points the renderer at
 `DG_ScreenBuffer` and skips the 320x200 row copy when the scale is 1.
-`unroll` also rewrites `R_DrawColumn` to four pixels per trip, same
-pixels as the do/while. `all` is those three. Mode 13h still refuses
-mmap, so this does not draw into the aperture. The present ioctl
-remains one 64000-byte copy.
+`unroll` rewrites `R_DrawColumn` and `R_DrawSpan` to four pixels per
+trip, same pixels as the do/while. `all` is those three.
+`WD24X_DOOM_DETAIL=low` sets `detailLevel` to 1. That is not the
+default and it is not part of `FAST=all`: it draws each column twice
+as wide and changes the picture. High detail stays `detailLevel` 0.
+
+A span microbench on the same qemu `-cpu 486` binary, 2000 spans
+checked equal first: base 790 us, unroll 607 us. That is the span
+loop only.
+
+## Other engines
+
+Stay on doomgeneric (linuxdoom 1.10 C, GPL-2). Do not swap the engine.
+
+| engine | license | fit on this 486 |
+| --- | --- | --- |
+| Chocolate Doom | GPL-2 | SDL, vanilla C columns. Same inner loop class as ours, plus a library we do not have. |
+| Crispy Doom | GPL-2+ | Chocolate plus higher resolution. Not a 320x200 speed port. |
+| PrBoom+ | GPL-2 | SDL, C++. Aimed at limits and GL, not a 36 MB machine with no SDL. |
+| FastDoom | GPL-2 (GPLv2; DoomWiki says GPLv2+) | DOS, 386/486, no SDL. The fast paths that change pixels (potato, flat surfaces, flat sky) are not demo-exact. Its column and span unrolls are the same id loops. |
+| DOS Doom asm | id GPL source, the asm was the DOS build; linuxdoom-1.10 shipped the C loops | `FixedMul` in our `-O2 -march=i486` build is already `imull` + `shrdl`. A hand column was not faster than that C once the frame pointer was omitted. |
+
+Nothing here is copied from those trees. The unroll is the original
+do/while written four times.
+
+`WD24X_DOOM_FB=aperture` with `WD24X_DOOM_PRESENT=13h` maps the
+chain-4 window and draws into it. The map is `0xA0000` for 65536
+bytes. The frame is the first 64000. The other 1536 bytes are inside
+`A0000-AFFFF` and are not the frame. The map writes no VGA register
+and does not call SETWIN. A fault handler is not installed, so a
+missed page cannot reprogram the window. Closing the mapping does not
+run the dual-window end, which would read and write the index ports.
+Text restore stays on the trial and rmmod path. `FAST=all` does not
+turn this on. `sh docs/s6d-doom-run.sh timedemo13hmap` is the run.
+Each column store is an uncached write. That can be slower than the
+ioctl copy. The morning batch measures it. It does not replace the
+ioctl timedemo.
 
 ## Render bucket
 

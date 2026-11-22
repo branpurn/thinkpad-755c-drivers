@@ -113,8 +113,21 @@ passes `-nosound -nogui`.
 On module `2436a39a` with `wd24x-doom` `f95ae448`, 60 frames of that
 path took 1735 ms to render, 1005 ms to present, and 16 ms of
 palette: 28.92 ms, 16.75 ms, and 0.27 ms per frame, 45.93 ms together,
-about 21.8 frames/s. The letterbox present on `ead705ed` was 427.18 ms
-per frame.
+about 21.8 frames/s. The letterbox path on `ead705ed` with
+`wd24x-doom` `f4470178` was 78.85 ms render, 427.18 ms present, 0.28 ms
+palette, about 1.97 frames/s. The full `timedemo13h` on the same
+`2436a39a` / `f95ae448` pair printed `timed 5026 gametics in 14978
+realtics (11.744559 fps)`. Kernel present on that run was 11.05 ms
+per frame. The render is the remaining cost.
+
+`timedemo13hmap` is the same mode with `WD24X_DOOM_FB=aperture`.
+Doom maps `0xA0000` for 65536 bytes and draws the 64000-byte frame
+there. The map writes no VGA register and does not call SETWIN. The
+last 1536 bytes are inside the window and are not the frame. Pass
+lines are `WD24X-DOOM fb mmap 320 200 aperture`, `WD24X-DOOM blit
+aperture 64000`, `faults 0 switches 0`, `mode 13h`, and the same
+gametics line and `restore mismatches 0`. This is a separate
+measurement from the ioctl copy. It is not `WD24X_DOOM_FAST=all`.
 
 `demo1` is the older letterbox gate (`present switches 5`). Run
 `demo2` and `demo3` only after a letterbox `WD24X-DOOM-RUN done`.

@@ -12,6 +12,10 @@ int main(void)
 	T(!wd24x_doom_fb_opt_in("1"), "fb one");
 	T(!wd24x_doom_fb_opt_in("MMAP"), "fb case");
 	T(wd24x_doom_fb_opt_in("mmap"), "fb mmap");
+	T(wd24x_doom_fb_opt_in("aperture"), "fb aperture");
+	T(wd24x_doom_fb_is_aperture("aperture"), "aperture name");
+	T(!wd24x_doom_fb_is_aperture("mmap"), "mmap is not aperture");
+	T(!wd24x_doom_fb_is_ioctl("aperture"), "aperture is not ioctl");
 	T(wd24x_doom_fb_is_ioctl("ioctl"), "fb ioctl");
 	T(!wd24x_doom_fb_is_ioctl("mmap"), "ioctl is not mmap");
 	T(!wd24x_doom_fb_is_mmap("ioctl"), "mmap is not ioctl");
