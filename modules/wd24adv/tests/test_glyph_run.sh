@@ -114,20 +114,31 @@ grep -q "^RM=" "$M/out" && ok || bad "rmmod echoed"
 [ -f "$M/tmp/wd24x-glyph.out" ] && ok || bad "stdout kept"
 [ ! -e "$M/tmp/.X11-unix/X1" ] && ok || bad "socket left"
 
+# The glyph-hash case needs modules/wd24adv/wd24adv.ko whose sha256 is
+# the baseline 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36.
+# That file is not in git. Without it, this case is skipped.
 setup "$ROOT/modules/wd24adv/tests/.glyph-mock-hash"
 M=$ROOT/modules/wd24adv/tests/.glyph-mock-hash
-cp "$ROOT/modules/wd24adv/wd24adv.ko" "$M/tmp/wd24adv-pr14.ko"
-echo nope > "$M/tmp/wd24x-glyph"
-chmod 755 "$M/tmp/wd24x-glyph"
-cat > "$M/bin/sha256sum" <<'EOF'
+KO=$ROOT/modules/wd24adv/wd24adv.ko
+PIN=7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36
+if [ ! -f "$KO" ]; then
+	echo "test_glyph_run: skip glyph-hash fixture (no wd24adv.ko)"
+elif [ "$(sha256sum "$KO" | awk '{print $1}')" != "$PIN" ]; then
+	echo "test_glyph_run: skip glyph-hash fixture (wd24adv.ko is not the baseline)"
+else
+	cp "$KO" "$M/tmp/wd24adv-pr14.ko"
+	echo nope > "$M/tmp/wd24x-glyph"
+	chmod 755 "$M/tmp/wd24x-glyph"
+	cat > "$M/bin/sha256sum" <<'EOF'
 #!/bin/sh
 exec /usr/bin/sha256sum "$@"
 EOF
-chmod 755 "$M/bin/sha256sum"
-rc=$(run "$M")
-grep -q "stop glyph hash" "$M/out" && ok || bad "bad hash"
-[ ! -f "$M/insmod.args" ] && ok || bad "hash still insmod"
-[ "$rc" != 0 ] && ok || bad "hash rc"
+	chmod 755 "$M/bin/sha256sum"
+	rc=$(run "$M")
+	grep -q "stop glyph hash" "$M/out" && ok || bad "bad hash"
+	[ ! -f "$M/insmod.args" ] && ok || bad "hash still insmod"
+	[ "$rc" != 0 ] && ok || bad "hash rc"
+fi
 
 setup "$ROOT/modules/wd24adv/tests/.glyph-mock-fb"
 printf '%s\n' '0 wd24' > "$ROOT/modules/wd24adv/tests/.glyph-mock-fb/proc/fb"
