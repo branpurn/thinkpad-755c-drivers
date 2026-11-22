@@ -64,9 +64,14 @@ echo "INPUT=${WD24X_DOOM_INPUT-unset}" >> "$WD24X_MOCK/doom.args"
 echo "FB=${WD24X_DOOM_FB-unset}" >> "$WD24X_MOCK/doom.args"
 echo "PRESENT=${WD24X_DOOM_PRESENT-unset}" >> "$WD24X_MOCK/doom.args"
 echo "$*" >> "$WD24X_MOCK/doom.args"
-if [ "${WD24X_DOOM_FB:-}" = "aperture" ]; then
-	echo "WD24X-DOOM fb mmap 320 200 aperture"
-	echo "WD24X-DOOM blit aperture 64000"
+if [ "${WD24X_DOOM_FB:-}" = "aperture" ] || [ "${WD24X_DOOM_FB:-}" = "aperturecopy" ]; then
+	if [ "${WD24X_DOOM_FB:-}" = "aperturecopy" ]; then
+		echo "WD24X-DOOM fb mmap 320 200 aperturecopy"
+		echo "WD24X-DOOM blit aperturecopy 64000"
+	else
+		echo "WD24X-DOOM fb mmap 320 200 aperture"
+		echo "WD24X-DOOM blit aperture 64000"
+	fi
 	printf '%s\n' 's6d: armed 1 active 1 stopping 0 busy 1 fb_reg 1 node 0' \
 		'faults 0 switches 0 thrash 0 latched 0 mapped_base 0x0' \
 		'why -' \
@@ -76,7 +81,7 @@ else
 	echo "WD24X-DOOM fb ioctl 320 200"
 fi
 echo "WD24X-DOOM palette put 256"
-if [ "${WD24X_DOOM_FB:-}" = "aperture" ]; then
+if [ "${WD24X_DOOM_FB:-}" = "aperture" ] || [ "${WD24X_DOOM_FB:-}" = "aperturecopy" ]; then
 	echo "WD24X-DOOM present 13h"
 elif [ "${WD24X_DOOM_PRESENT:-}" = "13h" ]; then
 	echo "WD24X-DOOM present 13h"
@@ -233,6 +238,19 @@ grep -q "timed 5026 gametics in 14978 realtics (11.744559 fps)" "$M/out" && ok |
 grep -q "WD24X-DOOM-RUN restore mismatches 0" "$M/out" && ok || bad "map restore"
 grep -q "WD24X-DOOM-RUN wait" "$M/out" && bad "map waited" || ok
 [ "$rc" = 0 ] && ok || bad "map rc"
+
+setup "$ROOT/modules/wd24adv/tests/.doom-copy"
+rc=$(run "$ROOT/modules/wd24adv/tests/.doom-copy" timedemo13hcopy)
+M=$ROOT/modules/wd24adv/tests/.doom-copy
+grep -q "WD24X-DOOM-RUN done" "$M/out" && ok || bad "copy done"
+grep -q "FB=aperturecopy" "$M/doom.args" && ok || bad "copy fb"
+grep -q "WD24X-DOOM fb mmap 320 200 aperturecopy" "$M/out" && ok || bad "copy line"
+grep -q "WD24X-DOOM blit aperturecopy 64000" "$M/out" && ok || bad "copy blit"
+grep -q "WD24X-DOOM blit aperture 64000" "$M/out" && bad "copy direct" || ok
+grep -q "WD24X-DOOM blit direct 64000" "$M/out" && bad "copy ioctl" || ok
+grep -q "timed 5026 gametics in 14978 realtics (11.744559 fps)" "$M/out" && ok || bad "copy timed"
+grep -q "WD24X-DOOM-RUN restore mismatches 0" "$M/out" && ok || bad "copy restore"
+[ "$rc" = 0 ] && ok || bad "copy rc"
 
 echo "test_doom_run: $pass passed, $fail failed"
 [ "$fail" = 0 ]

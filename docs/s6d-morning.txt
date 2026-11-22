@@ -20,8 +20,8 @@ WD24X_DOOM_FAST=all
 Leave `WD24X_DOOM_DETAIL` unset. `low` changes the picture. Pin
 `wd24x-doom` before the first run. `FAST=all` is
 `-fomit-frame-pointer`, the direct 320x200 buffer, and the unrolled
-column and span. It does not turn on the aperture. One binary runs
-both Doom steps.
+column and span. It does not turn on either aperture path. One
+binary runs all three Doom steps.
 
 Order, one script at a time, each with its own insmod and rmmod.
 Do not start the next until the previous done line is on the serial
@@ -29,8 +29,8 @@ log.
 
 1. `sh /tmp/s6d-doom-run.sh timedemo13h`
    Script `docs/s6d-doom-run.sh`
-   sha256 `51192839c1b279bb6e3054d87e28007df2e54a09d100f70a0669c5fdc45990e0`
-   12360 bytes.
+   sha256 `f545a5ed864c76edd1019c3a25118dde9504fff367fe791c832df2de14afa0be`
+   13460 bytes.
    Pass: Doom's `timed N gametics in N realtics (N fps)`,
    `WD24X-DOOM-FPS gametics N realtics N fps_x100 N`,
    `WD24X-DOOM blit direct 64000`, `present switches 0`,
@@ -53,7 +53,16 @@ log.
    `WD24X-DOOM-RUN done`. A slower gametics line than step 1 is
    still a pass. Each column store is an uncached write.
 
-3. `sh /tmp/s6d-desktop-run.sh`
+3. `sh /tmp/s6d-doom-run.sh timedemo13hcopy`
+   Same script and the same Doom binary. Doom sets
+   `WD24X_DOOM_FB=aperturecopy`. The renderer stays in the cached
+   malloc. Each frame is one 64000-byte dword copy into the mapped
+   window. No present ioctl. Pass: `WD24X-DOOM fb mmap 320 200
+   aperturecopy`, `WD24X-DOOM blit aperturecopy 64000`,
+   `faults 0 switches 0`, `mode 13h`, the gametics line,
+   `restore mismatches 0`, `WD24X-DOOM-RUN done`.
+
+4. `sh /tmp/s6d-desktop-run.sh`
    sha256 `553ac3e88db8405369dd149680ce8e8a207dded93ebce44a40801cd01bca8742`
    10394 bytes.
    While X holds `/dev/fb0`: `busy 1` and
@@ -65,24 +74,24 @@ log.
    `WD24X-DESKTOP-RUN cmap match 256`,
    `WD24X-DESKTOP-RUN done`.
 
-4. `sh /tmp/s6d-fbcon-run.sh`
+5. `sh /tmp/s6d-fbcon-run.sh`
    sha256 `41c73a9ce9b1d46cf3c9022d4469cbe529304b6c66e1bd4e32b01e7e4a1b7312`
    3487 bytes.
    Pass: `WD24X-FBCON-RUN wrote tty0`, `WD24X-FBCON-RUN done`.
 
-5. `sh /tmp/s6d-accel-run.sh`
+6. `sh /tmp/s6d-accel-run.sh`
    sha256 `20f6734320a459ca14f2cee899df388ebc9ff6973990b6526829620c229c9fef`
    3439 bytes.
    Pass: `accel 1 gate 1 match 1024`, `WD24X-ACCEL-RUN match 1024`,
    `WD24X-ACCEL-RUN done`.
 
-6. `sh /tmp/s6d-scroll-run.sh`
+7. `sh /tmp/s6d-scroll-run.sh`
    sha256 `cf9c60c7131d2c324b777903db13ec1bc04c756caecd8231dda114c461b85a71`
    3657 bytes.
    Pass: `accel 1 gate 1 match 1024`, `thrash 0 latched 0`,
    `WD24X-SCROLL-RUN wrote tty0`, `WD24X-SCROLL-RUN done`.
 
-7. `sh /tmp/s6d-cursor-run.sh`
+8. `sh /tmp/s6d-cursor-run.sh`
    sha256 `97b2f5d5ce82e89f07681fc08d02f6ddf1396020c65d2643bfbcd661b22f3f05`
    3489 bytes.
    Pass: `cursor 1 show 1 regs 8 vram 256 restored 1`,

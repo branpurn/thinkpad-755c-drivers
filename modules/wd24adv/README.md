@@ -33,10 +33,12 @@ Doom), direct mapping and, later, page flipping on the **internal panel only**.
 `docs/s6d-desktop-run.sh` is the startx stand-in (Xfbdev, palette
 check, trial restore). `docs/s6d-doom-run.sh timedemo13h` is the Doom run: `present_mode=13h`,
 one 64000-byte copy. `timedemo13hmap` maps `0xA0000` and draws that
-frame there, with no present ioctl. Measured on module `2436a39a` with `wd24x-doom`
+frame there, with no present ioctl. `timedemo13hcopy` keeps the
+render in RAM and copies the 64000 bytes into that map as dwords. Measured on module `2436a39a` with `wd24x-doom`
 `f95ae448`: 28.92 ms render, 16.75 ms present, 0.27 ms palette,
 45.93 ms/frame, about 21.8 frames/s. The same pair's full timedemo
-was `timed 5026 gametics in 14978 realtics (11.744559 fps)`. Letterbox
+was `timed 5026 gametics in 14978 realtics (11.744559 fps)`. Kernel
+present on that run was 11.05 ms per frame. Letterbox
 on `ead705ed` with `f4470178` was about 1.97 frames/s (present 427.18 ms).
 Settings are `screenblocks` 10,
 `detaillevel` 0, `-nosound`. The Win98 bar is `doom -timedemo demo1`

@@ -14,6 +14,9 @@ int main(void)
 	T(wd24x_doom_fb_opt_in("mmap"), "fb mmap");
 	T(wd24x_doom_fb_opt_in("aperture"), "fb aperture");
 	T(wd24x_doom_fb_is_aperture("aperture"), "aperture name");
+	T(wd24x_doom_fb_opt_in("aperturecopy"), "fb aperturecopy");
+	T(wd24x_doom_fb_is_aperture_copy("aperturecopy"), "aperturecopy name");
+	T(!wd24x_doom_fb_is_aperture_copy("aperture"), "aperture is not copy");
 	T(!wd24x_doom_fb_is_aperture("mmap"), "mmap is not aperture");
 	T(!wd24x_doom_fb_is_ioctl("aperture"), "aperture is not ioctl");
 	T(wd24x_doom_fb_is_ioctl("ioctl"), "fb ioctl");

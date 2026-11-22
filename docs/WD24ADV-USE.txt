@@ -129,6 +129,13 @@ aperture 64000`, `faults 0 switches 0`, `mode 13h`, and the same
 gametics line and `restore mismatches 0`. This is a separate
 measurement from the ioctl copy. It is not `WD24X_DOOM_FAST=all`.
 
+`timedemo13hcopy` is `WD24X_DOOM_FB=aperturecopy`. The renderer stays
+in the cached malloc. Each frame is one 64000-byte dword copy into
+the mapped window, and there is no present ioctl. Pass lines are
+`WD24X-DOOM fb mmap 320 200 aperturecopy` and `WD24X-DOOM blit
+aperturecopy 64000`, plus `faults 0 switches 0` and the same restore
+line.
+
 `demo1` is the older letterbox gate (`present switches 5`). Run
 `demo2` and `demo3` only after a letterbox `WD24X-DOOM-RUN done`.
 

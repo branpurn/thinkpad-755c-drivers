@@ -10,6 +10,7 @@
 #   sh s6d-doom-run.sh measure13h
 #   sh s6d-doom-run.sh timedemo13h
 #   sh s6d-doom-run.sh timedemo13hmap
+#   sh s6d-doom-run.sh timedemo13hcopy
 # demoN is -timedemo with no tty input. eyes opts into WD24X_DOOM_INPUT=tty
 # and is the keyboard test, not the unattended run. measure is demo1 for
 # 60 frames with WD24X_DOOM_TIME=30, trial 180, so the clock cannot
@@ -221,7 +222,7 @@ have_line() {
 }
 
 case "$mode" in
-demo1|demo2|demo3|eyes|timedemo13h|timedemo13hmap) ;;
+demo1|demo2|demo3|eyes|timedemo13h|timedemo13hmap|timedemo13hcopy) ;;
 measure|measure13h) trial=180 ;;
 *) stop "mode" ;;
 esac
@@ -277,7 +278,7 @@ gfx=640x480-8
 present=letterbox
 extra=
 if [ "$mode" = "measure13h" ] || [ "$mode" = "timedemo13h" ] ||
-   [ "$mode" = "timedemo13hmap" ]; then
+   [ "$mode" = "timedemo13hmap" ] || [ "$mode" = "timedemo13hcopy" ]; then
 	gfx=320x200-8
 	present=13h
 	extra=present_mode=13h
@@ -311,6 +312,11 @@ elif [ "$mode" = "timedemo13hmap" ]; then
 		WD24X_DOOM_INPUT= WD24X_DOOM_FRAMES= \
 		"$BIN" -iwad "$WAD" -timedemo demo1 -nosound -nogui \
 		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
+elif [ "$mode" = "timedemo13hcopy" ]; then
+	WD24X_DOOM_FB=aperturecopy WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=$present \
+		WD24X_DOOM_INPUT= WD24X_DOOM_FRAMES= \
+		"$BIN" -iwad "$WAD" -timedemo demo1 -nosound -nogui \
+		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
 else
 	WD24X_DOOM_FB=ioctl WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=$present \
 		WD24X_DOOM_INPUT= WD24X_DOOM_FRAMES= \
@@ -330,6 +336,28 @@ if [ "$mode" = "timedemo13hmap" ]; then
 	fi
 	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM blit direct 64000"; then
 		fail "ioctl blit"
+	fi
+	s6d=$(cat "$P/proc/wd24adv/s6d" 2>/dev/null) || fail "s6d"
+	case "$s6d" in
+	*"faults 0 switches 0"*) ;;
+	*) fail "aperture faults" ;;
+	esac
+	case "$s6d" in
+	*"mode 13h"*) ;;
+	*) fail "aperture mode" ;;
+	esac
+elif [ "$mode" = "timedemo13hcopy" ]; then
+	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM fb mmap 320 200 aperturecopy"; then
+		fail "mmap"
+	fi
+	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM blit aperturecopy 64000"; then
+		fail "blit"
+	fi
+	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM blit direct 64000"; then
+		fail "ioctl blit"
+	fi
+	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM blit aperture 64000"; then
+		fail "direct blit"
 	fi
 	s6d=$(cat "$P/proc/wd24adv/s6d" 2>/dev/null) || fail "s6d"
 	case "$s6d" in
@@ -364,7 +392,7 @@ if [ "$mode" = "measure13h" ] || [ "$mode" = "timedemo13h" ]; then
 	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM blit letterbox dword"; then
 		fail "letterbox"
 	fi
-elif [ "$mode" != "timedemo13hmap" ]; then
+elif [ "$mode" != "timedemo13hmap" ] && [ "$mode" != "timedemo13hcopy" ]; then
 	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM present switches 5"; then
 		fail "switches"
 	fi
@@ -396,7 +424,8 @@ elif [ "$mode" = "measure" ] || [ "$mode" = "measure13h" ]; then
 		echo "WD24X-DOOM-RUN measure frames 60"
 	fi
 	finish_rmmod
-elif [ "$mode" = "timedemo13h" ] || [ "$mode" = "timedemo13hmap" ]; then
+elif [ "$mode" = "timedemo13h" ] || [ "$mode" = "timedemo13hmap" ] ||
+     [ "$mode" = "timedemo13hcopy" ]; then
 	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM input tty"; then
 		fail "input"
 	fi

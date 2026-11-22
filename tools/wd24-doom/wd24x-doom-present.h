@@ -277,4 +277,18 @@ static inline void wd24x_doom_present(int mode, const uint8_t *src,
 	}
 }
 
+/* 64000 index bytes as aligned 32-bit stores. The tail past n is not written. */
+static inline void wd24x_doom_copy_dwords(uint8_t *dst, const uint8_t *src,
+					  unsigned int n)
+{
+	unsigned int i;
+
+	for (i = 0; i + 3u < n; i += 4u) {
+		uint32_t w;
+
+		memcpy(&w, src + i, 4);
+		memcpy(dst + i, &w, 4);
+	}
+}
+
 #endif

@@ -6,8 +6,10 @@
  * mmap requires 640x480x8. ioctl with WD24X_DOOM_PRESENT=13h asks for
  * 320x200x8 and falls back to letterbox if that is refused on a 640x480
  * frame. aperture with present 13h maps the 64 KiB chain-4 window at
- * 0xA0000 and draws the 64000-byte frame there. That map writes no VGA
- * register. WD24X_DOOM_PALETTE=put then sends PLAYPAL through FBIOPUTCMAP.
+ * 0xA0000 and draws the 64000-byte frame there. aperturecopy maps the
+ * same window and copies one finished frame into it as dwords. Neither
+ * map writes a VGA register. WD24X_DOOM_PALETTE=put then sends PLAYPAL
+ * through FBIOPUTCMAP.
  * Any other palette value does not. WD24X_DOOM_INPUT=tty owns the tty
  * termios and puts the saved struct back. KD mode is never changed.
  * The default path opens neither device.
@@ -49,6 +51,7 @@ static uint8_t *fb;
 static int fb_fd = -1;
 static int fb_ioctl;
 static int fb_aperture;
+static int fb_apcopy;
 static int use_13h;
 static int fb_start_640;
 static int fb_put_13h;
@@ -143,10 +146,11 @@ static void report(void)
 		return;
 	reported = 1;
 	wd24x_tty_own_end(&tty_own);
-	if (fb && fb_aperture) {
+	if (fb && (fb_aperture || fb_apcopy)) {
 		munmap(fb, WD24X_DOOM_WIN);
+		if (fb_aperture)
+			DG_ScreenBuffer = NULL;
 		fb = NULL;
-		DG_ScreenBuffer = NULL;
 	}
 	if (fb_fd >= 0) {
 		close(fb_fd);
@@ -276,9 +280,11 @@ static int settle_13h(void)
 	return after;
 }
 
-/* Map the 64 KiB chain-4 window and draw the 64000-byte frame there.
- * The map writes no VGA register. Letterbox is not a fallback. */
-static int open_aperture(void)
+/* Map the 64 KiB chain-4 window. The map writes no VGA register.
+ * own_screen: the renderer stores into the window.
+ * Otherwise the malloc stays the frame and DrawFrame copies it.
+ * Letterbox is not a fallback. */
+static int open_aperture(int own_screen)
 {
 	void *map;
 	int after;
@@ -302,11 +308,15 @@ static int open_aperture(void)
 		fb_fd = -1;
 		return -1;
 	}
-	free(DG_ScreenBuffer);
-	DG_ScreenBuffer = map;
 	fb = map;
 	use_13h = 1;
-	printf("WD24X-DOOM fb mmap 320 200 aperture\n");
+	if (own_screen) {
+		free(DG_ScreenBuffer);
+		DG_ScreenBuffer = map;
+		printf("WD24X-DOOM fb mmap 320 200 aperture\n");
+	} else {
+		printf("WD24X-DOOM fb mmap 320 200 aperturecopy\n");
+	}
 	return 0;
 }
 
@@ -396,12 +406,15 @@ void DG_Init(void)
 	}
 	fb_ioctl = wd24x_doom_fb_is_ioctl(getenv("WD24X_DOOM_FB"));
 	fb_aperture = wd24x_doom_fb_is_aperture(getenv("WD24X_DOOM_FB"));
-	if (present_mode == WD24X_DOOM_DIRECT && !fb_ioctl && !fb_aperture)
+	fb_apcopy = wd24x_doom_fb_is_aperture_copy(getenv("WD24X_DOOM_FB"));
+	if (present_mode == WD24X_DOOM_DIRECT && !fb_ioctl && !fb_aperture &&
+	    !fb_apcopy)
 		fall_back_letterbox();
 	if (!wd24x_doom_fb_opt_in(getenv("WD24X_DOOM_FB")))
 		printf("WD24X-DOOM display file\n");
-	else if (fb_aperture) {
-		if (present_mode != WD24X_DOOM_DIRECT || open_aperture() != 0)
+	else if (fb_aperture || fb_apcopy) {
+		if (present_mode != WD24X_DOOM_DIRECT ||
+		    open_aperture(fb_aperture) != 0)
 			exit(1);
 	} else if (fb_ioctl) {
 		int after;
@@ -474,7 +487,11 @@ void DG_DrawFrame(void)
 		put_playpal();
 	if (doom_time.every)
 		t_pal = mono_ns();
-	if (fb_aperture) {
+	if (fb_apcopy) {
+		wd24x_doom_copy_dwords(fb, idx, WD24X_DOOM_SRC_W * WD24X_DOOM_SRC_H);
+		if (frames == 1)
+			printf("WD24X-DOOM blit aperturecopy 64000\n");
+	} else if (fb_aperture) {
 		if (frames == 1)
 			printf("WD24X-DOOM blit aperture 64000\n");
 	} else if (fb_ioctl && use_13h) {

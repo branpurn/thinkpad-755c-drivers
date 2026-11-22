@@ -138,6 +138,18 @@ int main(void)
 	T(wd24x_doom_13h_pick(1, 1, 0) == WD24X_DOOM_LETTER, "ioctl refused on 640");
 	T(wd24x_doom_13h_pick(1, 1, 1) == WD24X_DOOM_DIRECT, "put then direct");
 	T(wd24x_doom_13h_pick(0, 0, 0) == -1, "neither geometry");
+	{
+		uint8_t src[64000];
+		uint8_t dst[64004];
+		unsigned int i;
+
+		for (i = 0; i < 64000; i++)
+			src[i] = (uint8_t)(i * 3);
+		memset(dst, 0xa5, sizeof dst);
+		wd24x_doom_copy_dwords(dst, src, 64000);
+		T(memcmp(dst, src, 64000) == 0, "dword copy");
+		T(dst[64000] == 0xa5 && dst[64003] == 0xa5, "copy stops at 64000");
+	}
 
 	{
 		struct wd24x_doom_time tm;

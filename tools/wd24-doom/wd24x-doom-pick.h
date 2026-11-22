@@ -25,11 +25,18 @@ static inline int wd24x_doom_fb_is_aperture(const char *v)
 	return v && strcmp(v, "aperture") == 0;
 }
 
-/* mmap, ioctl, or the 13h aperture. Anything else stays private. */
+/* Render in RAM, then one dword copy into the 13h window. */
+static inline int wd24x_doom_fb_is_aperture_copy(const char *v)
+{
+	return v && strcmp(v, "aperturecopy") == 0;
+}
+
+/* mmap, ioctl, or a 13h window. Anything else stays private. */
 static inline int wd24x_doom_fb_opt_in(const char *v)
 {
 	return wd24x_doom_fb_is_mmap(v) || wd24x_doom_fb_is_ioctl(v) ||
-	       wd24x_doom_fb_is_aperture(v);
+	       wd24x_doom_fb_is_aperture(v) ||
+	       wd24x_doom_fb_is_aperture_copy(v);
 }
 
 static inline int wd24x_doom_input_opt_in(const char *v)
