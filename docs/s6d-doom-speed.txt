@@ -81,6 +81,35 @@ instead. `sh docs/s6d-doom-run.sh timedemo13h` is the full
 `-timedemo demo1`. The Win98 comparison is `doom -timedemo demo1`
 on the same wad with `screenblocks` 10, `detaillevel` 0, and sound off.
 
+## Offline i486 timings
+
+`qemu-i386-static -cpu 486` ran a freestanding `-march=i486 -mtune=i486`
+binary. That CPU model rejects later instructions. It does not charge
+486 clocks, so these are relative costs of the i486 instruction stream,
+not a 755C result. The same column pixels were checked before the timers.
+
+| build | FixedMul C | column loop | 40 times 64000-byte copy |
+| --- | --- | --- | --- |
+| `-O2`, frame pointer kept | 1009 us | 4172 us | 1045 us |
+| `-O2 -fomit-frame-pointer` | 682 us | 3443 us | 1040 us |
+| same, 4-wide column unroll |  | 2351 us |  |
+| same, `-fno-tree-vectorize` |  | 3573 us | 3690 us |
+
+`-O2 -march=i486` already lowers `FixedMul`'s 64-bit multiply to
+`imull` plus `shrdl`, which is the DOS inner product. A hand `imul`
+was not faster once the frame pointer was gone (715 us against 682).
+`-Os` is not in the table: that freestanding bench needed a 64-bit
+divide helper `-Os` did not link. Do not pass `-fno-tree-vectorize`.
+
+`WD24X_DOOM_FAST` on `tools/wd24-doom/build.sh` is empty by default,
+which keeps the flags that built `f95ae448`. `omitfp` adds
+`-fomit-frame-pointer`. `direct` also points the renderer at
+`DG_ScreenBuffer` and skips the 320x200 row copy when the scale is 1.
+`unroll` also rewrites `R_DrawColumn` to four pixels per trip, same
+pixels as the do/while. `all` is those three. Mode 13h still refuses
+mmap, so this does not draw into the aperture. The present ioctl
+remains one 64000-byte copy.
+
 ## Render bucket
 
 There is no `default.cfg`. The script refuses to run if one is present,

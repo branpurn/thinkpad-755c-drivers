@@ -13,12 +13,40 @@ if [ "$got" != "$PIN" ]; then
 	echo "doomgeneric pin $PIN got $got"
 	exit 1
 fi
-CFLAGS="-static -march=i486 -mtune=i486 -O2 -DNDEBUG -std=gnu11 -Wall -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable -Wno-missing-field-initializers -Wno-format -Wno-unused-but-set-variable -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE -DCMAP256 -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 -I$SRC -I$ROOT"
+# WD24X_DOOM_FAST empty keeps this command line. omitfp, direct, unroll,
+# or all add the measured i486 opts. direct and unroll rewrite copies
+# of i_video.c and r_draw.c; the fetched pin is not edited.
+FAST=${WD24X_DOOM_FAST:-}
+case "$FAST" in
+''|omitfp|direct|unroll|all) ;;
+*) echo "WD24X_DOOM_FAST must be empty, omitfp, direct, unroll, or all"; exit 1 ;;
+esac
+EXTRA=
+DRAWDEF=
+case "$FAST" in
+omitfp|direct|unroll|all) EXTRA="-fomit-frame-pointer" ;;
+esac
+case "$FAST" in
+direct|all) DRAWDEF="-DWD24X_DRAW_DIRECT" ;;
+esac
+FASTSRC=
+case "$FAST" in
+direct|unroll|all)
+	FASTSRC=/tmp/wd24-doom-fastsrc
+	python3 "$ROOT/fast-src.py" "$SRC" "$FASTSRC" "$FAST"
+	;;
+esac
+CFLAGS="-static -march=i486 -mtune=i486 -O2 -DNDEBUG $EXTRA -std=gnu11 -Wall -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable -Wno-missing-field-initializers -Wno-format -Wno-unused-but-set-variable -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE -DCMAP256 -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 $DRAWDEF -I$SRC -I$ROOT"
+echo "WD24X-DOOM-BUILD fast ${FAST:-off}"
 objs=
 for c in dummy am_map doomdef doomstat dstrings d_event d_items d_iwad d_loop d_main d_mode d_net f_finale f_wipe g_game hu_lib hu_stuff info i_cdmus i_endoom i_joystick i_scale i_sound i_system i_timer memio m_argv m_bbox m_cheat m_config m_controls m_fixed m_menu m_misc m_random p_ceilng p_doors p_enemy p_floor p_inter p_lights p_map p_maputl p_mobj p_plats p_pspr p_saveg p_setup p_sight p_spec p_switch p_telept p_tick p_user r_bsp r_data r_draw r_main r_plane r_segs r_sky r_things sha1 sounds statdump st_lib st_stuff s_sound tables v_video wi_stuff w_checksum w_file w_main w_wad z_zone w_file_stdc i_input i_video doomgeneric; do
 	o=/tmp/wd24-doom-obj/$c.o
+	srcf=$SRC/$c.c
+	if [ -n "$FASTSRC" ] && [ -f "$FASTSRC/$c.c" ]; then
+		srcf=$FASTSRC/$c.c
+	fi
 	mkdir -p /tmp/wd24-doom-obj
-	$CC $CFLAGS -c "$SRC/$c.c" -o "$o"
+	$CC $CFLAGS -c "$srcf" -o "$o"
 	objs="$objs $o"
 done
 $CC $CFLAGS -Werror -c "$ROOT/doomgeneric_wd24.c" -o /tmp/wd24-doom-obj/doomgeneric_wd24.o
