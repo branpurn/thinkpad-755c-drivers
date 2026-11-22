@@ -125,6 +125,8 @@ int main(void)
 	T(wd24x_keys_byte(&keys, 'w', &dk) && dk == 'W', "letter");
 	T(wd24x_keys_byte(&keys, '\r', &dk) && dk == WD24X_KEY_ENTER, "enter");
 	T(fnv(src, sizeof src) != 0, "src nonzero");
+	T(wd24x_doom_index_hashed(0) == 0, "sum off skips the index hash");
+	T(wd24x_doom_index_hashed(1) == 1, "sum on keeps the index hash");
 
 	{
 		struct wd24x_doom_time tm;

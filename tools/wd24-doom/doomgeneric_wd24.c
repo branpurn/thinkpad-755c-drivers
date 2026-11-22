@@ -304,7 +304,8 @@ void DG_DrawFrame(void)
 		return;
 	idx = (const uint8_t *)DG_ScreenBuffer;
 	frames++;
-	index_sum = fnv(idx, WD24X_DOOM_SRC_W * WD24X_DOOM_SRC_H);
+	if (wd24x_doom_index_hashed(sum_frames))
+		index_sum = fnv(idx, WD24X_DOOM_SRC_W * WD24X_DOOM_SRC_H);
 	if (doom_time.every)
 		t_enter = mono_ns();
 	if (fb_fd >= 0 && wd24x_doom_palette_put(getenv("WD24X_DOOM_PALETTE")))

@@ -60,6 +60,12 @@ static inline int wd24x_doom_present_mode(const char *s)
 	return -1;
 }
 
+/* The 64000-byte index hash feeds only the sum line. */
+static inline int wd24x_doom_index_hashed(int sum_on)
+{
+	return sum_on ? 1 : 0;
+}
+
 /* Live mmap is the S6d contract: 640x480x8, line 640, frame bytes present. */
 static inline int wd24x_doom_fb_geometry_ok(unsigned x, unsigned y,
 					    unsigned bpp, unsigned line,
