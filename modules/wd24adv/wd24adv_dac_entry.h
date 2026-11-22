@@ -23,9 +23,10 @@
  * not modified. A caller that sees -EIO writes that snapshot back with
  * wd24_restore_cmap.
  *
- * X's 16-bit channel becomes the 3C9 byte by >> 10, which is what
- * fbcon's (byte<<8)|byte palette does. Expanding a stored 6-bit value
- * with << 10 round-trips through that shift.
+ * X's 16-bit channel becomes the 3C9 byte by >> 10. fbcon publishes
+ * v<<10. Xfbdev publishes v*65535/63 when red.length is 6. Both
+ * round-trip through that shift. The low 10 bits are not required
+ * to be zero.
  *
  * This is the model contract. It is not a measurement of the 755C.
  */

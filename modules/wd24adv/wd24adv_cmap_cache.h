@@ -51,7 +51,13 @@ static inline unsigned wd24_cc_u(char *d, unsigned cap, unsigned n, unsigned v)
 	return wd24_cc_put(d, cap, n, tmp);
 }
 
-/* 0 and a byte count, or -1 if a channel is not shift10 or the buffer is short. */
+/*
+ * 0 and a byte count, or -1 if the buffer is short.
+ * The printed byte is the 6-bit DAC value, channel >> 10.
+ * fbcon publishes v<<10. X's FBIOPUTCMAP publishes v*65535/63
+ * (fbdev.c, red.length 6), which sets the low 10 bits. Both
+ * shift back to v. A u16 shifted by 10 is already 0..63.
+ */
 static inline int wd24_cmap_cache_render(char *dst, unsigned cap,
 					 const u16 *r, const u16 *g,
 					 const u16 *b)
@@ -66,8 +72,6 @@ static inline int wd24_cmap_cache_render(char *dst, unsigned cap,
 	for (i = 0; i < 256; i++) {
 		unsigned rr, gg, bb;
 
-		if ((r[i] | g[i] | b[i]) & 0x03ff)
-			return -1;
 		rr = (unsigned)(r[i] >> 10);
 		gg = (unsigned)(g[i] >> 10);
 		bb = (unsigned)(b[i] >> 10);
