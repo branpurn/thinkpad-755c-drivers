@@ -24,7 +24,8 @@
 # the script rmmods when Doom exits. It writes only the out, err, and
 # dmesg files already used here. It does not write a config or a frame.
 # The engine's completed timedemo exits 255: I_Error prints
-# "timed N gametics in N realtics" and then exit(-1). That 255 is this
+# "timed N gametics in N realtics (N fps)" and then exit(-1). The
+# parenthetical fps is part of the line. That 255 is this
 # script's success, together with the gametics line. No VGA register writes
 # beyond the module's existing mode and colormap path.
 P=${WD24X_MOCK:-}
@@ -187,6 +188,25 @@ finish_rmmod() {
 	}
 	echo "WD24X-DOOM-RUN done"
 	exit 0
+}
+
+take_timed() {
+	line=$1
+	case "$line" in
+	"timed "*" gametics in "*" realtics"*) ;;
+	*) return 1 ;;
+	esac
+	rest=${line#timed }
+	gt=${rest%% *}
+	rest=${rest#* in }
+	rt=${rest%% *}
+	case "$gt" in
+	''|*[!0-9]*) return 1 ;;
+	esac
+	case "$rt" in
+	''|*[!0-9]*) return 1 ;;
+	esac
+	[ "$rt" -gt 0 ]
 }
 
 have_line() {
@@ -356,18 +376,14 @@ elif [ "$mode" = "timedemo13h" ]; then
 	for log in "$P/tmp/wd24x-doom.out" "$P/tmp/wd24x-doom.err"; do
 		while IFS= read -r line; do
 			case "$line" in
-			"timed "*" gametics in "*" realtics") found=$line ;;
+			"timed "*" gametics in "*" realtics"*) found=$line ;;
 			esac
 		done < "$log"
 	done
-	[ -n "$found" ] || fail "timedemo"
+	take_timed "$found" || fail "timedemo"
 	if [ "$dr" != "0" ] && [ "$dr" != "255" ]; then
 		fail "doom rc"
 	fi
-	set -- $found
-	gt=$2
-	rt=$5
-	[ "$rt" -gt 0 ] || fail "realtics"
 	echo "$found"
 	echo "WD24X-DOOM-FPS gametics $gt realtics $rt fps_x100 $((gt * 3500 / rt))"
 	finish_rmmod
@@ -379,18 +395,14 @@ else
 	for log in "$P/tmp/wd24x-doom.out" "$P/tmp/wd24x-doom.err"; do
 		while IFS= read -r line; do
 			case "$line" in
-			"timed "*" gametics in "*" realtics") found=$line ;;
+			"timed "*" gametics in "*" realtics"*) found=$line ;;
 			esac
 		done < "$log"
 	done
-	[ -n "$found" ] || fail "timedemo"
+	take_timed "$found" || fail "timedemo"
 	if [ "$dr" != "0" ] && [ "$dr" != "255" ]; then
 		fail "doom rc"
 	fi
-	set -- $found
-	gt=$2
-	rt=$5
-	[ "$rt" -gt 0 ] || fail "realtics"
 	echo "WD24X-DOOM-FPS gametics $gt realtics $rt fps_x100 $((gt * 3500 / rt))"
 fi
 

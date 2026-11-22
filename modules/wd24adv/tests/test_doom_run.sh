@@ -84,7 +84,7 @@ case " $* " in
 		echo "TIME=${WD24X_DOOM_TIME-}" >> "$WD24X_MOCK/doom.args"
 		exit 0
 	fi
-	echo "timed 2134 gametics in 700 realtics" >&2
+	echo "timed 5026 gametics in 14978 realtics (11.744559 fps)" >&2
 	exit 255
 	;;
 esac
@@ -127,7 +127,7 @@ grep -q "wd24adv-desktop.ko" "$M/insmod.args" && ok || bad "ko"
 grep -q "fdf30c77" "$M/insmod.args" && bad "old module" || ok
 grep -q "FB=ioctl" "$M/doom.args" && ok || bad "fb ioctl"
 grep -q "pr14" "$M/insmod.args" && bad "baseline" || ok
-grep -q "WD24X-DOOM-FPS gametics 2134 realtics 700 fps_x100 10670" "$M/out" && ok || bad "fps"
+grep -q "WD24X-DOOM-FPS gametics 5026 realtics 14978 fps_x100 1174" "$M/out" && ok || bad "fps"
 grep -q -- "-timedemo demo1" "$M/doom.args" && ok || bad "demo arg"
 grep -q -- "-nosound" "$M/doom.args" && ok || bad "nosound"
 grep -q "INPUT=$" "$M/doom.args" && ok || bad "input off"
@@ -199,10 +199,10 @@ grep -q "PRESENT=13h" "$M/doom.args" && ok || bad "td env"
 grep -q -- "-timedemo demo1" "$M/doom.args" && ok || bad "td demo"
 grep -q -- "-nosound" "$M/doom.args" && ok || bad "td sound"
 grep -q "FRAMES=60" "$M/doom.args" && bad "td capped" || ok
-grep -q "timed 2134 gametics in 700 realtics" "$M/out" && ok || bad "td line"
-grep -q "WD24X-DOOM-FPS gametics 2134 realtics 700 fps_x100 10670" "$M/out" && ok || bad "td fps"
-grep -q "WD24X-DOOM-RUN wait" "$M/out" && bad "td waited" || ok
+grep -q "timed 5026 gametics in 14978 realtics (11.744559 fps)" "$M/out" && ok || bad "td line"
+grep -q "WD24X-DOOM-FPS gametics 5026 realtics 14978 fps_x100 1174" "$M/out" && ok || bad "td fps"
 grep -q "WD24X-DOOM-RUN restore mismatches 0" "$M/out" && ok || bad "td restore"
+grep -q "WD24X-DOOM-RUN wait" "$M/out" && bad "td waited" || ok
 grep -q "present 13h refused" "$M/out" && bad "td refused" || ok
 [ "$rc" = 0 ] && ok || bad "td rc"
 
