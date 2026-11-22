@@ -61,14 +61,40 @@ int main(void)
 		bad.scale = 1;
 		T(wd24_blit_allow(&bad) == -22, "scale");
 		bad = okc;
-		bad.op = 1;
+		bad.op = 2;
 		T(wd24_blit_allow(&bad) == -22, "other op");
+		bad = okc;
+		bad.op = 1;
+		bad.scale = 1;
+		T(wd24_blit_allow(&bad) == 0, "direct contract");
+		bad.scale = 2;
+		T(wd24_blit_allow(&bad) == -22, "direct scale");
 		bad = okc;
 		bad.nbytes = 63999;
 		T(wd24_blit_allow(&bad) == -22, "nbytes");
 		bad = okc;
 		bad.dst_x = 1;
 		T(wd24_blit_allow(&bad) == -22, "dst");
+	}
+
+	{
+		u8 raw[WD24_PRESENT_SRC];
+		u8 out[WD24_PRESENT_SRC + 1];
+		u32 k;
+
+		for (k = 0; k < WD24_PRESENT_SRC; k++)
+			raw[k] = (u8)(k * 3u);
+		out[WD24_PRESENT_SRC] = 0x5a;
+		wd24_present_direct_copy(out, raw);
+		k = 0;
+		while (k < WD24_PRESENT_SRC && out[k] == raw[k])
+			k++;
+		T(k == WD24_PRESENT_SRC, "direct copy is the 64000 bytes");
+		T(out[WD24_PRESENT_SRC] == 0x5a, "direct copy stops at 64000");
+		T(wd24_present_direct_dword(raw, 0) ==
+		  ((u32)raw[0] | ((u32)raw[1] << 8) |
+		   ((u32)raw[2] << 16) | ((u32)raw[3] << 24)),
+		  "direct dword");
 	}
 
 	T(wd24_present_ns(0, 5, 100) == 50000000ull, "five ticks at 100 Hz");

@@ -32,10 +32,12 @@ struct wd24adv_modeinfo {
 
 /*
  * One blit. pixels is a userspace pointer to nbytes index bytes.
- * The only op accepted today is LETTER2X: 320x200, scale 2, destination
- * 0,0, nbytes 64000. Anything else is -EINVAL and touches no register.
- * The kernel writes the 640x480 frame through the already proven window
- * program, one 64 KiB window at a time. switches and bytes are outputs.
+ * LETTER2X: 320x200, scale 2, destination 0,0, nbytes 64000. The kernel
+ * writes the 640x480 frame through the already proven window program.
+ * DIRECT: the same 320x200 bytes, scale 1, nbytes 64000. Accepted only
+ * while present_mode=13h (the proven 320x200-8 set). One 64000-byte copy,
+ * no expansion and no window program. Anything else is -EINVAL and
+ * touches no register. switches and bytes are outputs.
  */
 struct wd24s6d_present {
 	__u64 pixels;
@@ -51,6 +53,7 @@ struct wd24s6d_present {
 	__u32 reserved;
 };
 #define WD24ADV_BLIT_LETTER2X	0u
+#define WD24ADV_BLIT_DIRECT	1u
 #define WD24S6D_PRESENT_LETTER	WD24ADV_BLIT_LETTER2X
 #define WD24S6D_PRESENT_SRC	64000u
 #define WD24S6D_IOC_PRESENT	_IOWR('W', 0x40, struct wd24s6d_present)

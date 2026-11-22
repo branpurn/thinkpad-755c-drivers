@@ -46,22 +46,58 @@ struct wd24_blit_check {
 	u32 have_pixels;
 };
 
-/* 0, or -22. No hardware. LETTER2X is the only op. */
+/*
+ * 0, or -22. No hardware. LETTER2X is op 0 (scale 2). DIRECT is op 1
+ * (scale 1, the same 64000 bytes, no expansion).
+ */
 static inline int wd24_blit_allow(const struct wd24_blit_check *r)
 {
 	if (!r || !r->have_pixels)
 		return -22;
-	if (r->op != 0)
-		return -22;
 	if (r->src_w != WD24_PRESENT_SRC_W || r->src_h != WD24_PRESENT_SRC_H)
 		return -22;
-	if (r->dst_x != 0 || r->dst_y != 0 || r->scale != 2)
+	if (r->dst_x != 0 || r->dst_y != 0)
 		return -22;
 	if (r->nbytes != WD24_PRESENT_SRC)
 		return -22;
 	if (r->src_w * r->src_h != r->nbytes)
 		return -22;
-	return 0;
+	if (r->op == 0) {
+		if (r->scale != 2)
+			return -22;
+		return 0;
+	}
+	if (r->op == 1) {
+		if (r->scale != 1)
+			return -22;
+		return 0;
+	}
+	return -22;
+}
+
+/* Identity dword of the 320x200 buffer. No 2x expansion. */
+static inline u32 wd24_present_direct_dword(const u8 *src, u32 off)
+{
+	if (!src || off + 3u >= WD24_PRESENT_SRC)
+		return 0;
+	return (u32)src[off] | ((u32)src[off + 1u] << 8) |
+	       ((u32)src[off + 2u] << 16) | ((u32)src[off + 3u] << 24);
+}
+
+static inline void wd24_present_direct_copy(u8 *dst, const u8 *src)
+{
+	u32 off;
+
+	if (!dst || !src)
+		return;
+	for (off = 0; off < WD24_PRESENT_SRC; off += 4) {
+		u32 v = wd24_present_direct_dword(src, off);
+
+		dst[off] = (u8)v;
+		dst[off + 1u] = (u8)(v >> 8);
+		dst[off + 2u] = (u8)(v >> 16);
+		dst[off + 3u] = (u8)(v >> 24);
+	}
 }
 
 struct wd24_present_win {

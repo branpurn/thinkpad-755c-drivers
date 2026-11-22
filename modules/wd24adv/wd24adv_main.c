@@ -137,6 +137,11 @@ static char *mode = "";
 module_param(mode, charp, 0444);
 MODULE_PARM_DESC(mode, "live: set this PROVEN mode right after load (trial applies)");
 
+static char *present_mode;
+module_param(present_mode, charp, 0444);
+MODULE_PARM_DESC(present_mode, "empty: letterbox on 640x480-8. 13h: session is proven 320x200-8, present is one 64000-byte copy, trial restores text");
+static bool present_13h;
+
 static bool pattern = true;
 module_param(pattern, bool, 0444);
 MODULE_PARM_DESC(pattern, "live: bool — 1 (default) draw 16 roll-up colour bars after packed/320x200 mode set; 0 skip bars (NOT a pattern-id). With s6d=1+fbcon, bars are brief then wiped");
@@ -1862,7 +1867,7 @@ static void s6b_arm(const struct wd24_mode *m) { }
 /* ---- S6d fault-banked fbdev (visual: binds fbcon) ---- */
 static struct wd24s6b *s6d_b;
 static struct fb_info *s6d_info;
-static bool s6d_armed, s6d_busy;
+static bool s6d_armed, s6d_busy, s6d_13h;
 static bool s6d_cmap_published, s6d_cmap_frozen;
 static u32 s6d_pf_frames, s6d_pf_last, s6d_pf_total;
 static u64 s6d_pf_ns, s6d_pf_copy_ns;
@@ -2050,7 +2055,8 @@ static int s6d_fb_mmap(struct fb_info *info, struct vm_area_struct *vma)
 	if (vma->vm_pgoff || !len || len > WD24S6D_MMAP_LEN)
 		return -EINVAL;
 	hw_acq();
-	if (!s6d_st || !s6d_st->active || !s6d_armed || s6d_st->stopping) {
+	if (!s6d_st || !s6d_st->active || !s6d_armed || s6d_st->stopping ||
+	    s6d_13h) {
 		hw_rel();
 		return -ENODEV;
 	}
@@ -2355,7 +2361,8 @@ static bool s6d_draw_enter(bool *took)
 	hw_acq();
 	/* Do not yield here. fbcon calls this with console_lock held, and
 	 * the end path is waiting for that lock. */
-	if (!s6d_st || !s6d_st->active || s6d_st->stopping || !vmem || vram_dead) {
+	if (!s6d_st || !s6d_st->active || s6d_st->stopping || !vmem || vram_dead ||
+	    s6d_13h) {
 		hw_rel();
 		return false;
 	}
@@ -2809,6 +2816,22 @@ static int s6d_present_now(const u8 *src, u32 *nsw)
 	return 0;
 }
 
+/*
+ * Mode 13h is already chain-4 at A0000. One 64000-byte copy as dword
+ * stores. No expansion, no SETWIN, no PR0A.
+ */
+static int s6d_present_13h(const u8 *src, u32 *nsw)
+{
+	u32 off;
+
+	*nsw = 0;
+	if (!src || !vmem)
+		return -EINVAL;
+	for (off = 0; off < WD24_PRESENT_SRC; off += 4)
+		writel(wd24_present_direct_dword(src, off), vmem + off);
+	return 0;
+}
+
 /* fb_ioctl on 6.18.57 is called with info->lock held. Do not take that
  * lock again. Drop hw before console_lock: the trial worker takes
  * console_lock, then hw_lock. */
@@ -2836,6 +2859,17 @@ static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long ar
 		chk.have_pixels = req.pixels != 0;
 		if (wd24_blit_allow(&chk))
 			return -EINVAL;
+		/*
+		 * DIRECT only while this session is the proven 13h set.
+		 * LETTER2X only on the 640x480 session. Refuse before the
+		 * copy and before any register or VRAM write.
+		 */
+		if (s6d_13h) {
+			if (req.op != WD24ADV_BLIT_DIRECT)
+				return -EINVAL;
+		} else if (req.op == WD24ADV_BLIT_DIRECT) {
+			return -EINVAL;
+		}
 	}
 	if (!s6d_present_src)
 		return -ENOMEM;
@@ -2869,7 +2903,7 @@ static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long ar
 		goto out;
 	}
 #ifndef WD24S1_QEMU_FAKE
-	if (hw) {
+	if (hw && !s6d_13h) {
 		hw->be->begin(hw);
 		hw->tag = "S6d: present";
 	}
@@ -2877,12 +2911,15 @@ static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long ar
 	{
 		unsigned long p0 = jiffies;
 
-		err = s6d_present_now(s6d_present_src, &nsw);
+		if (s6d_13h)
+			err = s6d_present_13h(s6d_present_src, &nsw);
+		else
+			err = s6d_present_now(s6d_present_src, &nsw);
 		if (!err)
 			s6d_pf_ns += wd24_present_ns(p0, jiffies, HZ);
 	}
 #ifndef WD24S1_QEMU_FAKE
-	if (hw)
+	if (hw && !s6d_13h)
 		hw->be->end(hw);
 #endif
 	if (!err) {
@@ -2898,9 +2935,26 @@ out:
 	if (err)
 		return err;
 	req.switches = nsw;
-	req.bytes = WD24_PRESENT_FRAME;
+	req.bytes = s6d_13h ? WD24_PRESENT_SRC : WD24_PRESENT_FRAME;
 	if (copy_to_user((void __user *)arg, &req, sizeof(req)))
 		return -EFAULT;
+	return 0;
+}
+
+/*
+ * Accept only the geometry this session already programmed. A mismatch
+ * is -EINVAL and writes no register. A match copies the published var
+ * back so a PUT cannot drop the DAC lengths.
+ */
+static int s6d_fb_check_var(struct fb_var_screeninfo *var,
+			    struct fb_info *info)
+{
+	if (!var || !info)
+		return -EINVAL;
+	if (var->xres != info->var.xres || var->yres != info->var.yres ||
+	    var->bits_per_pixel != info->var.bits_per_pixel)
+		return -EINVAL;
+	*var = info->var;
 	return 0;
 }
 
@@ -2908,6 +2962,7 @@ static const struct fb_ops s6d_fbops = {
 	.owner		= THIS_MODULE,
 	.fb_open	= s6d_fb_open,
 	.fb_release	= s6d_fb_release,
+	.fb_check_var	= s6d_fb_check_var,
 	.fb_mmap	= s6d_fb_mmap,
 	.fb_ioctl	= s6d_fb_ioctl,
 	.fb_fillrect	= s6d_fillrect,
@@ -2919,6 +2974,7 @@ static const struct fb_ops s6d_fbops_cmap = {
 	.owner		= THIS_MODULE,
 	.fb_open	= s6d_fb_open,
 	.fb_release	= s6d_fb_release,
+	.fb_check_var	= s6d_fb_check_var,
 	.fb_mmap	= s6d_fb_mmap,
 	.fb_ioctl	= s6d_fb_ioctl,
 	.fb_fillrect	= s6d_fillrect,
@@ -2982,13 +3038,22 @@ static int s6d_setup(void)
 	info->fbops = s6d_cmap ? &s6d_fbops_cmap : &s6d_fbops;
 	info->flags = FBINFO_VIRTFB;
 	info->screen_base = NULL;	/* no linear/shadow; mmap is fault-banked */
-	info->screen_size = WD24S6D_MMAP_LEN;
+	info->screen_size = present_13h ? WD24_PRESENT_SRC : WD24S6D_MMAP_LEN;
 
 	var = &info->var;
-	var->xres = WD24S6D_XRES;
-	var->yres = WD24S6D_YRES;
-	var->xres_virtual = WD24S6D_XRES;
-	var->yres_virtual = WD24S6D_YRES;
+	if (present_13h) {
+		var->xres = WD24_PRESENT_SRC_W;
+		var->yres = WD24_PRESENT_SRC_H;
+		var->xres_virtual = WD24_PRESENT_SRC_W;
+		var->yres_virtual = WD24_PRESENT_SRC_H;
+		var->vmode = FB_VMODE_DOUBLE;
+	} else {
+		var->xres = WD24S6D_XRES;
+		var->yres = WD24S6D_YRES;
+		var->xres_virtual = WD24S6D_XRES;
+		var->yres_virtual = WD24S6D_YRES;
+		var->vmode = FB_VMODE_NONINTERLACED;
+	}
 	var->bits_per_pixel = WD24S6D_BPP;
 	/*
 	 * 6-bit VGA RAMDAC. On 6.18 the channel length is that width;
@@ -3003,7 +3068,6 @@ static int s6d_setup(void)
 	var->activate = FB_ACTIVATE_NOW;
 	var->height = -1;
 	var->width = -1;
-	var->vmode = FB_VMODE_NONINTERLACED;
 
 	fix = &info->fix;
 	fix->id[0] = 'w'; fix->id[1] = 'd'; fix->id[2] = '2';
@@ -3011,9 +3075,9 @@ static int s6d_setup(void)
 	fix->id[6] = 'd'; fix->id[7] = '\0';
 	fix->type = FB_TYPE_PACKED_PIXELS;
 	fix->visual = FB_VISUAL_PSEUDOCOLOR;
-	fix->line_length = WD24S6D_LINE;
+	fix->line_length = present_13h ? WD24_PRESENT_SRC_W : WD24S6D_LINE;
 	fix->smem_start = 0;			/* no contiguous phys */
-	fix->smem_len = WD24S6D_MMAP_LEN;
+	fix->smem_len = present_13h ? WD24_PRESENT_SRC : WD24S6D_MMAP_LEN;
 	/* The S4 sequence does not move the CRTC start. Scroll is a copy. */
 	fix->ypanstep = 0;
 	fix->ywrapstep = 0;
@@ -3023,18 +3087,21 @@ static int s6d_setup(void)
 #ifndef WD24S1_QEMU_FAKE
 	s6b_io = &s6_live_io;
 #endif
-	pr_info("S6d: fbdev prepared (thrash bound %u); arms after 640x480-8\n",
-		s6d_thrash_bound);
+	pr_info("S6d: fbdev prepared (thrash bound %u); arms after %s\n",
+		s6d_thrash_bound, present_13h ? "320x200-8" : "640x480-8");
 	return 0;
 }
 
 static void s6d_arm(const struct wd24_mode *m)
 {
 	int err;
+	int direct = present_13h && m && !strcmp(m->name, "320x200-8");
+	int packed = m && !strcmp(m->name, "640x480-8");
 
-	if (!hw || hw->in_text || hw->nmismatch || !m || strcmp(m->name, "640x480-8") ||
+	if (!hw || hw->in_text || hw->nmismatch || !m || (!direct && !packed) ||
 	    !vmem || hw->no_vram || vram_dead) {
-		pr_err("S6d: not armed: not in the 640x480-8 state\n");
+		pr_err("S6d: not armed: not in the %s state\n",
+		       present_13h ? "320x200-8" : "640x480-8");
 		return;
 	}
 	if (!s6d_info || !s6d_st)
@@ -3042,14 +3109,24 @@ static void s6d_arm(const struct wd24_mode *m)
 	s6d_cmap_frozen = false;
 	s6d_cmap_published = false;
 	s6d_armed = true;
-	S6B_HW_BEGIN();
-	err = wd24s6b_begin(s6d_b, s6b_io ? s6b_io : &s6_live_io);
-	S6B_HW_END();
-	if (err) {
-		pr_err("S6d: begin at arm failed %d — not registering fb\n", err);
-		s6d_armed = false;
-		s6d_b->state = WD24S6B_OFF;
-		return;
+	s6d_13h = direct;
+	if (!direct) {
+		S6B_HW_BEGIN();
+		err = wd24s6b_begin(s6d_b, s6b_io ? s6b_io : &s6_live_io);
+		S6B_HW_END();
+		if (err) {
+			pr_err("S6d: begin at arm failed %d — not registering fb\n", err);
+			s6d_armed = false;
+			s6d_13h = false;
+			s6d_b->state = WD24S6B_OFF;
+			return;
+		}
+	} else {
+		/*
+		 * std_13h already set chain-4 and left PR0A at the BIOS
+		 * value. Do not begin the dual window.
+		 */
+		pr_info("S6d: 320x200-8 present is the 64000-byte copy\n");
 	}
 	s6d_st->active = true;
 	s6d_st->stopping = false;
@@ -3167,7 +3244,7 @@ static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 			"faults %u switches %u thrash %u latched %u mapped_base 0x%x\n"
 			"why %s\n"
 			"cmap_param %d published %d frozen %d\n"
-			"present frames %u last %u total %u ns %llu copy_ns %llu\n"
+			"present frames %u last %u total %u ns %llu copy_ns %llu mode %s\n"
 			"accel %u gate %u match %u\n"
 			"cursor %u show %u regs %u vram %u restored %u\n",
 			s6d_armed, s6d_st->active, s6d_st->stopping, s6d_busy,
@@ -3180,6 +3257,7 @@ static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 			s6d_pf_frames, s6d_pf_last, s6d_pf_total,
 			(unsigned long long)s6d_pf_ns,
 			(unsigned long long)s6d_pf_copy_ns,
+			s6d_13h ? "13h" : "letter",
 			accel, s6d_agate, s6d_amatch,
 			cursor_gate, cur_show, cur_regs, cur_vram, cur_rest);
 	}
@@ -3391,11 +3469,26 @@ static int __init wd24adv_init(void)
 		pr_err("s1_echo= needs s1=1\n");
 		return -EINVAL;
 	}
+	present_13h = false;
+	if (present_mode && present_mode[0]) {
+		if (strcmp(present_mode, "13h")) {
+			pr_err("present_mode must be empty or 13h\n");
+			return -EINVAL;
+		}
+		present_13h = true;
+	}
+	if (present_13h &&
+	    (!s6d || dryrun || !live || !mode || strcmp(mode, "320x200-8") ||
+	     s1 || s2 || s3 || s4 || s5 || s6 || s6b || s6c)) {
+		pr_err("present_mode=13h needs s6d=1 dryrun=0 live=1 mode=320x200-8 and no other stage\n");
+		return -EINVAL;
+	}
 	if (wd24_cmap_param_refuse(s6d_cmap, s6d, dryrun, live, s6d_bind,
 				   s6d_fbcon,
-				   mode && !strcmp(mode, "640x480-8"),
+				   (mode && !strcmp(mode, "640x480-8")) ||
+				   present_13h,
 				   s1 || s2 || s3 || s4 || s5 || s6 || s6b || s6c)) {
-		pr_err("s6d_cmap=1 refused: needs s6d=1 s6d_fbcon=1 s6d_bind=0 dryrun=0 live=1 mode=640x480-8 and no other stage\n");
+		pr_err("s6d_cmap=1 refused: needs s6d=1 s6d_fbcon=1 s6d_bind=0 dryrun=0 live=1 mode=640x480-8 or present_mode=13h mode=320x200-8, and no other stage\n");
 		return -EINVAL;
 	}
 #ifdef WD24S1_QEMU_FAKE
