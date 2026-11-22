@@ -1,0 +1,319 @@
+diff --git a/src/surface/Makefile b/src/surface/Makefile
+index 848c3d4..2036d17 100644
+--- a/src/surface/Makefile
++++ b/src/surface/Makefile
+@@ -1,7 +1,7 @@
+ # Sources
+ 
+ # Common surface code and heap based surface handler
+-SURFACE_HANDLER_yes := surface.c ram.c
++SURFACE_HANDLER_yes := surface.c ram.c linux.c
+ 
+ # optional surface handlers
+ SURFACE_HANDLER_$(NSFB_SDL_AVAILABLE) += sdl.c
+diff --git a/src/surface/linux.c b/src/surface/linux.c
+new file mode 100644
+index 0000000..da743d8
+--- /dev/null
++++ b/src/surface/linux.c
+@@ -0,0 +1,253 @@
++/*
++ * Linux framebuffer surface.
++ *
++ * Adapted from libnsfb src/surface/linux.c as of
++ * 51d3ee85de73949483af79671fe9075a10e405e3, the parent of b2bb565
++ * (2018-07-29, Vincent Sanders), which deleted this file.
++ * Copyright 2012 Vincent Sanders. MIT. The changes here are the
++ * mmap length, the MAP_FAILED test, the 8bpp FBIOPUTCMAP, and a
++ * raw tty key reader. The mouse is not wired.
++ */
++#include <stdbool.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <unistd.h>
++#include <poll.h>
++#include <termios.h>
++#include <sys/ioctl.h>
++#include <sys/mman.h>
++
++#include <linux/fb.h>
++
++#include "libnsfb.h"
++#include "libnsfb_event.h"
++#include "libnsfb_plot.h"
++
++#include "nsfb.h"
++#include "plot.h"
++#include "surface.h"
++#include "palette.h"
++
++#define FB_NAME "/dev/fb0"
++
++struct lnx_priv {
++	struct fb_fix_screeninfo fix;
++	struct fb_var_screeninfo var;
++	int fd;
++	int tty;
++	size_t map_len;
++	struct termios saved;
++	int have_termios;
++};
++
++static int linux_defaults(nsfb_t *nsfb)
++{
++	nsfb->width = 640;
++	nsfb->height = 480;
++	nsfb->format = NSFB_FMT_I8;
++	if (select_plotters(nsfb) != true)
++		return -1;
++	return 0;
++}
++
++static int linux_parameters(nsfb_t *nsfb, const char *parameters)
++{
++	(void)nsfb;
++	(void)parameters;
++	return 0;
++}
++
++static enum nsfb_format_e format_from_var(struct fb_var_screeninfo *v)
++{
++	switch (v->bits_per_pixel) {
++	case 32:
++		return v->transp.length == 0 ? NSFB_FMT_XBGR8888 : NSFB_FMT_ABGR8888;
++	case 24:
++		return NSFB_FMT_RGB888;
++	case 16:
++		return NSFB_FMT_RGB565;
++	case 8:
++		return NSFB_FMT_I8;
++	default:
++		return NSFB_FMT_ANY;
++	}
++}
++
++/* 8-bit channel to the 16-bit value this driver's DAC reads as >> 10. */
++static __u16 dac16(unsigned c)
++{
++	return (__u16)((c >> 2) << 10);
++}
++
++static int put_cmap(struct lnx_priv *st, nsfb_t *nsfb)
++{
++	__u16 red[256], green[256], blue[256];
++	struct fb_cmap map;
++	unsigned i;
++
++	if (nsfb_palette_new(&nsfb->palette, nsfb->width) != true)
++		return -1;
++	nsfb_palette_generate_nsfb_8bpp(nsfb->palette);
++	for (i = 0; i < 256; i++) {
++		nsfb_colour_t c = nsfb->palette->data[i];
++
++		red[i] = dac16(c & 255u);
++		green[i] = dac16((c >> 8) & 255u);
++		blue[i] = dac16((c >> 16) & 255u);
++	}
++	memset(&map, 0, sizeof(map));
++	map.start = 0;
++	map.len = 256;
++	map.red = red;
++	map.green = green;
++	map.blue = blue;
++	if (ioctl(st->fd, FBIOPUTCMAP, &map) < 0)
++		return -1;
++	return 0;
++}
++
++static const char *fb_path(nsfb_t *nsfb)
++{
++	if (nsfb->parameters != NULL && nsfb->parameters[0] == '/')
++		return nsfb->parameters;
++	return FB_NAME;
++}
++
++static int linux_set_geometry(nsfb_t *nsfb, int width, int height,
++			      enum nsfb_format_e format)
++{
++	if (nsfb->surface_priv != NULL)
++		return -1;
++	nsfb->width = width;
++	nsfb->height = height;
++	nsfb->format = format;
++	if (select_plotters(nsfb) != true)
++		return -1;
++	return 0;
++}
++
++static int linux_initialise(nsfb_t *nsfb)
++{
++	struct lnx_priv *st;
++	enum nsfb_format_e got;
++	size_t len;
++
++	if (nsfb->surface_priv != NULL)
++		return -1;
++	st = calloc(1, sizeof(*st));
++	if (st == NULL)
++		return -1;
++	st->fd = open(fb_path(nsfb), O_RDWR);
++	st->tty = -1;
++	if (st->fd < 0) {
++		free(st);
++		return -1;
++	}
++	if (ioctl(st->fd, FBIOGET_FSCREENINFO, &st->fix) < 0 ||
++	    ioctl(st->fd, FBIOGET_VSCREENINFO, &st->var) < 0) {
++		close(st->fd);
++		free(st);
++		return -1;
++	}
++	len = (size_t)st->fix.line_length * st->var.yres;
++	nsfb->ptr = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, st->fd, 0);
++	if (nsfb->ptr == MAP_FAILED) {
++		close(st->fd);
++		free(st);
++		return -1;
++	}
++	st->map_len = len;
++	nsfb->linelen = st->fix.line_length;
++	nsfb->width = st->var.xres;
++	nsfb->height = st->var.yres;
++	got = format_from_var(&st->var);
++	if (got == NSFB_FMT_ANY || select_plotters(nsfb) != true) {
++		munmap(nsfb->ptr, len);
++		close(st->fd);
++		free(st);
++		return -1;
++	}
++	if (nsfb->format != got) {
++		nsfb->format = got;
++		if (select_plotters(nsfb) != true) {
++			munmap(nsfb->ptr, len);
++			close(st->fd);
++			free(st);
++			return -1;
++		}
++	}
++	if (st->var.bits_per_pixel == 8 && put_cmap(st, nsfb) != 0) {
++		munmap(nsfb->ptr, len);
++		close(st->fd);
++		free(st);
++		return -1;
++	}
++	if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &st->saved) == 0) {
++		struct termios raw = st->saved;
++
++		raw.c_lflag &= ~(ICANON | ECHO);
++		raw.c_cc[VMIN] = 0;
++		raw.c_cc[VTIME] = 0;
++		if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0) {
++			st->tty = STDIN_FILENO;
++			st->have_termios = 1;
++		}
++	}
++	nsfb->surface_priv = st;
++	return 0;
++}
++
++static int linux_finalise(nsfb_t *nsfb)
++{
++	struct lnx_priv *st = nsfb->surface_priv;
++
++	if (st == NULL)
++		return 0;
++	if (st->have_termios)
++		tcsetattr(st->tty, TCSANOW, &st->saved);
++	munmap(nsfb->ptr, st->map_len);
++	close(st->fd);
++	free(st);
++	nsfb->surface_priv = NULL;
++	return 0;
++}
++
++static bool linux_input(nsfb_t *nsfb, nsfb_event_t *event, int timeout)
++{
++	struct lnx_priv *st = nsfb->surface_priv;
++	struct pollfd p;
++	unsigned char b;
++	int pr;
++
++	if (st == NULL || st->tty < 0)
++		return false;
++	p.fd = st->tty;
++	p.events = POLLIN;
++	pr = poll(&p, 1, timeout < 0 ? -1 : timeout);
++	if (pr <= 0 || read(st->tty, &b, 1) != 1)
++		return false;
++	event->type = NSFB_EVENT_KEY_DOWN;
++	if (b == 27)
++		event->value.keycode = NSFB_KEY_ESCAPE;
++	else if (b == '\n' || b == '\r')
++		event->value.keycode = NSFB_KEY_RETURN;
++	else if (b == 127 || b == 8)
++		event->value.keycode = NSFB_KEY_BACKSPACE;
++	else
++		event->value.keycode = (enum nsfb_key_code_e)b;
++	return true;
++}
++
++const nsfb_surface_rtns_t linux_rtns = {
++	.defaults = linux_defaults,
++	.initialise = linux_initialise,
++	.finalise = linux_finalise,
++	.geometry = linux_set_geometry,
++	.parameters = linux_parameters,
++	.input = linux_input,
++};
++
++NSFB_SURFACE_DEF(linux, NSFB_SURFACE_LINUX, &linux_rtns)
+diff --git a/src/surface/ram.c b/src/surface/ram.c
+index da769b6..c1f2bee 100644
+--- a/src/surface/ram.c
++++ b/src/surface/ram.c
+@@ -17,6 +17,7 @@
+ #include "nsfb.h"
+ #include "surface.h"
+ #include "plot.h"
++#include "palette.h"
+ 
+ #define UNUSED(x) ((x) = (x))
+ 
+@@ -33,6 +34,18 @@ static int ram_defaults(nsfb_t *nsfb)
+ }
+ 
+ 
++/* 8bpp plotters write index 0 when palette is NULL. */
++static void ram_ensure_palette(nsfb_t *nsfb)
++{
++    if (nsfb->format != NSFB_FMT_I8 || nsfb->width <= 0)
++        return;
++    if (nsfb->palette != NULL)
++        return;
++    if (nsfb_palette_new(&nsfb->palette, nsfb->width) != true)
++        return;
++    nsfb_palette_generate_nsfb_8bpp(nsfb->palette);
++}
++
+ static int ram_initialise(nsfb_t *nsfb)
+ {
+     size_t size;
+@@ -46,6 +59,7 @@ static int ram_initialise(nsfb_t *nsfb)
+ 
+     nsfb->ptr = fbptr;
+     nsfb->linelen = (nsfb->width * nsfb->bpp) / 8;
++    ram_ensure_palette(nsfb);
+ 
+     return 0;
+ }
+@@ -99,6 +113,7 @@ ram_set_geometry(nsfb_t *nsfb, int width, int height, enum nsfb_format_e format)
+     }
+ 
+     nsfb->linelen = (nsfb->width * nsfb->bpp) / 8;
++    ram_ensure_palette(nsfb);
+ 
+     return 0;
+ }

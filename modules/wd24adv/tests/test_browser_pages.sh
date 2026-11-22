@@ -42,10 +42,13 @@ rc=${rc:-0}
 grep -q 'stop no fb' "$ROOT/modules/wd24adv/tests/.browser-out" && ok || bad "missing"
 [ "$rc" != 0 ] && ok || bad "missing rc"
 rc=0
-sh "$BUILD" >"$ROOT/modules/wd24adv/tests/.browser-build" 2>&1 || rc=$?
-grep -q 'stop no linux fbdev surface' "$ROOT/modules/wd24adv/tests/.browser-build" && ok || bad "build stop"
+WD24X_NS_CHECK=1 sh "$BUILD" >"$ROOT/modules/wd24adv/tests/.browser-build" 2>&1 || rc=$?
 grep -q '170d89462442c286f80c0604f30e4c7f2a801265' "$ROOT/modules/wd24adv/tests/.browser-build" && ok || bad "pin"
-[ "$rc" = 2 ] && ok || bad "build rc"
+grep -q 'a287525eeafa4b9e721822670e1e03eeeef6b31c' "$ROOT/modules/wd24adv/tests/.browser-build" && ok || bad "nsfb pin"
+grep -q 'libnsfb-linux-fbdev.patch' "$ROOT/modules/wd24adv/tests/.browser-build" && ok || bad "patch"
+grep -q FBIOPUTCMAP "$ROOT/tools/wd24-browser/patches/libnsfb-linux-fbdev.patch" && ok || bad "cmap"
+grep -q '51d3ee85de73949483af79671fe9075a10e405e3' "$ROOT/tools/wd24-browser/patches/libnsfb-linux-fbdev.patch" && ok || bad "cite"
+[ "$rc" = 0 ] && ok || bad "build rc"
 rm -f "$ROOT/modules/wd24adv/tests/.browser-out" "$ROOT/modules/wd24adv/tests/.browser-build"
 
 echo "test_browser_pages: $pass passed, $fail failed"
