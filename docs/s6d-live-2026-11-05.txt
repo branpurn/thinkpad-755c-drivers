@@ -1,5 +1,5 @@
 S6d LIVE visual attempt — 2026-11-05 America/New_York (S6d floppy 6.18.57-tc755x)
-CF boot OFF; TEAC; Pop serial; Brandon watching then stepped away (t433u/t434u).
+CF boot OFF; TEAC; serial host; the owner watching then stepped away.
 
 Command (once):
   dmesg -c >/dev/null; insmod /tmp/wd24adv.ko dryrun=0 live=1 mode=640x480-8 trial=30 s6d=1 pattern=0; echo RC=$?
@@ -14,11 +14,11 @@ Result:
 
 Pre: font + fb loaded; /proc/fb empty; wd24adv not loaded
 Post: same — font + fb only; /proc/fb still 0; wd24adv not in lsmod
-Prompt: root@box:~# (idle)
+Prompt: serial host:~# (idle)
 
-Panel: Brandon said looked OK / bet nothing happened — consistent with refuse-before-write.
+Panel: the owner said looked OK / bet nothing happened — consistent with refuse-before-write.
 
-No trial restore needed (module never loaded). No further visual/s6d steps (t434u STOP).
+No trial restore needed (module never loaded). No further visual/s6d steps (stop).
 No CF writes.
 
 --- Box investigation 2026-11-05 (no further live) ---
@@ -48,7 +48,7 @@ No CF writes.
      unlocked → ENTRY, zero writes". Fresh-BIOS SR06 width is **U** in
      LIVE-TEST (proven locked only after wd90c24fb unload path).
 
-3. Proposed next live (Brandon watching; do NOT run until then):
+3. Proposed next live (the owner watching; do NOT run until then):
    A. Box first: add opt-in fix_sr06=1 — if width unlocked && SR06==0x0F,
       write SR06=0x0F once (S6 "L" relock idiom), re-check width locked,
       else refuse. Host test. Rebuild + XMODEM. (Do not auto-accept unlocked.)
@@ -61,7 +61,7 @@ No CF writes.
    wd90c24fb text=1+rmmod on a tree that has it) — not on this S6d floppy.
 
 --- fix_sr06 implemented on box 2026-11-05 ~12:04 America/New_York ---
-No XMODEM / no 755C insmod (Brandon away).
+No XMODEM / no 755C insmod (the owner is away).
 ko sha256 63dc2654e6ecc10dc996f09b258474cf4738ae38ef23bf7b12924140bb6b1595
 Host test_vga 70/0. Retry lines when he returns: see WD24ADV-NEXT-STAGE.md.
 
@@ -122,7 +122,7 @@ The READY command in WD24ADV-NEXT-STAGE intentionally used `pattern=0` to
 "avoid colour-bar path" so the first S6d visual proved arm/register alone.
 So no bars was correct for that command — not a wrong pattern id.
 
-What Brandon saw instead:
+What the owner saw instead:
   1. Mode set leaves VRAM without bars (pattern skipped).
   2. `s6d_arm` → `register_framebuffer` → fbcon binds (CONFIG_FRAMEBUFFER_CONSOLE=y,
      no DEFERRED_TAKEOVER).
@@ -149,7 +149,7 @@ account. Do not treat the proc-lock story as the cause.
   - `s6d_fbcon` (bool, default 1): `0` arms dual-window but skips
     `register_framebuffer` so bars/`pattern` stay for the trial window.
   - Docs: pattern is bool; no-overlap rule for /proc during visual; next LIVE
-    steps in WD24ADV-NEXT-STAGE.md (Brandon watching required).
+    steps in WD24ADV-NEXT-STAGE.md (the owner watching required).
 
 ko (restore-safe) sha256 d8b06a80695cb8bf47ad5b00ec628e8ce653b723c720303205e959f8a0c5b06c
 
@@ -400,7 +400,7 @@ Mid-run faults 15 switches 15 thrash 0 latched 0.
 SIGTERM 0. wait 0.
 Expiry 0, mismatches 0, in_text 1, armed 0, fb_reg 0.
 rmmod 0. The shell answered.
-The operator's photographs and the note t477u show digits 1 through 5
+The operator's photographs and the note show digits 1 through 5
 on the panel after a brief artifact. That is shape on the glass.
 It is not a hue measurement and it is not a keyboard result.
 

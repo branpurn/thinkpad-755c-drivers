@@ -1,6 +1,6 @@
 S6b live run, 2026-11-05 ~04:50-05:10 UTC (owner approval, watching at the screen)
 Module: sha256 c8137d98ebf73280e7889867088d4bb1ed64de15a2a4cf6b990daa42c5d4529a; tool 398ce9447a1644e78db770d64f07311d1dbfd98d8269af5e5400b7ea35618ba6
-Copy: box -> grok-bot-server -> Pop -> send1.sh (XMODEM 38400), shas matched on every hop and on the 755C.
+Copy: box -> relay host -> serial host -> send1.sh (XMODEM 38400), shas matched on every hop and on the 755C.
 Lines: one per call, plog each, no overlap, no retries.
   L1 X pids (Xfbdev 1192); L2 kill 1192; L3 text=1 + rmmod wd90c24fb RM=0; L4 Q=0;
   L5 G=c8137d98398ce944001 RC=0 (live load 46/224, mode 93/263, mismatches 0, S6b armed major 254);

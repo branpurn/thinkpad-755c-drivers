@@ -1,6 +1,6 @@
 S6c live run, 2026-11-05 04:07-04:17 UTC (owner approval, watching at the screen)
 Module: sha256 96a6b5273454187db8002c2db55d0ee318363b5f57d82cbfc713a583583af479 (commit 32bb82c)
-Copy: box -> grok-bot-server -> Pop ~/wd24adv-s6c.ko -> send1.sh (logger SIGSTOP/SIGCONT),
+Copy: box -> relay host -> serial host ~/wd24adv-s6c.ko -> send1.sh (logger SIGSTOP/SIGCONT),
   XMODEM 38400, remote sha256 matched.
 Lines: one per call, plog each, no overlap, no retries.
   L1 X pids (Xfbdev 1130); L2 kill 1130; L3 text=1 + rmmod wd90c24fb RM=0; L4 Q=0;

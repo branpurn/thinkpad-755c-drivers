@@ -32,7 +32,7 @@ RAM-shadow (wd90c24fb-style full-frame / timer upload) stays rejected.
 
 | | Path | Buildable now? | Proves | Risks |
 |---|---|---|---|---|
-| **A** | Keep the three symbols via `config/ksyms-keep.txt`, rebuild tc755x kernel, then **S6d**: real fbdev + fault-banked mmap (S6b dual-window under the hood), unaccelerated Xfbdev, then S7 ioctl accel | Export list + host tests yes; module needs new KDIR; **install/flash needs Brandon OK** | Design §3.3 / §6 item 1; stock Xfbdev on wd24adv | Kernel rebuild; livelock on spanning ops; fbcon bind during graphics |
+| **A** | Keep the three symbols via `config/ksyms-keep.txt`, rebuild tc755x kernel, then **S6d**: real fbdev + fault-banked mmap (S6b dual-window under the hood), unaccelerated Xfbdev, then S7 ioctl accel | Export list + host tests yes; module needs new KDIR; **install/flash needs the owner's OK** | Design §3.3 / §6 item 1; stock Xfbdev on wd24adv | Kernel rebuild; livelock on spanning ops; fbcon bind during graphics |
 | B | fbdev that reuses S6b once-mapped 64 KiB + SETWIN (no fault path) | Kernel side yes | Banking under fbdev node | **Xfbdev cannot drive explicit-bank devices** without X-side SETWIN before every draw; not stock TinyX |
 | C | Kernel CAPS/SUBMIT ioctl (FILL/COPY/MONO/HOSTCOL, engine S3–S5) + TinyX `wd24accel` without full linear mmap | Yes (headers + validator + host tests); no new exports | Accel desktop path | Screen pixmap still needs a CPU path (mmap or damage+HOSTCOL); alone is not stock Xfbdev |
 | D | Other | — | — | No better path found; damage+HOSTCOL-only is a shadow detour |
@@ -75,7 +75,7 @@ zap_vma_ptes
 Then on the box: `make kernel` (TRIM_KSYMS=1 uses the whitelist via
 `scripts/build-kernel.sh`). Confirm the three appear in
 `build/kernel-obj/Module.symvers`. **Do not install or flash the new bzImage
-on the 755C without Brandon’s OK.** Out-of-tree wd24adv then builds against
+on the 755C without the owner's OK.** Out-of-tree wd24adv then builds against
 that KDIR.
 
 fbcon: leave `CONFIG_FRAMEBUFFER_CONSOLE=y` / `CONFIG_FB=m` as today.
@@ -88,7 +88,7 @@ change.
 
 1. Box: host bank tests green; QEMU fault path + thrash latch; module loads
    against new KDIR; PII/scan/push-checked clean.
-2. Brandon OK for **kernel install** (new bzImage + modules) and separately
+2. The owner's OK for **kernel install** (new bzImage + modules) and separately
    for **S6d live**.
 3. Live: trial mode, short arm; controlled single-bank paints first; then a
    deliberate spanning write to confirm thrash latch fires cleanly (no hang);
@@ -100,7 +100,7 @@ change.
 
 ### Separate S6d floppy (box, 2026-11-05) — **BUILT** (Tier1+2+3)
 
-Brandon OK: separate floppy path (pt426u) + Tier1+2+3 drops (widget t426s1393).
+the owner's OK: separate floppy path + Tier1+2+3 drops.
 CF boot stays OFF. Recovery `tinycore-32-ram/out/{tc32.img,core.xz,busybox}`
 **untouched** (not replaced by S6d artifacts). Box did **not** burn media or
 touch the 755C / MBR.
@@ -124,17 +124,17 @@ Build scripts (tinycore-32-ram, separate from recovery mkfloppy):
 `boot/syslinux-s6d.cfg`.
 
 QEMU smoke (isapc/486/32M/nographic): kernel `6.18.57-tc755x`; rcS
-`tc32-s6d: noswap path` / `ready.`; ttyS0 getty → ash `root@box`.
+`tc32-s6d: noswap path` / `ready.`; ttyS0 getty → ash `serial host`.
 
-Stage for Pop-GNOME burn (later):
+Stage for serial-host burn (later):
 `/workspace/755c-research/out-s6d-exports/floppy/` —
 `tc755-s6d.img`, `core-s6d.xz`, `SHA256SUMS`, `README.md`, `SERIAL-MATRIX.md`,
-`SIZES.txt`, prior inventory/proposal notes. **ready-for-Pop-GNOME: YES**
-(burn from Pop only when Brandon asks; CF boot OFF).
+`SIZES.txt`, prior inventory/proposal notes. **ready-for-serial-host: YES**
+(burn from the serial host only when the owner asks; CF boot OFF).
 
 ### Kernel rebuild (box, 2026-11-05) — exports kept, **not installed**
 
-Rebuilt on the box after Brandon Proceed (pt414u). No 755C disk/boot writes.
+Rebuilt on the box after the owner proceeds. No 755C disk/boot writes.
 
 | Tree | Vermagic | KDIR / image | Three symbols in Module.symvers + `__ksymtab_*` |
 |---|---|---|---|
@@ -147,7 +147,7 @@ Link probe (box only, do not load on 755C until the new bzImage is installed):
 
 Staged copies + README: `/workspace/755c-research/out-s6d-exports/`.
 
-**Later Brandon OK required to:** copy `bzImage-6.18.57-tc755x` onto the 755C boot
+**Later the owner's OK required to:** copy `bzImage-6.18.57-tc755x` onto the 755C boot
 medium, install matching modules if needed, reboot into it, then any S6d live run.
 Until then OOT modules built against the new Module.symvers must not be insmod’d on
 the old running kernel (unknown symbol).
@@ -165,14 +165,14 @@ Likely **vgacon font-plane / text=1** residue from mode set and plane save
 around trials, not S6b banking left behind: S6b restore readbacks were clean
 and kill -9 ended in `release` → `end()`. Repeating glyph rows match plane-2
 font or character-map wrap (see earlier S3 plane-wrap notes in LIVE-TEST),
-which text=1 / vgacon are sensitive to. Confirm only if Brandon asks for a
+which text=1 / vgacon are sensitive to. Confirm only if the owner asks for a
 read-only font-plane compare.
 
-## Ready vs needs Brandon OK
+## Ready vs needs the owner's OK
 
-| Ready on box (no 755C) | Needs Brandon OK |
+| Ready on box (no 755C) | Needs the owner's OK |
 |---|---|
-| Docs + ksyms-keep + S6d bank tests; kernel rebuilt (exports OK); **tc755-s6d.img staged** (FAT free 3584; recovery core intact) | Pop-GNOME burn of `tc755-s6d.img`; then S6d live on 755C (CF boot OFF) |
+| Docs + ksyms-keep + S6d bank tests; kernel rebuilt (exports OK); **tc755-s6d.img staged** (FAT free 3584; recovery core intact) | serial-host burn of `tc755-s6d.img`; then S6d live on 755C (CF boot OFF) |
 | Later: S6d fbdev code once KDIR has exports | Any S6d live run; any Xfbdev on 755C |
 | S7 ioctl surface design (after S6d) | Live ioctl / accel runs |
 
@@ -196,15 +196,15 @@ read-only font-plane compare.
 6. **Non-visual** `insmod /tmp/font.ko` then `insmod /tmp/fb.ko` — FONT=0 FB=0; `lsmod` shows
    `fb` (used by 0) and `font` (used by fb). No `register_framebuffer`; panel unchanged.
 7. **STOP before load** — `s6d=1` calls `register_framebuffer` and **binds fbcon (visual)**.
-   Do not insmod with `s6d=1` unless Brandon is watching the panel.
+   Do not insmod with `s6d=1` unless the owner is watching the panel.
 
 ### READY FOR LIVE / ready for visual — exact next command
 
 **Superseded by "Recommended next LIVE" at the end of this file** (after the
 fix_sr06 PASS). Historical first-visual line used `pattern=0` on purpose to
-skip bars and prove arm/register only — that is why Brandon saw no colour bars.
+skip bars and prove arm/register only — that is why the owner saw no colour bars.
 
-Brandon watching the panel; `font`+`fb` already loaded; serial idle at `root@box:~#`.
+The owner watching the panel; `font`+`fb` already loaded; serial idle at the serial prompt.
 For **bars without fbcon wipe** use `pattern=1 s6d_fbcon=0 fix_sr06=1` (see end).
 For **full register/fbcon** use `pattern=1 s6d_fbcon=1 fix_sr06=1` and do not
 touch `/proc` until `RC=` returns.
@@ -213,9 +213,9 @@ Stop on thrash latch, register mismatch, trial restore fail, or any unexpected p
 
 ### Live attempt 2026-11-05 ~11:57 America/New_York — **FAILED RC=19**
 
-Exact command run once with Brandon watching. Refused at entry check:
+Exact command run once with the owner watching. Refused at entry check:
 `SR06 read 01 expected 00` (latch unlocked). Nothing written; no fbcon bind;
-`wd24adv` never stayed loaded. STOP pending Brandon (t434u); do not retry visual
+`wd24adv` never stayed loaded. STOP pending the owner; do not retry visual
 until SR06-lock precondition understood on this floppy boot.
 
 ### SR06 unlocked on S6d floppy — analysis (box, 2026-11-05)
@@ -229,7 +229,7 @@ entry” and S6 “already unlocked → ENTRY”.
 Prior S6/S6b/S6c lives started from **locked** text (after wd90c24fb unload or
 prior wd24adv relock). S6d floppy never had that path — latch left unlocked.
 
-**`fix_sr06` implemented on box (no XMODEM while Brandon away):**
+**`fix_sr06` implemented on box (no XMODEM while the owner is away):**
 - Param: `fix_sr06=1` — if load entry sees width unlocked and SR06 data==0x0F,
   write SR06=0x0F once (S6 L), verify width locked; else refuse as before.
 - Host `test_vga`: 70/0 (incl. 4F refuse without fix, load with fix, 48+fix refuse).

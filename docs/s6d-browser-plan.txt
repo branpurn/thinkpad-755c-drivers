@@ -33,13 +33,13 @@ Stop on the first failure. Do not start the next step.
    opens the fb, text console still the VGA driver until that open.
 2. Open the local page only. No network. Pass: the red, green, blue,
    and white blocks are visible, the PNG bands are visible, the GIF
-   and JPEG do not draw as empty boxes. Brandon looks at the panel
+   and JPEG do not draw as empty boxes. The owner looks at the panel
    for this line.
 3. `sh /tmp/fbhash.sh` while the page is up. Pass: one
    `WD24X-BROWSER fb <64 hex> 307200` line, then the s6d text with
    `faults 0`, `thrash 0`, and `mode letter` (this is 640x480, not
    13h). Record `accel`, `gate`, and `match`.
-4. Scroll to `end of page`. Brandon confirms the view moved. Run
+4. Scroll to `end of page`. The owner confirms the view moved. Run
    `fbhash.sh` again. Pass: the hash changed, faults still 0.
 5. Quit the browser so `/dev/fb0` closes. Pass: rmmod, then dmesg
    `live text: 0` and `mismatches 0`, and no `readback:` line.

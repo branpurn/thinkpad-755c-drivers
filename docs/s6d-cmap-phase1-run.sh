@@ -1,6 +1,6 @@
 #!/bin/sh
 # Phase 1 only: candidate default off. Does not start by being copied.
-# t479u: proceed with the default-off regression, then stop.
+# The owner: proceed with the default-off regression, then stop.
 # Do not pass s6d_cmap. Do not start a publish read or a set.
 # Do not set WD24X_MOCK on the target. An empty value uses /proc and /tmp.
 # Trial clock starts at insmod. No -ac. X uses -noreset.

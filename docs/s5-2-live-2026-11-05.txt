@@ -1,5 +1,5 @@
 S5 s5=2 (HOSTCOL) live run, 2026-11-05 UTC (2026-11-04 21:4x-22:0x EST)
-Approval: the owner, card t378s1179 "I'm at the screen watching, run s5=2" (this run only).
+Approval: the owner "I'm at the screen watching, run s5=2" (this run only).
 Module: wd24adv.ko sha256 1c7b21b099dee110bcb8a913d495abeea722cc993257ed0b049bb4127c1885f1
 (commit 3059401), sent with tc32-gfx send-file.sh, logger paused; remote sha matched.
 Lines: docs/WD24ADV-LIVE-TEST.md "S5 s5=2" L1-L10, one per call, each after the prompt
@@ -32,7 +32,7 @@ PHOTO (the owner: "Probably what you wanted") vs expected frame:
   row, which is why the dark band looks sheared.
 
 == commands.log ==
-2026-11-04 21:48:32 EST  S5 s5=2: send-file wd24adv-s5h.ko -> /tmp/wd24adv.ko done, sha 1c7b21b0 match (approval t378s1179)
+2026-11-04 21:48:32 EST  S5 s5=2: send-file wd24adv-s5h.ko -> /tmp/wd24adv.ko done, sha 1c7b21b0 match
 2026-11-04 21:48:32 EST  S5 s5=2 L1
 2026-11-04 21:48:33 EST  slow: pidof Xfbdev; ps | grep -E "startx|Xfbdev|jwm|rxvt" CR
 2026-11-04 21:48:50 EST  S5 s5=2 L2

@@ -1,6 +1,6 @@
 # First test for the colormap candidate
 
-t479u authorized the default-off regression and a recovery check before
+The owner authorized the default-off regression and a recovery check before
 any later step. That is phase 1 only, and that one trial passed. The
 script checks the file hash itself. There is no prompt to type the hash.
 Phase 2 and phase 3 scripts exist and are not a hardware authorization.
