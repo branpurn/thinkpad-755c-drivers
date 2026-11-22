@@ -2978,9 +2978,16 @@ static int s6d_setup(void)
 	var->xres_virtual = WD24S6D_XRES;
 	var->yres_virtual = WD24S6D_YRES;
 	var->bits_per_pixel = WD24S6D_BPP;
-	var->red.offset = 0; var->red.length = 8;
-	var->green.offset = 0; var->green.length = 8;
-	var->blue.offset = 0; var->blue.length = 8;
+	/*
+	 * 6-bit VGA RAMDAC. On 6.18 the channel length is that width;
+	 * wd90c24fb publishes 6. An 8 here would claim an 8-bit DAC.
+	 */
+	var->red.offset = 0;
+	var->red.length = 6;
+	var->green.offset = 0;
+	var->green.length = 6;
+	var->blue.offset = 0;
+	var->blue.length = 6;
 	var->activate = FB_ACTIVATE_NOW;
 	var->height = -1;
 	var->width = -1;

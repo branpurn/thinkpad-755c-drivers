@@ -165,5 +165,40 @@ rc=$(WD24X_DESKTOP_ENV=$ROOT/docs/s6d-desktop.env PATH="/bin:/usr/bin" \
 grep -q "stop candidate unpinned" "$ROOT/modules/wd24adv/tests/.desk-unpinned" && ok || bad "unpinned"
 [ "$rc" != 0 ] && ok || bad "unpinned rc"
 
+setup "$ROOT/modules/wd24adv/tests/.desk-extract"
+M=$ROOT/modules/wd24adv/tests/.desk-extract
+rm -rf "$M/tmp/wd24-xfbdev" "$M/tmp/xfb-prefix"
+cat > "$M/tmp/busybox-wd24" <<'EOF'
+#!/bin/sh
+# tar -C dir -xzof archive. Create only the archive this call names.
+case "$4" in
+*xkb*)
+	mkdir -p "$WD24X_MOCK/tmp/xfb-prefix/bin"
+	cat > "$WD24X_MOCK/tmp/xfb-prefix/bin/xkbcomp" <<'E2'
+#!/bin/sh
+exit 0
+E2
+	chmod 755 "$WD24X_MOCK/tmp/xfb-prefix/bin/xkbcomp"
+	;;
+*)
+	mkdir -p "$WD24X_MOCK/tmp/wd24-xfbdev"
+	cat > "$WD24X_MOCK/tmp/wd24-xfbdev/Xfbdev" <<'E2'
+#!/bin/sh
+echo "$*" >> "$WD24X_MOCK/x.args"
+exec /bin/sleep 60
+E2
+	chmod 755 "$WD24X_MOCK/tmp/wd24-xfbdev/Xfbdev"
+	;;
+esac
+exit 0
+EOF
+chmod 755 "$M/tmp/busybox-wd24"
+rc=$(run "$M")
+grep -q "WD24X-DESKTOP-RUN done" "$M/out" && ok || bad "extract done"
+[ "$rc" = 0 ] && ok || bad "extract rc"
+[ ! -e "$M/tmp/wd24-xfbdev" ] && ok || bad "X extract removed"
+[ ! -e "$M/tmp/xfb-prefix" ] && ok || bad "xkb extract removed"
+[ -x "$ROOT/modules/wd24adv/tests/.desk-ok/tmp/wd24-xfbdev/Xfbdev" ] && ok || bad "preexisting kept"
+
 echo "test_desktop_run: $pass passed, $fail failed"
 [ "$fail" = 0 ]

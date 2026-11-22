@@ -13,6 +13,8 @@ P=${WD24X_MOCK:-}
 xpid=
 cpid=
 xstarted=
+xextracted=
+xkbextracted=
 owned=
 finishing=
 cleanup_rc=0
@@ -66,6 +68,12 @@ pinned() {
 
 stop() {
 	echo "WD24X-DESKTOP-RUN stop $1"
+	if [ -n "$xextracted" ]; then
+		rm -rf "$P/tmp/wd24-xfbdev"
+	fi
+	if [ -n "$xkbextracted" ]; then
+		rm -rf "$P/tmp/xfb-prefix"
+	fi
 	exit 1
 }
 
@@ -105,6 +113,12 @@ own_cleanup() {
 	fi
 	if [ -n "$xstarted" ] && [ "$cleanup_rc" = 0 ]; then
 		rm -f "$P/tmp/.X1-lock" "$P/tmp/.X11-unix/X1"
+	fi
+	if [ -n "$xextracted" ]; then
+		rm -rf "$P/tmp/wd24-xfbdev"
+	fi
+	if [ -n "$xkbextracted" ]; then
+		rm -rf "$P/tmp/xfb-prefix"
 	fi
 	if [ -r "$P/proc/wd24adv/live" ]; then
 		echo "WD24X-DESKTOP-RUN live"
@@ -302,9 +316,11 @@ if grep -q '^wd90c24fb ' "$P/proc/modules" 2>/dev/null; then
 fi
 
 if [ ! -x "$P/tmp/wd24-xfbdev/Xfbdev" ]; then
+	xextracted=1
 	"$P$WD24X_BUSYBOX" tar -C "$P/tmp" -xzof "$P$WD24X_XFBDEV_TGZ" || stop "extract X"
 fi
 if [ ! -x "$P/tmp/xfb-prefix/bin/xkbcomp" ]; then
+	xkbextracted=1
 	"$P$WD24X_BUSYBOX" tar -C "$P/tmp" -xzof "$P$WD24X_XKB_TGZ" || stop "extract xkb"
 fi
 hash_ok "$P/tmp/wd24-xfbdev/Xfbdev" "$WD24X_XFBDEV_BIN_SHA" || stop "X hash"

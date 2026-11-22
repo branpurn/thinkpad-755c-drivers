@@ -64,7 +64,12 @@ static inline int wd24x_xsetup_screen(const uint8_t *body, unsigned blen,
 	return 0;
 }
 
-/* QueryColors request, pixels 0..n-1. Returns the byte count or -1. */
+/*
+ * QueryColors request. The protocol has no count field: after the
+ * colormap, each pixel is a CARD32. A count stored at byte 8 is read
+ * as pixel 0. For n = 256 that value is 256, and a 256-entry map
+ * returns BadValue (error 2).
+ */
 static inline int wd24x_xquery_colors(uint8_t *dst, unsigned cap,
 				      uint32_t cmap, unsigned n)
 {
@@ -72,17 +77,44 @@ static inline int wd24x_xquery_colors(uint8_t *dst, unsigned cap,
 
 	if (!dst || n == 0 || n > 256)
 		return -1;
-	bytes = 12u + n * 4u;
+	bytes = 8u + n * 4u;
 	if (bytes > cap)
 		return -1;
 	memset(dst, 0, bytes);
 	dst[0] = 91;
 	wd24x_xp_put16(dst + 2, (uint16_t)(bytes / 4u));
 	wd24x_xp_put32(dst + 4, cmap);
-	wd24x_xp_put16(dst + 8, (uint16_t)n);
 	for (i = 0; i < n; i++)
-		wd24x_xp_put32(dst + 12 + i * 4, i);
+		wd24x_xp_put32(dst + 8 + i * 4, i);
 	return (int)bytes;
+}
+
+/* What the server does with the request. 0 if every pixel is in range. */
+static inline int wd24x_xquery_entries(const uint8_t *req, unsigned len,
+				       unsigned entries, unsigned *npix,
+				       uint32_t *first, uint32_t *bad)
+{
+	unsigned n, i;
+	uint16_t words;
+
+	if (!req || !npix || !first || !bad || len < 8 || req[0] != 91)
+		return -1;
+	words = wd24x_xp_get16(req + 2);
+	if ((unsigned)words * 4u > len || words < 2)
+		return -1;
+	n = ((unsigned)words * 4u - 8u) / 4u;
+	*npix = n;
+	*first = wd24x_xp_get32(req + 8);
+	*bad = 0;
+	for (i = 0; i < n; i++) {
+		uint32_t px = wd24x_xp_get32(req + 8 + i * 4);
+
+		if (px >= entries) {
+			*bad = px;
+			return -1;
+		}
+	}
+	return 0;
 }
 
 /*

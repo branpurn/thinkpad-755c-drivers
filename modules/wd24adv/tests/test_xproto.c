@@ -34,11 +34,32 @@ int main(void)
 	  "screen fields");
 
 	n = wd24x_xquery_colors(req, sizeof req, 0x22, 256);
-	T(n == 12 + 256 * 4, "query size");
-	T(req[0] == 91 && wd24x_xp_get16(req + 2) == (12 + 256 * 4) / 4, "opcode");
-	T(wd24x_xp_get32(req + 4) == 0x22 && wd24x_xp_get16(req + 8) == 256, "cmap n");
-	T(wd24x_xp_get32(req + 12) == 0 && wd24x_xp_get32(req + 12 + 255 * 4) == 255,
+	T(n == 8 + 256 * 4, "query size");
+	T(req[0] == 91 && wd24x_xp_get16(req + 2) == (8 + 256 * 4) / 4, "opcode");
+	T(wd24x_xp_get32(req + 4) == 0x22, "cmap");
+	T(wd24x_xp_get32(req + 8) == 0 && wd24x_xp_get32(req + 8 + 255 * 4) == 255,
 	  "pixels");
+	{
+		unsigned npix = 0;
+		uint32_t first = 99, bad = 0;
+		uint8_t old[12 + 4];
+
+		T(wd24x_xquery_entries(req, (unsigned)n, 256, &npix, &first,
+				       &bad) == 0 && npix == 256 && first == 0,
+		  "256-entry map accepts 0..255");
+		/*
+		 * The old layout stored the count at byte 8. The server
+		 * reads that as pixel 0, value 256, which a 256-entry
+		 * PseudoColor map rejects with BadValue.
+		 */
+		memset(old, 0, sizeof(old));
+		old[0] = 91;
+		wd24x_xp_put16(old + 2, (12 + 4) / 4);
+		wd24x_xp_put16(old + 8, 256);
+		T(wd24x_xquery_entries(old, sizeof(old), 256, &npix, &first,
+				       &bad) < 0 && first == 256 && bad == 256,
+		  "count-as-pixel is BadValue");
+	}
 
 	memset(rep, 0, sizeof rep);
 	rep[0] = 1;
