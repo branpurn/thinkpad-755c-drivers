@@ -91,8 +91,9 @@ programmed fill, then those bytes are put back. Pass is
 A timeout after the start does not touch video memory and does not
 fall back to the CPU. The module stays loaded until a power cycle,
 the same rule as the S4 one-shot. A refusal before the start does
-fall back to CPU stores. Glyphs stay on the CPU: the S5 guard accepts
-only its canned host words, not an arbitrary bitmap.
+fall back to CPU stores. Glyphs stay on the CPU. `docs/WD90C24.md`
+records why: the S5 guard's host words are four pattern ids, not a
+glyph bitmap.
 
 fbcon scroll uses that copy when `accel=1` is still on after the gate
 (`FBINFO_HWACCEL_COPYAREA`). `ypanstep` stays 0: the S4 sequence does
