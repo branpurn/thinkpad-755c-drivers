@@ -115,6 +115,17 @@ A span microbench on the same qemu `-cpu 486` binary, 2000 spans
 checked equal first: base 790 us, unroll 607 us. That is the span
 loop only.
 
+`unroll` also rewrites `R_DrawFuzzColumn` and `R_DrawTranslatedColumn`
+the same way. Fuzz still steps `fuzzpos` once per pixel, including the
+wrap at `FUZZTABLE`. On qemu `-cpu 486`, 2000 calls of 48 pixels:
+fuzz base 387 us, unroll 276 us, one framebuffer hash
+`1128849253`. Translated column base 292 us, unroll 223 us, hash
+`2518251749`. The base and unrolled hashes matched. That is not a
+755C timedemo. `demo1.wad` is not in this environment, so a full
+demo framebuffer was not replayed. `R_MapPlane` and `R_RenderSegLoop`
+call the drawers above. `FixedDiv` keeps the overflow test and the
+64-bit divide. `detail=low` stays off.
+
 ## Other engines
 
 Stay on doomgeneric (linuxdoom 1.10 C, GPL-2). Do not swap the engine.

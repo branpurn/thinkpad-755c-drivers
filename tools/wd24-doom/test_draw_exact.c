@@ -110,10 +110,86 @@ int main(void)
 		if (memcmp(span_a, span_b, (size_t)sn) != 0)
 			fails++;
 	}
+	{
+		enum { FT = 50, HH = 64 };
+		int fuzz_a = 0, fuzz_b = 0;
+		int foff[FT];
+		uint8_t map[8 * 256];
+		uint8_t fa[W * HH], fb[W * HH];
+		uint8_t xlat[256];
+		int k;
+
+		for (k = 0; k < FT; k++)
+			foff[k] = (k & 1) ? 1 : -1;
+		for (k = 0; k < 8 * 256; k++)
+			map[k] = (uint8_t)(k * 5);
+		for (k = 0; k < 256; k++)
+			xlat[k] = (uint8_t)(255 - k);
+		for (k = 0; k < W * HH; k++)
+			fa[k] = fb[k] = (uint8_t)(k * 9);
+		for (i = 0; i < 500; i++) {
+			int count = i % 40;
+			int n = count + 1;
+			int x = 1 + (i % (W - 2));
+			int y = i % (HH - n);
+			uint8_t *da = fa + y * W + x;
+			uint8_t *db = fb + y * W + x;
+			int left, frac, step;
+
+			fuzz_a = fuzz_b = i % FT;
+			for (k = 0; k < n; k++) {
+				da[k * W] = map[6 * 256 + da[k * W + foff[fuzz_a]]];
+				if (++fuzz_a == FT)
+					fuzz_a = 0;
+			}
+			left = n;
+			while (left >= 4) {
+				int t;
+				for (t = 0; t < 4; t++) {
+					db[0] = map[6 * 256 + db[foff[fuzz_b]]];
+					if (++fuzz_b == FT)
+						fuzz_b = 0;
+					db += W;
+				}
+				left -= 4;
+			}
+			while (left--) {
+				db[0] = map[6 * 256 + db[foff[fuzz_b]]];
+				if (++fuzz_b == FT)
+					fuzz_b = 0;
+				db += W;
+			}
+			if (memcmp(fa, fb, sizeof fa) != 0 || fuzz_a != fuzz_b)
+				fails++;
+			frac = 0x10000 + i;
+			step = 0x8000;
+			for (k = 0; k < n; k++) {
+				fa[k] = map[xlat[tex[(frac >> 16) & 127]]];
+				frac += step;
+			}
+			frac = 0x10000 + i;
+			left = n;
+			k = 0;
+			while (left >= 4) {
+				int t;
+				for (t = 0; t < 4; t++) {
+					fb[k++] = map[xlat[tex[(frac >> 16) & 127]]];
+					frac += step;
+				}
+				left -= 4;
+			}
+			while (left--) {
+				fb[k++] = map[xlat[tex[(frac >> 16) & 127]]];
+				frac += step;
+			}
+			if (memcmp(fa, fb, (size_t)n) != 0)
+				fails++;
+		}
+	}
 	if (fails) {
 		printf("test_draw_exact: %d mismatches\n", fails);
 		return 1;
 	}
-	printf("test_draw_exact: 8000 loops matched\n");
+	printf("test_draw_exact: column span fuzz translated matched\n");
 	return 0;
 }

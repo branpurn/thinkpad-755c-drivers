@@ -16,7 +16,7 @@ fi
 # WD24X_DOOM_FAST empty keeps this command line. omitfp, direct, unroll,
 # or all add the measured i486 opts. direct and unroll rewrite copies
 # of i_video.c and r_draw.c; the fetched pin is not edited.
-# unroll covers R_DrawColumn and R_DrawSpan. Low detail is separate:
+# unroll covers column, span, fuzz, and translated column. Low detail is separate:
 # WD24X_DOOM_DETAIL=low (not the default, and not part of FAST=all).
 FAST=${WD24X_DOOM_FAST:-}
 case "$FAST" in

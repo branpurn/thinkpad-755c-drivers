@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # Copy two doomgeneric sources and apply the opt-in fast edits.
 # direct: I_FinishUpdate does not copy when the index frame is already
-#         the 320x200 buffer. unroll: R_DrawColumn and R_DrawSpan write
-#         four pixels per trip, same pixels as the original do/while.
+#         the 320x200 buffer. unroll: column, span, fuzz, and translated
+#         column write four pixels per trip, same pixels as the do/while.
 import pathlib
 import sys
 
@@ -101,6 +101,76 @@ span_new = """\
 	}
     }
 """
+fuzz_old = """\
+    do 
+    {
+	// Lookup framebuffer, and retrieve
+	//  a pixel that is either one column
+	//  left or right of the current one.
+	// Add index from colormap to index.
+	*dest = colormaps[6*256+dest[fuzzoffset[fuzzpos]]]; 
+
+	// Clamp table lookup index.
+	if (++fuzzpos == FUZZTABLE) 
+	    fuzzpos = 0;
+	
+	dest += SCREENWIDTH;
+
+	frac += fracstep; 
+    } while (count--); 
+"""
+fuzz_body = """\
+	*dest = colormaps[6*256+dest[fuzzoffset[fuzzpos]]];
+	if (++fuzzpos == FUZZTABLE)
+	    fuzzpos = 0;
+	dest += SCREENWIDTH;
+	frac += fracstep;
+"""
+fuzz_new = """\
+    {
+	int left = count + 1;
+
+	while (left >= 4) {
+""" + (fuzz_body * 4) + """\
+	    left -= 4;
+	}
+	while (left--) {
+""" + fuzz_body + """\
+	}
+    }
+"""
+xlat_old = """\
+    do 
+    {
+	// Translation tables are used
+	//  to map certain colorramps to other ones,
+	//  used with PLAY sprites.
+	// Thus the "green" ramp of the player 0 sprite
+	//  is mapped to gray, red, black/indigo. 
+	*dest = dc_colormap[dc_translation[dc_source[frac>>FRACBITS]]];
+	dest += SCREENWIDTH;
+	
+	frac += fracstep; 
+    } while (count--); 
+"""
+xlat_body = """\
+	*dest = dc_colormap[dc_translation[dc_source[frac>>FRACBITS]]];
+	dest += SCREENWIDTH;
+	frac += fracstep;
+"""
+xlat_new = """\
+    {
+	int left = count + 1;
+
+	while (left >= 4) {
+""" + (xlat_body * 4) + """\
+	    left -= 4;
+	}
+	while (left--) {
+""" + xlat_body + """\
+	}
+    }
+"""
 
 iv = (src / "i_video.c").read_text()
 rd = (src / "r_draw.c").read_text()
@@ -140,7 +210,12 @@ if "unroll" in mode or mode == "all":
         sys.exit("r_draw.c column loop changed")
     if rd.count(span_old) != 1:
         sys.exit("r_draw.c span loop changed")
+    if rd.count(fuzz_old) != 1:
+        sys.exit("r_draw.c fuzz loop changed")
+    if rd.count(xlat_old) != 1:
+        sys.exit("r_draw.c translated loop changed")
     rd = rd.replace(col_old, col_new, 1).replace(span_old, span_new, 1)
+    rd = rd.replace(fuzz_old, fuzz_new, 1).replace(xlat_old, xlat_new, 1)
 (dst / "i_video.c").write_text(iv)
 (dst / "r_draw.c").write_text(rd)
 print("fast-src", mode)
