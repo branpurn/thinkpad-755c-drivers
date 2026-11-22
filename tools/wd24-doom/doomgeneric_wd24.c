@@ -21,6 +21,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/time.h>
+#include <time.h>
 
 #include <linux/fb.h>
 
@@ -30,6 +31,7 @@
 #include "wd24x-doom-keys.h"
 #include "wd24x-doom-pick.h"
 #include "wd24x-doom-present.h"
+#include "wd24x-doom-time.h"
 #include "wd24x-tty-own.h"
 #include "../../modules/wd24adv/wd24adv_ioctl.h"
 
@@ -51,6 +53,38 @@ static unsigned char pending_up;
 static volatile sig_atomic_t got_sig;
 static int bars_sent;
 static int sum_frames;
+static struct wd24x_doom_time doom_time;
+
+static int time_of(void)
+{
+	const char *e = getenv("WD24X_DOOM_TIME");
+	long n;
+
+	if (!e || !*e || e[0] == '0')
+		return 0;
+	n = strtol(e, NULL, 10);
+	if (n <= 0 || n > 10000)
+		return 30;
+	return (int)n;
+}
+
+static uint64_t mono_ns(void)
+{
+	struct timespec ts;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+		return 0;
+	return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+static void time_line(void)
+{
+	printf("WD24X-DOOM time frames %u render_ms %llu present_ms %llu palette_ms %llu\n",
+	       doom_time.frames,
+	       (unsigned long long)wd24x_doom_time_ms(doom_time.render_ns),
+	       (unsigned long long)wd24x_doom_time_ms(doom_time.present_ns),
+	       (unsigned long long)wd24x_doom_time_ms(doom_time.palette_ns));
+}
 
 static int cap_of(void)
 {
@@ -101,6 +135,8 @@ static void report(void)
 	wd24x_tty_own_end(&tty_own);
 	printf("WD24X-DOOM frames %u index 0x%08x present 0x%08x\n",
 	       frames, index_sum, present_sum);
+	if (doom_time.every)
+		time_line();
 	printf("WD24X-DOOM playpal0 %u %u %u\n",
 	       (unsigned)colors[0].r, (unsigned)colors[0].g,
 	       (unsigned)colors[0].b);
@@ -205,6 +241,7 @@ void DG_Init(void)
 	const char *dev;
 
 	frame_cap = cap_of();
+	wd24x_doom_time_init(&doom_time, (unsigned)time_of());
 	present_mode = wd24x_doom_present_mode(present_s);
 	atexit(report);
 	printf("WD24X-DOOM render 320 200 index\n");
@@ -260,6 +297,7 @@ void DG_Init(void)
 void DG_DrawFrame(void)
 {
 	const uint8_t *idx;
+	uint64_t t_enter = 0, t_pal = 0, t_left = 0;
 
 	restore_and_signal();
 	if (!DG_ScreenBuffer)
@@ -267,8 +305,12 @@ void DG_DrawFrame(void)
 	idx = (const uint8_t *)DG_ScreenBuffer;
 	frames++;
 	index_sum = fnv(idx, WD24X_DOOM_SRC_W * WD24X_DOOM_SRC_H);
+	if (doom_time.every)
+		t_enter = mono_ns();
 	if (fb_fd >= 0 && wd24x_doom_palette_put(getenv("WD24X_DOOM_PALETTE")))
 		put_playpal();
+	if (doom_time.every)
+		t_pal = mono_ns();
 	if (fb_ioctl) {
 		struct wd24s6d_present req;
 
@@ -305,6 +347,13 @@ void DG_DrawFrame(void)
 	}
 	if (sum_frames)
 		present_sum = fnv(present, WD24X_DOOM_FRAME);
+	if (doom_time.every) {
+		t_left = mono_ns();
+		if (!t_pal)
+			t_pal = t_enter;
+		if (wd24x_doom_time_frame(&doom_time, t_enter, t_pal, t_left))
+			time_line();
+	}
 	if (frame_cap && (int)frames >= frame_cap) {
 		report();
 		exit(0);

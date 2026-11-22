@@ -3,6 +3,7 @@
 #include <string.h>
 #include "wd24x-doom-keys.h"
 #include "wd24x-doom-present.h"
+#include "wd24x-doom-time.h"
 
 static int fails, passes;
 #define T(c, w) do { if (c) passes++; else { fails++; printf("FAIL %s\n", w); } } while (0)
@@ -124,6 +125,22 @@ int main(void)
 	T(wd24x_keys_byte(&keys, 'w', &dk) && dk == 'W', "letter");
 	T(wd24x_keys_byte(&keys, '\r', &dk) && dk == WD24X_KEY_ENTER, "enter");
 	T(fnv(src, sizeof src) != 0, "src nonzero");
+
+	{
+		struct wd24x_doom_time tm;
+		int i;
+
+		wd24x_doom_time_init(&tm, 2);
+		T(wd24x_doom_time_frame(&tm, 1000, 1000, 5000) == 0, "first");
+		T(tm.present_ns == 4000 && tm.render_ns == 0, "present only");
+		T(wd24x_doom_time_frame(&tm, 8000, 9000, 10000) == 1, "every 2");
+		T(tm.render_ns == 3000 && tm.palette_ns == 1000 &&
+		  tm.present_ns == 5000, "split");
+		T(wd24x_doom_time_ms(2500000ull) == 2, "ms");
+		wd24x_doom_time_init(&tm, 0);
+		for (i = 0; i < 5; i++)
+			T(wd24x_doom_time_frame(&tm, 1, 1, 1) == 0, "off");
+	}
 
 	printf("test_doom_present: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;
