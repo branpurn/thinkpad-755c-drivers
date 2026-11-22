@@ -72,6 +72,13 @@ EOF
 if [ "${1:-}" = 15 ] || [ "${1:-}" = 20 ]; then
 	/bin/sleep 0.2
 fi
+if [ "${1:-}" = 10 ]; then
+	printf '%s\n' 's6d: armed 1 active 1 stopping 0 busy 0 fb_reg 1 node 0' \
+		'fbcon_param 1 bind_param 0' \
+		'faults 15 switches 15 thrash 0 latched 0 mapped_base 0x0' \
+		'why -' \
+		'cmap_param 1 published 1 frozen 1' > "$WD24X_MOCK/proc/wd24adv/s6d"
+fi
 if [ "${1:-}" = 150 ]; then
 	printf '%s\n' 'wd24adv live: trial expiry -> 0' \
 		'port writes: data 1, index 1; readback mismatches 0; in_text 1; trial -' \
@@ -100,13 +107,7 @@ exit 0
 EOF
 	cat > "$M/tmp/wd24x-xcmp" <<'EOF'
 #!/bin/sh
-# Stand-in for s6d_fb_release after the fb fd closes: frozen, busy clear,
-# published left set.
-printf '%s\n' 's6d: armed 1 active 1 stopping 0 busy 0 fb_reg 1 node 0' \
-	'fbcon_param 1 bind_param 0' \
-	'faults 15 switches 15 thrash 0 latched 0 mapped_base 0x0' \
-	'why -' \
-	'cmap_param 1 published 1 frozen 1' > "$WD24X_MOCK/proc/wd24adv/s6d"
+# xcmp does not open /dev/fb0. X still holds it: busy 1, frozen 0.
 echo "WD24X-XCMAP entries 256 shift10 1"
 i=0
 while [ "$i" -lt 256 ]; do
@@ -160,11 +161,15 @@ grep -q "WD24X-DESKTOP-RUN cmap match 256" "$M/out" && ok || bad "match"
 grep -q "WD24X-GLYPH shadow 640x480x8 marks 5 match 5 ctrl 1" "$M/out" && ok || bad "glyph"
 grep -q "WD24X-XCMAP entries 256 shift10 1" "$M/tmp/wd24x-xcmp.out" && ok || bad "xcmp"
 grep -q "WD24X-CMAP-CACHE entries 256 shift10 1" "$M/tmp/wd24x-cmap-cache.out" && ok || bad "cache"
-grep -q "cmap_param 1 published 1 frozen 1" "$M/out" && ok || bad "frozen"
+grep -q "cmap_param 1 published 1 frozen 0" "$M/out" && ok || bad "live frozen"
+grep -q " busy 1 " "$M/out" && ok || bad "live busy"
+grep -q "cmap_param 1 published 1 frozen 1" "$M/out" && ok || bad "closed frozen"
+grep -q " busy 0 " "$M/out" && ok || bad "closed busy"
 awk '
 /WD24X-GLYPH shadow/ { g = NR }
-/cmap_param 1 published 1 frozen 1/ { f = NR }
-END { exit !(g && f && g < f) }
+/cmap_param 1 published 1 frozen 0/ { z0 = NR }
+/cmap_param 1 published 1 frozen 1/ { if (!z1) z1 = NR }
+END { exit !(g && z0 && z1 && g < z0 && z0 < z1) }
 ' "$M/out" && ok || bad "order"
 grep -q -- "-nolisten tcp" "$M/x.args" && ok || bad "x flags"
 grep -q -- "-ac" "$M/x.args" && bad "ac" || ok
@@ -173,6 +178,12 @@ setup "$ROOT/modules/wd24adv/tests/.desk-open"
 M=$ROOT/modules/wd24adv/tests/.desk-open
 cat > "$M/tmp/wd24x-xcmp" <<'EOF'
 #!/bin/sh
+# Wrong snapshot: frozen while X still holds the fb.
+printf '%s\n' 's6d: armed 1 active 1 stopping 0 busy 0 fb_reg 1 node 0' \
+	'fbcon_param 1 bind_param 0' \
+	'faults 15 switches 15 thrash 0 latched 0 mapped_base 0x0' \
+	'why -' \
+	'cmap_param 1 published 1 frozen 1' > "$WD24X_MOCK/proc/wd24adv/s6d"
 echo "WD24X-XCMAP entries 256 shift10 1"
 i=0
 while [ "$i" -lt 256 ]; do
@@ -185,6 +196,28 @@ chmod 755 "$M/tmp/wd24x-xcmp"
 rc=$(run "$M")
 grep -q "WD24X-DESKTOP-RUN stop session" "$M/out" && ok || bad "still open"
 [ "$rc" != 0 ] && ok || bad "still open rc"
+
+setup "$ROOT/modules/wd24adv/tests/.desk-busy"
+M=$ROOT/modules/wd24adv/tests/.desk-busy
+cat > "$M/tmp/wd24x-xcmp" <<'EOF'
+#!/bin/sh
+printf '%s\n' 's6d: armed 1 active 1 stopping 0 busy 0 fb_reg 1 node 0' \
+	'fbcon_param 1 bind_param 0' \
+	'faults 15 switches 15 thrash 0 latched 0 mapped_base 0x0' \
+	'why -' \
+	'cmap_param 1 published 1 frozen 0' > "$WD24X_MOCK/proc/wd24adv/s6d"
+echo "WD24X-XCMAP entries 256 shift10 1"
+i=0
+while [ "$i" -lt 256 ]; do
+	echo "$i 1 2 3"
+	i=$((i + 1))
+done
+exit 0
+EOF
+chmod 755 "$M/tmp/wd24x-xcmp"
+rc=$(run "$M")
+grep -q "WD24X-DESKTOP-RUN stop session" "$M/out" && ok || bad "busy clear"
+[ "$rc" != 0 ] && ok || bad "busy clear rc"
 
 setup "$ROOT/modules/wd24adv/tests/.desk-mis"
 M=$ROOT/modules/wd24adv/tests/.desk-mis

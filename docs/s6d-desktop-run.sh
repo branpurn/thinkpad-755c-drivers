@@ -200,14 +200,35 @@ s6d_after() {
 	return 0
 }
 
-session_ok() {
-	# s6d_fb_release (user != 0) sets s6d_cmap_frozen and clears
-	# s6d_busy. It does not clear published. xcmp does not open
-	# /dev/fb0. The close is the fb fd (Xfbdev fbdevCardFini:
-	# munmap, then close). A later PUT is refused while frozen.
-	# Thrash stays 0. busy is not required: the release cleared it.
+session_live() {
+	# Xfbdev still holds /dev/fb0. s6d_fb_open set busy. Release has
+	# not run, so frozen is 0. xcmp does not open /dev/fb0.
 	s6d=$(cat "$P/proc/wd24adv/s6d" 2>/dev/null) || return 1
 	echo "$s6d"
+	case "$s6d" in
+	*" busy 1 "*) ;;
+	*) return 1 ;;
+	esac
+	case "$s6d" in
+	*"cmap_param 1 published 1 frozen 0"*) ;;
+	*) return 1 ;;
+	esac
+	case "$s6d" in
+	*" thrash 0 latched 0 "*) ;;
+	*) return 1 ;;
+	esac
+	return 0
+}
+
+session_closed() {
+	# After X exits, s6d_fb_release(user != 0) sets frozen and clears
+	# busy. It does not clear published. This is before rmmod.
+	s6d=$(cat "$P/proc/wd24adv/s6d" 2>/dev/null) || return 1
+	echo "$s6d"
+	case "$s6d" in
+	*" busy 0 "*) ;;
+	*) return 1 ;;
+	esac
 	case "$s6d" in
 	*"cmap_param 1 published 1 frozen 1"*) ;;
 	*) return 1 ;;
@@ -390,7 +411,7 @@ done
 if ! have_line "$P/tmp/wd24x-cmap-cache.out" "WD24X-CMAP-CACHE entries 256 shift10 1"; then
 	fail "cmap cache"
 fi
-if ! session_ok; then
+if ! session_live; then
 	fail "session"
 fi
 if ! cmap_match "$P/tmp/wd24x-cmap-cache.out" "$P/tmp/wd24x-xcmp.out"; then
@@ -415,6 +436,9 @@ if [ -n "$xstarted" ]; then
 	rm -f "$P/tmp/.X1-lock" "$P/tmp/.X11-unix/X1"
 fi
 xstarted=
+if ! session_closed; then
+	fail "closed"
+fi
 
 # 15s plus 20s are already slept. 150s more passes trial=180.
 sleep 150
