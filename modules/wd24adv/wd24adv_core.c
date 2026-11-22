@@ -667,6 +667,118 @@ void wd24_mode_ext(const struct wd24_mode *m, const struct wd24_ext *bios,
 	ext->pr68 = (bios->pr68 & ~0x18) | 0x08;
 }
 
+static char *scan_put(char *p, char *end, const char *s)
+{
+	while (*s && p < end)
+		*p++ = *s++;
+	return p;
+}
+
+static char *scan_hex(char *p, char *end, const char *name, u8 v)
+{
+	static const char h[] = "0123456789abcdef";
+
+	p = scan_put(p, end, name);
+	if (p + 2 <= end) {
+		*p++ = h[v >> 4];
+		*p++ = h[v & 0x0f];
+	}
+	return p;
+}
+
+static char *scan_u(char *p, char *end, const char *name, unsigned int v)
+{
+	char tmp[10];
+	unsigned int i = 0;
+
+	p = scan_put(p, end, name);
+	if (!v) {
+		if (p < end)
+			*p++ = '0';
+		return p;
+	}
+	while (v && i < sizeof(tmp)) {
+		tmp[i++] = (char)('0' + (v % 10));
+		v /= 10;
+	}
+	while (i && p < end)
+		*p++ = tmp[--i];
+	return p;
+}
+
+void wd24_scan_read(struct wd24_ctx *c, struct wd24_scan *s)
+{
+	if (!s)
+		return;
+	memset(s, 0, sizeof(*s));
+	if (!c || !c->be || !c->be->begin || !c->be->read)
+		return;
+	c->be->begin(c);
+	s->cr08 = wd24_read(c, WD24_CR, 0x08);
+	s->cr09 = wd24_read(c, WD24_CR, 0x09);
+	s->cr0c = wd24_read(c, WD24_CR, 0x0c);
+	s->cr0d = wd24_read(c, WD24_CR, 0x0d);
+	s->cr13 = wd24_read(c, WD24_CR, 0x13);
+	s->cr14 = wd24_read(c, WD24_CR, 0x14);
+	s->cr17 = wd24_read(c, WD24_CR, 0x17);
+	s->cr18 = wd24_read(c, WD24_CR, 0x18);
+	s->sr02 = wd24_read(c, WD24_SR, 0x02);
+	s->sr04 = wd24_read(c, WD24_SR, 0x04);
+	s->gr05 = wd24_read(c, WD24_GR, 0x05);
+	s->gr06 = wd24_read(c, WD24_GR, 0x06);
+	s->gr09 = wd24_read(c, WD24_GR, 0x09);
+	s->gr0d = wd24_read(c, WD24_GR, WD24_GR_PR3);
+	s->gr0f = wd24_read(c, WD24_GR, WD24_GR_PR5);
+	s->ar13 = wd24_read(c, WD24_AR, 0x13);
+	if (c->be->end)
+		c->be->end(c);
+}
+
+unsigned int wd24_scan_format(char *buf, unsigned int n, const char *when,
+			      const struct wd24_scan *s)
+{
+	char *p, *end;
+	unsigned int ca, dw;
+	int locked;
+
+	if (!buf || n < 2 || !when || !s)
+		return 0;
+	locked = (s->gr0f & 0x07) != 0x05;
+	ca = ((unsigned int)s->cr0c << 8) | s->cr0d;
+	if (!locked) {
+		if (s->gr0d & 0x08)
+			ca |= 0x10000u;
+		if (s->gr0d & 0x10)
+			ca |= 0x20000u;
+	}
+	dw = ca << 2;
+	p = buf;
+	end = buf + n - 1;
+	p = scan_put(p, end, "scan ");
+	p = scan_put(p, end, when);
+	p = scan_put(p, end, locked ? " pr_locked=1" : " pr_locked=0");
+	p = scan_hex(p, end, " cr08=", s->cr08);
+	p = scan_hex(p, end, " cr09=", s->cr09);
+	p = scan_hex(p, end, " cr0c=", s->cr0c);
+	p = scan_hex(p, end, " cr0d=", s->cr0d);
+	p = scan_hex(p, end, " cr13=", s->cr13);
+	p = scan_hex(p, end, " cr14=", s->cr14);
+	p = scan_hex(p, end, " cr17=", s->cr17);
+	p = scan_hex(p, end, " cr18=", s->cr18);
+	p = scan_hex(p, end, " sr02=", s->sr02);
+	p = scan_hex(p, end, " sr04=", s->sr04);
+	p = scan_hex(p, end, " gr05=", s->gr05);
+	p = scan_hex(p, end, " gr06=", s->gr06);
+	p = scan_hex(p, end, " ar13=", s->ar13);
+	p = scan_hex(p, end, " gr09=", s->gr09);
+	p = scan_hex(p, end, " gr0d=", s->gr0d);
+	p = scan_u(p, end, " dw_bytes=", dw);
+	if (p < end)
+		*p++ = '\n';
+	*p = 0;
+	return (unsigned int)(p - buf);
+}
+
 /* ---- standard VGA state, DAC and video memory (Linux vgastate) ------------
  *
  * wd90c24fb saves VGA_SAVE_MODE | VGA_SAVE_FONTS | VGA_SAVE_CMAP with

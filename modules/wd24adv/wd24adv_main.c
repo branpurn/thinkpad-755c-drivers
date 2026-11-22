@@ -100,6 +100,7 @@
 #include <linux/io.h>
 #include <linux/ioport.h>
 #include <linux/console.h>
+#include <linux/vt_kern.h>
 #include <linux/mutex.h>
 #include <linux/sched.h>
 #include <linux/workqueue.h>
@@ -647,6 +648,73 @@ static void k_memw(void *priv, u32 off, u8 val)
 	writeb(val, vmem + (off & (WD24_PLANE - 1)));
 }
 
+static bool s6d_scan_frame, s6d_scan_unmap;
+static bool vc_gfx_held;
+
+/* Caller holds hw_lock. Reads do not stay in the port-write counters. */
+static void live_append_scan(const char *when)
+{
+	struct wd24_scan sc;
+	char line[384];
+	unsigned int n;
+	unsigned long d, i;
+
+	if (!hw || !live_txt || !when)
+		return;
+	d = hw->hw_data;
+	i = hw->hw_index;
+	wd24_scan_read(hw, &sc);
+	hw->hw_data = d;
+	hw->hw_index = i;
+	n = wd24_scan_format(line, sizeof(line), when, &sc);
+	if (!n || live_len + n >= TXT_MAX)
+		return;
+	memcpy(live_txt + live_len, line, n);
+	live_len += n;
+	pr_info("%s", line);
+}
+
+/*
+ * vgacon.c (Linux 6.18.57) write_vga(12, origin/2) is CR0C then CR0D
+ * (vga_set_mem_top, line 134). vgacon_scroll (line 1142) takes that path
+ * unless vga_is_gfx or vc_mode != KD_TEXT. vgacon_set_origin (line 1105)
+ * takes it unless vga_is_gfx. vt_kdsetmode(KD_GRAPHICS) sets vc_mode and
+ * do_blank_screen(1); vgacon_blank with mode_switch writes origin 0 and
+ * then sets vga_is_gfx. Same two steps, console_lock already held.
+ * s6d_bind=0 leaves this VT on vgacon. bind=1 is fbcon's blank, not this.
+ */
+static void wd24_vc_hold_graphics(void)
+{
+	struct vc_data *vc;
+
+	if (s6d_bind || vc_gfx_held)
+		return;
+	if (!vc_cons_allocated(fg_console))
+		return;
+	vc = vc_cons[fg_console].d;
+	if (!vc || vc->vc_mode == KD_GRAPHICS)
+		return;
+	vc->vc_mode = KD_GRAPHICS;
+	do_blank_screen(1);
+	vc_gfx_held = true;
+}
+
+static void wd24_vc_release_graphics(void)
+{
+	struct vc_data *vc;
+
+	if (!vc_gfx_held)
+		return;
+	vc_gfx_held = false;
+	if (!vc_cons_allocated(fg_console))
+		return;
+	vc = vc_cons[fg_console].d;
+	if (!vc)
+		return;
+	vc->vc_mode = KD_TEXT;
+	do_unblank_screen(1);
+}
+
 /* one hardware operation: caller holds hw_lock */
 enum hw_op { OP_LOAD, OP_MODE, OP_TEXT, OP_EXPIRE };
 static const char *const op_name[] = { "load", "mode", "text", "trial expiry" };
@@ -661,6 +729,8 @@ static int hw_run(enum hw_op op, const struct wd24_mode *m)
 	unsigned long d0 = hw->hw_data, i0 = hw->hw_index;
 	unsigned int mis0 = hw->nmismatch, i;
 	size_t len = 0;
+	char scan_line[384];
+	unsigned int scan_n = 0;
 	int err;
 
 	s6d_yield_ender();
@@ -688,6 +758,21 @@ static int hw_run(enum hw_op op, const struct wd24_mode *m)
 		break;
 	}
 	hw->be->end(hw);
+	if (!err && op == OP_MODE && m && !strcmp(m->name, "320x200-8")) {
+		struct wd24_scan sc;
+		unsigned long d = hw->hw_data, ix = hw->hw_index;
+
+		wd24_vc_hold_graphics();
+		wd24_scan_read(hw, &sc);
+		hw->hw_data = d;
+		hw->hw_index = ix;
+		scan_n = wd24_scan_format(scan_line, sizeof(scan_line),
+					  "mode", &sc);
+		s6d_scan_frame = false;
+		s6d_scan_unmap = false;
+	}
+	if (op == OP_TEXT || op == OP_EXPIRE)
+		wd24_vc_release_graphics();
 	console_unlock();
 
 	APPEND(live_txt, len, "wd24adv live: %s%s%s -> %d\n", op_name[op],
@@ -696,6 +781,11 @@ static int hw_run(enum hw_op op, const struct wd24_mode *m)
 	       hw->hw_data - d0, hw->hw_index - i0, hw->nmismatch - mis0,
 	       hw->in_text, hw->trial_pending ? "PENDING" : hw->confirmed ? "confirmed" : "-");
 	live_len = format_events(live_txt, len, hw, 0);
+	if (live_txt && scan_n && live_len + scan_n < TXT_MAX) {
+		memcpy(live_txt + live_len, scan_line, scan_n);
+		live_len += scan_n;
+		pr_info("%s", scan_line);
+	}
 
 	pr_info("live %s%s%s: %d (port data writes %lu, index writes %lu, mismatches %u)\n",
 		op_name[op], m ? " " : "", m ? m->name : "", err,
@@ -2065,10 +2155,30 @@ out:
 
 static void s6d_vma_close(struct vm_area_struct *vma)
 {
+	int scan = 0;
+
 	hw_acq();
-	if (vma == s6d_vma)
+	if (vma == s6d_vma) {
+		/* console_lock is taken after hw_lock is dropped. A present
+		 * holds console_lock, then hw_lock. The other order deadlocks.
+		 */
+		scan = s6d_13h && !s6d_scan_unmap && hw && !hw->in_text;
+		if (scan)
+			s6d_scan_unmap = true;
 		s6d_vma = NULL;
+	}
 	hw_rel();
+	if (!scan)
+		return;
+#ifndef WD24S1_QEMU_FAKE
+	console_lock();
+#endif
+	hw_acq();
+	live_append_scan("unmap");
+	hw_rel();
+#ifndef WD24S1_QEMU_FAKE
+	console_unlock();
+#endif
 }
 
 static const struct vm_operations_struct s6d_vm_ops = {
@@ -3014,6 +3124,10 @@ static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long ar
 		s6d_pf_frames++;
 		s6d_pf_last = nsw;
 		s6d_pf_total += nsw;
+		if (s6d_13h && !s6d_scan_frame) {
+			live_append_scan("frame");
+			s6d_scan_frame = true;
+		}
 	}
 out:
 	hw_rel();
@@ -3198,6 +3312,8 @@ static void s6d_arm(const struct wd24_mode *m)
 	s6d_cmap_published = false;
 	s6d_armed = true;
 	s6d_13h = direct;
+	s6d_scan_frame = false;
+	s6d_scan_unmap = false;
 	if (!direct) {
 		S6B_HW_BEGIN();
 		err = wd24s6b_begin(s6d_b, s6b_io ? s6b_io : &s6_live_io);

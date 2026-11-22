@@ -292,6 +292,22 @@ int wd24_write_std(struct wd24_ctx *c, const struct wd24_std *std);
 void wd24_mode_ext(const struct wd24_mode *m, const struct wd24_ext *bios,
 		   struct wd24_ext *ext);
 
+/* Live read of the mode 13h start and the chain-4 map. No register write.
+ * gr0d is meaningful only while PR5 is the unlock value 05h. dw_bytes in
+ * the formatted line is CR0C:CR0D << 2, the mode 13h doubleword byte
+ * address, and does not add PR3 when the extended indexes are locked.
+ */
+struct wd24_scan {
+	u8 cr08, cr09, cr0c, cr0d, cr13, cr14, cr17, cr18;
+	u8 sr02, sr04;
+	u8 gr05, gr06, gr09, gr0d, gr0f;
+	u8 ar13;
+};
+
+void wd24_scan_read(struct wd24_ctx *c, struct wd24_scan *s);
+unsigned int wd24_scan_format(char *buf, unsigned int n, const char *when,
+			      const struct wd24_scan *s);
+
 int wd24_entry_check(struct wd24_ctx *c, enum wd24_phase ph);
 int wd24_verify(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 val);
 int wd24_save_cmap(struct wd24_ctx *c);
