@@ -11,8 +11,10 @@
 # demoN is -timedemo with no tty input. eyes opts into WD24X_DOOM_INPUT=tty
 # and is the keyboard test, not the unattended run. measure is demo1 for
 # 60 frames with WD24X_DOOM_TIME=30, trial 180, so the clock cannot
-# expire mid-run. measure13h is the same 60 frames with present_mode=13h
-# and mode=320x200-8. Trial is otherwise 600s, the module maximum. The
+# expire mid-run. measure and measure13h do not wait for that timer.
+# They rmmod, and the pass is the text restore with mismatches 0.
+# measure13h is the same 60 frames with present_mode=13h and
+# mode=320x200-8. Trial is otherwise 600s, the module maximum. The
 # engine's completed timedemo exits 255: I_Error prints
 # "timed N gametics in N realtics" and then exit(-1). That 255 is this
 # script's success, together with the gametics line. No VGA register writes
@@ -126,6 +128,37 @@ s6d_after() {
 	*" thrash 0 latched 0 "*) ;;
 	*) return 1 ;;
 	esac
+	return 0
+}
+
+s6d_quiet() {
+	s6d=$(cat "$P/proc/wd24adv/s6d" 2>/dev/null) || return 1
+	echo "$s6d"
+	case "$s6d" in
+	*"faults 0 "*) ;;
+	*) return 1 ;;
+	esac
+	case "$s6d" in
+	*" thrash 0 latched 0 "*) ;;
+	*) return 1 ;;
+	esac
+	return 0
+}
+
+text_ok() {
+	log=$P/tmp/wd24x-doom-dmesg.txt
+	hit=0
+	line=
+	[ -f "$log" ] || return 1
+	while IFS= read -r line; do
+		case "$line" in
+		*"live text: 0 ("*"mismatches 0)") hit=1 ;;
+		esac
+	done < "$log"
+	[ "$hit" = 1 ] || return 1
+	if grep -q "readback:" "$log"; then
+		return 1
+	fi
 	return 0
 }
 
@@ -282,6 +315,22 @@ elif [ "$mode" = "measure" ] || [ "$mode" = "measure13h" ]; then
 	else
 		echo "WD24X-DOOM-RUN measure frames 60"
 	fi
+	if ! s6d_quiet; then
+		fail "s6d"
+	fi
+	echo "WD24X-DOOM-RUN rmmod"
+	own_cleanup || fail "rmmod"
+	if ! text_ok; then
+		echo "WD24X-DOOM-RUN stop restore"
+		exit 1
+	fi
+	echo "WD24X-DOOM-RUN restore mismatches 0"
+	console_ok || {
+		echo "WD24X-DOOM-RUN stop console after rmmod"
+		exit 1
+	}
+	echo "WD24X-DOOM-RUN done"
+	exit 0
 else
 	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM input tty"; then
 		fail "input"

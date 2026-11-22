@@ -1,10 +1,12 @@
 # Doom present cost, and the next path
 
-Measured on ead705ed: the ioctl path is correct (switches 5, faults 0,
-thrash 0, restore clean) and about 1.95 frames/s. 1167 presents filled
-the 600 s trial, which then expired before the timedemo printed
-gametics. Win98 on this machine is roughly ten times that. Do not
-raise the thrash bound. The letterbox measurement is the baseline.
+Measured on ead705ed with wd24x-doom f4470178 (built from 62a5460,
+-O2 -DNDEBUG -march=i486). `measure`, 60 frames: render 78.85 ms,
+present 427.18 ms, palette 0.28 ms per frame, about 1.97 frames/s.
+Present is 84% of that. Faults 0, thrash 0, rmmod text restore
+mismatches 0. The gate then slept `wait 144` and failed `live_ok`
+because the 180 s trial was still `PENDING`. Measure modes now rmmod
+instead of waiting for that timer. Do not raise the thrash bound.
 The fast path below is present_mode=13h, default off.
 
 ## What the current present does
@@ -69,3 +71,41 @@ copy. Trial expiry is the same text restore as the 2026-11-02 run.
 the direct ioctl, and uses letterbox if a 640x480 frame refuses.
 `sh docs/s6d-doom-run.sh measure13h` is the 60-frame gate. The letterbox
 measurement on ead705ed does not load this parameter.
+
+## Render bucket
+
+There is no `default.cfg`. The script refuses to run if one is present,
+so the engine keeps the compiled defaults in doomgeneric `m_menu.c`:
+`screenblocks` 10 and `detailLevel` 0. That is high detail, view
+320x168 (`setblocks * 32` by `(setblocks * 168 / 10) & ~7`), not
+`screenblocks` 9 and not the 320x200 fullscreen of `screenblocks` 11.
+`build.sh` defines `CMAP256`. `I_FinishUpdate` then `memcpy`s each
+320-byte index row and does not call `cmap_to_fb`. The palette path
+sets `palette_changed` and the port sends `FBIOPUTCMAP`. That is the
+0.28 ms bucket. The 78.85 ms is the renderer plus that index copy.
+
+## Aperture, read only
+
+427.18 ms for 76800 dword stores is 5.56 us/store, about 720 KB/s, into
+the uncached `ioremap` of A0000. No write combining. This tree does not
+document a wait-state or write-FIFO bit, and it does not program one.
+
+The names in `wd90c24_hw.h`, from the 1994 data sheet as cited there:
+
+- PR30A (SR10) is the memory interface. The 640x480 set writes
+  `(bios & ~0xcf) | 0xc1` (`wd90c24_hw.c`, `wd24_mode_ext`). Bits 5:4
+  stay as the BIOS left them.
+- PR31 (SR11) is the system interface. The same set writes
+  `(bios & 0x03) | 0x5c`. XFree86 kept bits 1:0. Bit 7 is the S6
+  read/write split, not a FIFO. A live unlocked read was 0x5D.
+- PR11 (CR2A) is the CRTC lock. With the LCD on it is left as the BIOS
+  set it. PR12 (CR2B) is the scratch pad. The guard refuses a PR12
+  write, and the save does not read it. PR15 (CR2E) is misc control 1
+  (`bios & ~0x50`, "clock 0 is not MCLK"). PR16 (CR2F) is misc control 2
+  and the 640x480 set writes 0x00.
+
+`wd24_save_ext` already reads PR11, PR15, PR16, PR30A and PR31 at load,
+after the existing unlock, and relocks. Printing that saved snapshot
+is the dump. It adds no register write. Do not read PR12, and do not
+write any of these to chase the 5.56 us. Mode 13h uses `WD24_EXT_BIOS`,
+so it does not apply the 640x480 PR30A/PR31 values.

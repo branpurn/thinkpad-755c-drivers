@@ -46,7 +46,7 @@ EOF
 	cat > "$M/bin/dmesg" <<'EOF'
 #!/bin/sh
 if [ "${1:-}" = "-c" ]; then exit 0; fi
-echo "wd24adv: session ON"
+	echo "wd24adv: live text: 0 (port data writes 1, index writes 1, mismatches 0)"
 EOF
 	cat > "$M/bin/sleep" <<'EOF'
 #!/bin/sh
@@ -167,6 +167,9 @@ grep -q "WD24X-DOOM-RUN measure frames 60" "$M/out" && ok || bad "measure line"
 grep -q "timedemo" "$M/out" && bad "measure wants gametics" || ok
 grep -q "mode=640x480-8" "$M/insmod.args" && ok || bad "measure mode"
 grep -q "present_mode=13h" "$M/insmod.args" && bad "measure 13h param" || ok
+grep -q "WD24X-DOOM-RUN wait" "$M/out" && bad "measure waited" || ok
+grep -q "WD24X-DOOM-RUN restore mismatches 0" "$M/out" && ok || bad "measure restore"
+grep -q "wd24adv" "$M/rmmod.args" && ok || bad "measure rmmod"
 [ "$rc" = 0 ] && ok || bad "measure rc"
 
 setup "$ROOT/modules/wd24adv/tests/.doom-13h"
@@ -181,6 +184,8 @@ grep -q "PRESENT=13h" "$M/doom.args" && ok || bad "13h env"
 grep -q "FRAMES=60" "$M/doom.args" && ok || bad "13h frames"
 grep -q "WD24X-DOOM-RUN measure13h frames 60" "$M/out" && ok || bad "13h line"
 grep -q "present 13h refused" "$M/out" && bad "13h refused" || ok
+grep -q "WD24X-DOOM-RUN wait" "$M/out" && bad "13h waited" || ok
+grep -q "WD24X-DOOM-RUN restore mismatches 0" "$M/out" && ok || bad "13h restore"
 [ "$rc" = 0 ] && ok || bad "13h rc"
 
 echo "test_doom_run: $pass passed, $fail failed"
