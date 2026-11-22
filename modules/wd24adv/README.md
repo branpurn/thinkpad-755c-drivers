@@ -198,6 +198,9 @@ hardware-cursor block only when `hw->ext_blocks` is set (`wd90c24_hw.c`
 230 save, 276 restore). wd24adv never enables the block, so it neither
 writes nor needs to save it.
 
+The register table, including the read-back mask and the restore for
+each write, is [`docs/WD24ADV-REGS.txt`](../../docs/WD24ADV-REGS.txt).
+
 ## The write rule
 
 Every write is either a standard VGA register or a register **and value

@@ -156,6 +156,9 @@ config file, which is those compiled defaults. `fps_x100` is
 print of 6 MiB. `couldn't open demo1.lmp` is the external-file probe.
 The demo in the wad still runs.
 
+Every port write, its read-back mask, and the restore that puts the
+load-time value back are in `docs/WD24ADV-REGS.txt`.
+
 ## Recover
 
 Read the script's `stop` line. Do not insmod again while `wd24adv` is
