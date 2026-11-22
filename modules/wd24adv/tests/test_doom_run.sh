@@ -71,6 +71,12 @@ echo "WD24X-DOOM present switches 5"
 case " $* " in
 *" -timedemo "*)
 	echo "WD24X-DOOM input none"
+	if [ -n "${WD24X_DOOM_FRAMES:-}" ]; then
+		echo "WD24X-DOOM time frames ${WD24X_DOOM_FRAMES} render_ms 1 present_ms 2 palette_ms 0"
+		echo "FRAMES=${WD24X_DOOM_FRAMES}" >> "$WD24X_MOCK/doom.args"
+		echo "TIME=${WD24X_DOOM_TIME-}" >> "$WD24X_MOCK/doom.args"
+		exit 0
+	fi
 	echo "timed 2134 gametics in 700 realtics" >&2
 	exit 255
 	;;
@@ -142,6 +148,17 @@ grep -q "stop mode" "$ROOT/modules/wd24adv/tests/.doom-mode" && ok || bad "mode"
 rc=$(PATH="/bin:/usr/bin" WD24X_DOOM_ENV=$ROOT/docs/s6d-doom.env \
 	dash "$SCRIPT" demo1 >"$ROOT/modules/wd24adv/tests/.doom-unpinned" 2>&1)
 grep -q "stop candidate unpinned" "$ROOT/modules/wd24adv/tests/.doom-unpinned" && ok || bad "unpinned"
+
+setup "$ROOT/modules/wd24adv/tests/.doom-measure"
+rc=$(run "$ROOT/modules/wd24adv/tests/.doom-measure" measure)
+M=$ROOT/modules/wd24adv/tests/.doom-measure
+grep -q "WD24X-DOOM-RUN done" "$M/out" && ok || bad "measure done"
+grep -q "trial=180" "$M/insmod.args" && ok || bad "measure trial"
+grep -q "FRAMES=60" "$M/doom.args" && ok || bad "frames"
+grep -q "TIME=30" "$M/doom.args" && ok || bad "time env"
+grep -q "WD24X-DOOM-RUN measure frames 60" "$M/out" && ok || bad "measure line"
+grep -q "timedemo" "$M/out" && bad "measure wants gametics" || ok
+[ "$rc" = 0 ] && ok || bad "measure rc"
 
 echo "test_doom_run: $pass passed, $fail failed"
 [ "$fail" = 0 ]

@@ -6,15 +6,19 @@
 #   sh s6d-doom-run.sh demo2
 #   sh s6d-doom-run.sh demo3
 #   sh s6d-doom-run.sh eyes
+#   sh s6d-doom-run.sh measure
 # demoN is -timedemo with no tty input. eyes opts into WD24X_DOOM_INPUT=tty
-# and is the keyboard test, not the unattended run. Trial is 600s, the
-# module maximum. The engine's completed timedemo exits 255: I_Error prints
+# and is the keyboard test, not the unattended run. measure is demo1 for
+# 60 frames with WD24X_DOOM_TIME=30, trial 180, so the clock cannot
+# expire mid-run. Trial is otherwise 600s, the module maximum. The
+# engine's completed timedemo exits 255: I_Error prints
 # "timed N gametics in N realtics" and then exit(-1). That 255 is this
 # script's success, together with the gametics line. No VGA register writes
 # beyond the module's existing mode and colormap path.
 P=${WD24X_MOCK:-}
 owned=
 mode=${1:-}
+trial=600
 finishing=
 cleanup_rc=0
 
@@ -135,6 +139,7 @@ have_line() {
 
 case "$mode" in
 demo1|demo2|demo3|eyes) ;;
+measure) trial=180 ;;
 *) stop "mode" ;;
 esac
 
@@ -185,7 +190,7 @@ if grep -q '^wd90c24fb ' "$P/proc/modules" 2>/dev/null; then
 	stop "wd90c24fb"
 fi
 
-insmod "$KO" dryrun=0 live=1 mode=640x480-8 trial=600 s6d=1 s6d_cmap=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
+insmod "$KO" dryrun=0 live=1 mode=640x480-8 trial=$trial s6d=1 s6d_cmap=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
 rc=$?
 echo "RC=$rc"
 [ "$rc" = "0" ] || stop "insmod"
@@ -198,6 +203,11 @@ if [ "$mode" = "eyes" ]; then
 	WD24X_DOOM_FB=ioctl WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=letterbox \
 		WD24X_DOOM_INPUT=tty WD24X_DOOM_FRAMES= \
 		"$BIN" -iwad "$WAD" -nosound -nogui \
+		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
+elif [ "$mode" = "measure" ]; then
+	WD24X_DOOM_FB=ioctl WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=letterbox \
+		WD24X_DOOM_INPUT= WD24X_DOOM_FRAMES=60 WD24X_DOOM_TIME=30 \
+		"$BIN" -iwad "$WAD" -timedemo demo1 -nosound -nogui \
 		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
 else
 	WD24X_DOOM_FB=ioctl WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=letterbox \
@@ -229,6 +239,17 @@ if [ "$mode" = "eyes" ]; then
 	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM input tty"; then
 		fail "input"
 	fi
+elif [ "$mode" = "measure" ]; then
+	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM input tty"; then
+		fail "input"
+	fi
+	if ! grep -q "^WD24X-DOOM time frames " "$P/tmp/wd24x-doom.out"; then
+		fail "time"
+	fi
+	if [ "$dr" != "0" ]; then
+		fail "doom rc"
+	fi
+	echo "WD24X-DOOM-RUN measure frames 60"
 else
 	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM input tty"; then
 		fail "input"
@@ -253,19 +274,19 @@ else
 fi
 
 now=$(date +%s 2>/dev/null || echo 0)
-left=600
+left=$trial
 if [ "$start" != "0" ] && [ "$now" != "0" ]; then
 	used=$((now - start))
 	if [ "$used" -lt 0 ]; then
 		used=0
 	fi
-	left=$((600 - used))
+	left=$((trial - used))
 fi
 if [ "$left" -lt 5 ]; then
 	left=5
 fi
-if [ "$left" -gt 600 ]; then
-	left=600
+if [ "$left" -gt "$trial" ]; then
+	left=$trial
 fi
 echo "WD24X-DOOM-RUN wait $left"
 sleep "$left"

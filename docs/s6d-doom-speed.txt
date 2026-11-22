@@ -1,0 +1,68 @@
+# Doom present cost, and the next path
+
+Measured on ead705ed: the ioctl path is correct (switches 5, faults 0,
+thrash 0, restore clean) and about 1.95 frames/s. 1167 presents filled
+the 600 s trial, which then expired before the timedemo printed
+gametics. Win98 on this machine is roughly ten times that. Do not
+raise the thrash bound. The first hardware step is the measurement
+below, not a new mode.
+
+## What the current present does
+
+`WD24S6D_IOC_PRESENT` accepts only LETTER2X. Userspace hands over the
+320x200 index buffer (64000 bytes). The kernel copies that once, then
+for each of five 64 KiB windows calls the proven SETWIN and stores
+32-bit groups. Each group is expanded in C from the 320x200 source
+(2x, letterbox, bars of index 0). That is 76800 expansions and 76800
+`writel`s into `ioremap(0xa0000, ...)`, which is uncached. There is no
+write combining. The only port I/O in the loop is those five window
+programs. The fault counter is not touched, so the bound stays 32.
+
+The userspace ioctl path does not build a second 640x480 buffer unless
+`WD24X_DOOM_SUM=1`. It does hash the 64000 source bytes every frame
+even when the sum is off. That hash is in the render bucket of the
+timing line. It is the first thing to drop after the numbers, not
+before.
+
+`tools/wd24-doom/build.sh` was `-Os`. The measurement build is `-O2
+-DNDEBUG -march=i486`, still stripped, still no `-g` and no `-pg`.
+
+## Clock
+
+The 486 has no `rdtsc`. The port uses `clock_gettime(CLOCK_MONOTONIC)`.
+`WD24X_DOOM_TIME` empty or 0 is off. A positive number is the print
+interval. The line is
+
+    WD24X-DOOM time frames N render_ms R present_ms P palette_ms C
+
+`render_ms` is the gap since the previous present returned (the game
+and `D_Display` up to `I_FinishUpdate`). `palette_ms` is `FBIOPUTCMAP`.
+`present_ms` is the present ioctl. Cumulative.
+
+The kernel adds `present frames ... ns N copy_ns C` on `/proc/wd24adv/s6d`.
+Those are jiffy spans, one tick each, not a cycle counter. `ns` is the
+window program and the stores. `copy_ns` is the 64000-byte copy in.
+`ead705ed` does not have those fields. The userspace line does not
+need them.
+
+## Fast path, already cited
+
+`320x200-8` is the proven mode 13h set in `wd24adv_modes.c` (`std_13h`):
+
+- CR09 = 0x41. VGA maximum-scan-line 1, so each row is two scanlines.
+  That is the doublescan BIOS mode 13h uses. CR14 = 0x40, CR17 = 0xA3.
+- Chain-4 (sequencer), direct A0000, 64000 bytes. The pattern writer
+  does not touch PR0A. Live 2026-11-02, module 5f275b4: 64000 bytes,
+  no register write for the picture, revert 896/336, mismatches 0.
+  The panel showed the bars letterboxed and the owner called it good.
+- Restore is the trial text restore that already follows every
+  `mode=` load. No new register, and no new read-back. The mode set's
+  existing read-back covers the CRTC words.
+
+A present in that mode is one 64000-byte copy into the A0000 window.
+No 2x expand, no five window programs, no 300 KiB frame. `320x240-8x`
+stays UNPROVEN and is not the path. A banked mmap of 640x480 is the
+path that latches the thrash bound. Do not use it for the timedemo.
+
+This file does not switch the live session to 13h. Measure the
+letterbox path first.
