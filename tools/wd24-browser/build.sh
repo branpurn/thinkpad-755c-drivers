@@ -23,6 +23,7 @@ echo "WD24X-BROWSER pin jpeg-9f $JPEG_SHA"
 if [ "${WD24X_NS_CHECK:-}" = 1 ]; then
 	echo "WD24X-BROWSER patch $ROOT/patches/libnsfb-linux-fbdev.patch"
 	echo "WD24X-BROWSER patch $ROOT/patches/netsurf-fb-dump.patch"
+	echo "WD24X-BROWSER patch $ROOT/patches/netsurf-repro.patch"
 	exit 0
 fi
 
@@ -34,6 +35,17 @@ stop() {
 need() {
 	command -v "$1" >/dev/null 2>&1 || stop "no $1"
 }
+
+# Host tools. The i486 compiler is downloaded below. libpng-dev is the
+# host header convert_image links, not the cross libpng.
+missing=
+for t in git curl make gcc perl pkg-config gperf flex bison file readelf \
+	sha256sum sha512sum tar qemu-i386-static; do
+	command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+done
+[ -f /usr/include/png.h ] || missing="$missing libpng-dev"
+[ -x /usr/bin/time ] || missing="$missing time"
+[ -z "$missing" ] || stop "host deps:$missing"
 
 fetch() {
 	url=$1
@@ -87,9 +99,17 @@ CC=$TC/bin/i486-linux-musl-gcc
 AR=$TC/bin/i486-linux-musl-ar
 RANLIB=$TC/bin/i486-linux-musl-ranlib
 export CC AR RANLIB
+# Fixed identity. The netsurf testament reads these instead of the
+# build account, the hostname, and the clock. 1794996956 is the
+# netsurf pin's commit time.
+export HOSTNAME=tc32
+export SOURCE_DATE_EPOCH=1794996956
+export WD24X_BUILD_USER=tc32
+export WD24X_BUILD_ROOT=/src/netsurf/
 # Upstream library makefiles pass -Werror. GCC 11 warns on this tree,
 # so -Wno-error is last and keeps the -O2 i486 objects building.
-export CFLAGS="-O2 -march=i486 -mtune=i486 -fno-stack-protector -Wno-error"
+# Prefix maps keep this machine's source path out of __FILE__.
+export CFLAGS="-O2 -march=i486 -mtune=i486 -fno-stack-protector -Wno-error -ffile-prefix-map=${SRC}=/src -ffile-prefix-map=${PREFIX}=/prefix -fdebug-prefix-map=${SRC}=/src -fdebug-prefix-map=${PREFIX}=/prefix -fmacro-prefix-map=${SRC}=/src"
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
 unset PKG_CONFIG_SYSROOT_DIR
@@ -180,6 +200,8 @@ install_lib_built
 pin_git netsurf "$NS_SHA"
 git -C "$SRC/netsurf" apply "$ROOT/patches/netsurf-fb-dump.patch" \
 	|| stop "netsurf patch"
+git -C "$SRC/netsurf" apply "$ROOT/patches/netsurf-repro.patch" \
+	|| stop "netsurf repro patch"
 cat > "$SRC/netsurf/Makefile.config" << 'EOF'
 override NETSURF_USE_CURL := NO
 override NETSURF_USE_OPENSSL := NO
@@ -200,6 +222,9 @@ override NETSURF_USE_LIBICONV_PLUG := YES
 override NETSURF_USE_UTF8PROC := NO
 override NETSURF_FB_FONTLIB := internal
 override NETSURF_STRIP_BINARY := NO
+# No build-prefix path. The operator sets NETSURFRES.
+override NETSURF_FB_RESPATH := $${HOME}/.netsurf/:$${NETSURFRES}
+override NETSURF_FB_FONTPATH :=
 EOF
 export LDFLAGS="-L$PREFIX/lib -static"
 make -C "$SRC/netsurf" TARGET=framebuffer BUILD_CC=gcc CCACHE= \
@@ -212,8 +237,11 @@ mkdir -p "$PREFIX/bin"
 cp "$BIN" "$PREFIX/bin/nsfb"
 i486-linux-musl-strip -o "$PREFIX/bin/nsfb.strip" "$PREFIX/bin/nsfb" \
 	|| stop "strip"
-file "$PREFIX/bin/nsfb.strip" | grep -q '80386' || stop "not i386"
-file "$PREFIX/bin/nsfb.strip" | grep -q 'static' || stop "not static"
+mach=$(readelf -h "$PREFIX/bin/nsfb.strip" | awk '/Machine:/ {print}')
+echo "$mach" | grep -q 'Intel 80386' || stop "not i386 ($mach)"
+if readelf -l "$PREFIX/bin/nsfb.strip" | grep -q 'INTERP'; then
+	stop "not static"
+fi
 
 bytes=$(wc -c < "$PREFIX/bin/nsfb.strip" | tr -d ' ')
 sum=$(sha256sum "$PREFIX/bin/nsfb.strip" | awk '{print $1}')
@@ -224,27 +252,43 @@ if [ "$rem" -eq 0 ]; then
 else
 	secs=$((whole + 1))
 fi
-echo "WD24X-BROWSER binary $PREFIX/bin/nsfb.strip $bytes $sum"
+stage=$PREFIX/nsfb
+rm -rf "$stage"
+mkdir -p "$stage/nsres/en" "$stage/pages"
+cp "$PREFIX/bin/nsfb.strip" "$stage/nsfb"
+res=$SRC/netsurf/frontends/framebuffer/res
+for f in Messages default.css internal.css quirks.css adblock.css \
+	welcome.html licence.html credits.html favicon.png netsurf.png; do
+	cp "$res/$f" "$stage/nsres/$f"
+done
+cp -a "$res/en/." "$stage/nsres/en/"
+cp -a "$res/icons" "$res/pointers" "$res/throbber" "$res/fonts" "$stage/nsres/"
+cp -a "$ROOT/pages/." "$stage/pages/"
+echo "WD24X-BROWSER stage $stage"
+echo "WD24X-BROWSER binary $stage/nsfb $bytes $sum"
 echo "WD24X-BROWSER xmodem $secs at $XRATE remainder $rem"
+# Stripped static binary from the fixed identity above.
+expect=${WD24X_NS_EXPECT_SHA:-531803c04944918491480e4add46641c5a91ee0d1dc8841fab81cc1098c7f446}
+if [ "$sum" != "$expect" ]; then
+	stop "sha $sum"
+fi
 
 if [ "${WD24X_NS_SMOKE:-1}" = 0 ]; then
 	echo "WD24X-BROWSER done"
 	exit 0
 fi
 need qemu-i386-static
-page=$ROOT/pages/canvas.html
+page=$stage/pages/canvas.html
 dump=$SRC/fb.raw
 rm -f "$dump"
-# Messages live at ./frontends/framebuffer/res relative to the netsurf
-# tree. Without that directory the content area stays the toolkit white.
+# Ram, not linux: this host has no /dev/fb0. NETSURFRES is the English
+# resource set the 755C launch uses. Without Messages the page stays white.
 set +e
-(
-	cd "$SRC/netsurf" || exit 1
-	WD24X_FB_DUMP=$dump /usr/bin/time -v qemu-i386-static -cpu 486 \
-		"$PREFIX/bin/nsfb.strip" \
-		-f ram -b 8 -w 640 -h 480 "file://$page" \
-		> "$SRC/smoke.out" 2> "$SRC/smoke.err"
-)
+WD24X_FB_DUMP=$dump NETSURFRES=$stage/nsres/ /usr/bin/time -v \
+	qemu-i386-static -cpu 486 \
+	"$stage/nsfb" \
+	-f ram -b 8 -w 640 -h 480 "file://$page" \
+	> "$SRC/smoke.out" 2> "$SRC/smoke.err"
 rc=$?
 set -e
 if [ "$rc" -ne 0 ]; then

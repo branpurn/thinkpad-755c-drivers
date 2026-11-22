@@ -69,7 +69,7 @@ That extension is the wrong frontend.
 ## RAM
 
 36 MB is the whole machine, 36*1024 = 36864 KiB. The qemu-user
-smoke below peaked at 16392 KiB, and that figure includes the
+smoke below peaked at 16400 KiB, and that figure includes the
 emulator. JavaScript stays off. The internal bitmap font avoids
 FreeType and a font file.
 
@@ -119,28 +119,41 @@ the script appends `-Wno-error` so GCC 11 warnings do not stop the
 link. `Makefile.config` turns curl, OpenSSL, duktape, webp, jpegxl,
 svg, and librosprite off, and turns PNG, GIF, JPEG, and BMP on.
 
-The stripped static binary is not committed. This run wrote
-`/tmp/wd24-ns-prefix/bin/nsfb.strip`:
+Host tools the script checks before it downloads anything: `git`,
+`curl`, `make`, `gcc`, `perl`, `pkg-config`, `gperf`, `flex`, `bison`,
+`file`, `readelf`, `sha256sum`, `sha512sum`, `tar`,
+`qemu-i386-static`, `/usr/bin/time`, and a host `libpng-dev`
+(`/usr/include/png.h`, for `convert_image`). A missing one stops with
+`WD24X-BROWSER stop host deps:`.
 
-- 3358656 bytes, unstripped sibling 6523364 bytes
-- sha256 `beeb6ae7ac78642cda3b3554be2b57ad6d556d89f7ae5ef39db2e1c6e887fe4e`
-- `file`: ELF 32-bit LSB pie, Intel 80386, static-pie, stripped
-- objdump of that file showed no cmov, endbr, rdtsc, cpuid, syscall, or sysenter
+The build identity is fixed: `HOSTNAME=tc32`,
+`SOURCE_DATE_EPOCH=1794996956` (the netsurf pin's commit time),
+`WD24X_BUILD_USER=tc32`, `WD24X_BUILD_ROOT=/src/netsurf/`, and
+`-ffile-prefix-map` for the source and prefix. The testament patch is
+`tools/wd24-browser/patches/netsurf-repro.patch`. The stripped binary
+does not contain the build account, the build hostname, or the build
+directory.
+
+The script writes `/tmp/wd24-ns-prefix/nsfb/`:
+
+- `nsfb`, 3358656 bytes, sha256 `531803c04944918491480e4add46641c5a91ee0d1dc8841fab81cc1098c7f446`
+- `nsres/`, the English resource set: shared files plus `en/`, not the other locale directories
+- `pages/`, the canvas page and its images
+
+`readelf -h` reports `Machine: Intel 80386`. There is no `INTERP` program header. objdump of that file showed no cmov, endbr, rdtsc, cpuid, syscall, or sysenter.
 
 Smoke was `qemu-i386-static -cpu 486` on the ram surface, not
 `qemu-system-i386`. A guest kernel was unnecessary once the static
-binary ran. The command was `-f ram -b 8 -w 640 -h 480` with
-`file://` `tools/wd24-browser/pages/canvas.html`, from the netsurf
-source directory so `./frontends/framebuffer/res/Messages` loads.
+binary ran. `NETSURFRES` pointed at `nsres/`. The command was
+`-f ram -b 8 -w 640 -h 480` with the staged `canvas.html`.
 `tools/wd24-browser/patches/netsurf-fb-dump.patch` writes the ram
 buffer after three seconds when `WD24X_FB_DUMP` is set. The dump was
 307200 bytes, sha256
-`a77b4e7e616f6cae31bd1d328fb8856f4ac6cd4050a620cf754ccdc70b22abeb`,
-71 distinct indexes. Index 0 (black) was 261465 pixels. The three
-solid blocks landed on indexes 4 (1599), 35 (1445), and 200 (1652),
-the same counts a 32bpp run gave for red, green, and blue. GNU
-`time -v` reported maximum resident set size 16392 kB. That is the
-qemu-user process, so it is an upper bound on the guest. 16392 is
+`7529e449c486f60726c39fea3a62e723f5f8fd71174f1a175a0664172c17100b`,
+71 distinct indexes. Index 0 (black) was 261177 pixels. The three
+solid blocks landed on indexes 4 (1599), 35 (1445), and 200 (1652).
+GNU `time -v` reported maximum resident set size 16400 kB. That is
+the qemu-user process, so it is an upper bound on the guest. 16400 is
 under 36864.
 
 ## Transfer

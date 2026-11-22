@@ -46,6 +46,7 @@ WD24X_NS_CHECK=1 sh "$BUILD" >"$ROOT/modules/wd24adv/tests/.browser-build" 2>&1 
 grep -q '170d89462442c286f80c0604f30e4c7f2a801265' "$ROOT/modules/wd24adv/tests/.browser-build" && ok || bad "pin"
 grep -q 'a287525eeafa4b9e721822670e1e03eeeef6b31c' "$ROOT/modules/wd24adv/tests/.browser-build" && ok || bad "nsfb pin"
 grep -q 'libnsfb-linux-fbdev.patch' "$ROOT/modules/wd24adv/tests/.browser-build" && ok || bad "patch"
+grep -q 'netsurf-repro.patch' "$ROOT/modules/wd24adv/tests/.browser-build" && ok || bad "repro"
 grep -q FBIOPUTCMAP "$ROOT/tools/wd24-browser/patches/libnsfb-linux-fbdev.patch" && ok || bad "cmap"
 grep -q '51d3ee85de73949483af79671fe9075a10e405e3' "$ROOT/tools/wd24-browser/patches/libnsfb-linux-fbdev.patch" && ok || bad "cite"
 [ "$rc" = 0 ] && ok || bad "build rc"
