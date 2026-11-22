@@ -188,5 +188,23 @@ grep -q "WD24X-DOOM-RUN wait" "$M/out" && bad "13h waited" || ok
 grep -q "WD24X-DOOM-RUN restore mismatches 0" "$M/out" && ok || bad "13h restore"
 [ "$rc" = 0 ] && ok || bad "13h rc"
 
+setup "$ROOT/modules/wd24adv/tests/.doom-td13"
+rc=$(run "$ROOT/modules/wd24adv/tests/.doom-td13" timedemo13h)
+M=$ROOT/modules/wd24adv/tests/.doom-td13
+grep -q "WD24X-DOOM-RUN done" "$M/out" && ok || bad "td done"
+grep -q "trial=600" "$M/insmod.args" && ok || bad "td trial"
+grep -q "mode=320x200-8" "$M/insmod.args" && ok || bad "td mode"
+grep -q "present_mode=13h" "$M/insmod.args" && ok || bad "td param"
+grep -q "PRESENT=13h" "$M/doom.args" && ok || bad "td env"
+grep -q -- "-timedemo demo1" "$M/doom.args" && ok || bad "td demo"
+grep -q -- "-nosound" "$M/doom.args" && ok || bad "td sound"
+grep -q "FRAMES=60" "$M/doom.args" && bad "td capped" || ok
+grep -q "timed 2134 gametics in 700 realtics" "$M/out" && ok || bad "td line"
+grep -q "WD24X-DOOM-FPS gametics 2134 realtics 700 fps_x100 10670" "$M/out" && ok || bad "td fps"
+grep -q "WD24X-DOOM-RUN wait" "$M/out" && bad "td waited" || ok
+grep -q "WD24X-DOOM-RUN restore mismatches 0" "$M/out" && ok || bad "td restore"
+grep -q "present 13h refused" "$M/out" && bad "td refused" || ok
+[ "$rc" = 0 ] && ok || bad "td rc"
+
 echo "test_doom_run: $pass passed, $fail failed"
 [ "$fail" = 0 ]

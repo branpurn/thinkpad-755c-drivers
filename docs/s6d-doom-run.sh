@@ -8,14 +8,22 @@
 #   sh s6d-doom-run.sh eyes
 #   sh s6d-doom-run.sh measure
 #   sh s6d-doom-run.sh measure13h
+#   sh s6d-doom-run.sh timedemo13h
 # demoN is -timedemo with no tty input. eyes opts into WD24X_DOOM_INPUT=tty
 # and is the keyboard test, not the unattended run. measure is demo1 for
 # 60 frames with WD24X_DOOM_TIME=30, trial 180, so the clock cannot
 # expire mid-run. measure and measure13h do not wait for that timer.
 # They rmmod, and the pass is the text restore with mismatches 0.
 # measure13h is the same 60 frames with present_mode=13h and
-# mode=320x200-8. Trial is otherwise 600s, the module maximum. The
-# engine's completed timedemo exits 255: I_Error prints
+# mode=320x200-8. timedemo13h is Doom's own -timedemo demo1 on that
+# same 13h present. No default.cfg, so the engine keeps screenblocks
+# 10 and detaillevel 0. The command passes -nosound -nogui. That is
+# the Win98 match: doom -timedemo demo1, same wad, screenblocks 10,
+# detaillevel 0, sound off. Trial stays 600, the module maximum.
+# At the measured 45.93 ms/frame the demo ends well inside that, and
+# the script rmmods when Doom exits. It writes only the out, err, and
+# dmesg files already used here. It does not write a config or a frame.
+# The engine's completed timedemo exits 255: I_Error prints
 # "timed N gametics in N realtics" and then exit(-1). That 255 is this
 # script's success, together with the gametics line. No VGA register writes
 # beyond the module's existing mode and colormap path.
@@ -162,6 +170,25 @@ text_ok() {
 	return 0
 }
 
+finish_rmmod() {
+	if ! s6d_quiet; then
+		fail "s6d"
+	fi
+	echo "WD24X-DOOM-RUN rmmod"
+	own_cleanup || fail "rmmod"
+	if ! text_ok; then
+		echo "WD24X-DOOM-RUN stop restore"
+		exit 1
+	fi
+	echo "WD24X-DOOM-RUN restore mismatches 0"
+	console_ok || {
+		echo "WD24X-DOOM-RUN stop console after rmmod"
+		exit 1
+	}
+	echo "WD24X-DOOM-RUN done"
+	exit 0
+}
+
 have_line() {
 	hit=0
 	while IFS= read -r line; do
@@ -173,7 +200,7 @@ have_line() {
 }
 
 case "$mode" in
-demo1|demo2|demo3|eyes) ;;
+demo1|demo2|demo3|eyes|timedemo13h) ;;
 measure|measure13h) trial=180 ;;
 *) stop "mode" ;;
 esac
@@ -228,7 +255,7 @@ fi
 gfx=640x480-8
 present=letterbox
 extra=
-if [ "$mode" = "measure13h" ]; then
+if [ "$mode" = "measure13h" ] || [ "$mode" = "timedemo13h" ]; then
 	gfx=320x200-8
 	present=13h
 	extra=present_mode=13h
@@ -252,6 +279,11 @@ elif [ "$mode" = "measure" ] || [ "$mode" = "measure13h" ]; then
 		WD24X_DOOM_INPUT= WD24X_DOOM_FRAMES=60 WD24X_DOOM_TIME=30 \
 		"$BIN" -iwad "$WAD" -timedemo demo1 -nosound -nogui \
 		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
+elif [ "$mode" = "timedemo13h" ]; then
+	WD24X_DOOM_FB=ioctl WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=$present \
+		WD24X_DOOM_INPUT= WD24X_DOOM_FRAMES= \
+		"$BIN" -iwad "$WAD" -timedemo demo1 -nosound -nogui \
+		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
 else
 	WD24X_DOOM_FB=ioctl WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=$present \
 		WD24X_DOOM_INPUT= WD24X_DOOM_FRAMES= \
@@ -268,7 +300,7 @@ fi
 if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM palette put 256"; then
 	fail "palette"
 fi
-if [ "$mode" = "measure13h" ]; then
+if [ "$mode" = "measure13h" ] || [ "$mode" = "timedemo13h" ]; then
 	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM present 13h refused"; then
 		fail "refused"
 	fi
@@ -315,22 +347,30 @@ elif [ "$mode" = "measure" ] || [ "$mode" = "measure13h" ]; then
 	else
 		echo "WD24X-DOOM-RUN measure frames 60"
 	fi
-	if ! s6d_quiet; then
-		fail "s6d"
+	finish_rmmod
+elif [ "$mode" = "timedemo13h" ]; then
+	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM input tty"; then
+		fail "input"
 	fi
-	echo "WD24X-DOOM-RUN rmmod"
-	own_cleanup || fail "rmmod"
-	if ! text_ok; then
-		echo "WD24X-DOOM-RUN stop restore"
-		exit 1
+	found=
+	for log in "$P/tmp/wd24x-doom.out" "$P/tmp/wd24x-doom.err"; do
+		while IFS= read -r line; do
+			case "$line" in
+			"timed "*" gametics in "*" realtics") found=$line ;;
+			esac
+		done < "$log"
+	done
+	[ -n "$found" ] || fail "timedemo"
+	if [ "$dr" != "0" ] && [ "$dr" != "255" ]; then
+		fail "doom rc"
 	fi
-	echo "WD24X-DOOM-RUN restore mismatches 0"
-	console_ok || {
-		echo "WD24X-DOOM-RUN stop console after rmmod"
-		exit 1
-	}
-	echo "WD24X-DOOM-RUN done"
-	exit 0
+	set -- $found
+	gt=$2
+	rt=$5
+	[ "$rt" -gt 0 ] || fail "realtics"
+	echo "$found"
+	echo "WD24X-DOOM-FPS gametics $gt realtics $rt fps_x100 $((gt * 3500 / rt))"
+	finish_rmmod
 else
 	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM input tty"; then
 		fail "input"
