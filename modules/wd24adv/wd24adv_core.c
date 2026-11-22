@@ -993,6 +993,17 @@ static int mode_steps(struct wd24_ctx *c, const struct wd24_mode *m)
 	if (m->ext == WD24_EXT_PACKED8) {
 		c->tag = "bank 0, hw.c 389-390/397";
 		TRY(wd24_write(c, WD24_GR, WD24_GR_PR0A, 0x00));
+		/*
+		 * Default matches the existing order: unblank, then SR06.
+		 * settle_blank writes the BIOS SR06 first. Both writes are
+		 * the ones already in this function. wd90c24fb's unblank
+		 * (hw.c 637-640) restores SR06 before the panel is shown.
+		 */
+		if (c->settle_blank) {
+			c->tag = "SR06 = saved, hw.c 640";
+			TRY(wd24_write(c, WD24_SR, WD24_SR_PR20, c->bios.pr20));
+			return wd24_screen_on(c, true);
+		}
 		TRY(wd24_screen_on(c, true));
 		c->tag = "SR06 = saved, hw.c 640";
 		return wd24_write(c, WD24_SR, WD24_SR_PR20, c->bios.pr20);

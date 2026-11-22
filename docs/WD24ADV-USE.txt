@@ -95,6 +95,7 @@ is that same gate with fbcon bound, then `WD24X-SCROLL line` on tty0.
 | accel_gate | 0 | with accel=1, the 64x16 readback at (16,112) |
 | cursor_gate | 0 | one canned cursor show, then the bytes and block 2 back |
 | present_mode | empty | Doom sets `13h`: proven 320x200-8, one 64000-byte copy |
+| settle_blank | 0 | packed-8 only: BIOS SR06, then unblank. `docs/s6d-startup.txt` |
 
 `accel=1` without a passing gate is not the load to keep. A timeout
 after the blitter has started does not fall back to CPU stores.
