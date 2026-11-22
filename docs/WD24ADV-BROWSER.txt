@@ -35,18 +35,29 @@ library was detected. The README lists SDL 1.2, libxcb, wayland-client,
 and libvncserver. It does not list a Linux fbdev provider.
 `src/surface/linux.c` was removed in commit `b2bb565` (2018-07-29,
 "remove broken surface handlers for ABLE and linux framebuffer
-interface"). `ram.c` allocates a heap buffer with `realloc`. It does
-not open `/dev/fb0`. The older using-framebuffer note that names
-`-f linux` does not match this Makefile. `./nsfb -f ?` in that older
-note prints `ram`, `sdl`, `x`, `vnc`, `wld`.
+interface"). The parent of that commit is
+`51d3ee85de73949483af79671fe9075a10e405e3`. `tools/wd24-browser/patches/libnsfb-linux-fbdev.patch`
+puts a small `linux.c` back and adds it to `SURFACE_HANDLER_yes`.
+It opens `/dev/fb0` (or a parameter that starts with `/`), reads
+`FBIOGET_FSCREENINFO` and `FBIOGET_VSCREENINFO`, and `mmap`s
+`line_length * yres`. The original checked the map against NULL and
+called `munmap` with length 0. This copy checks `MAP_FAILED` and
+keeps the length. For 8bpp it builds the libnsfb cube with
+`nsfb_palette_generate_nsfb_8bpp` and programs it with `FBIOPUTCMAP`.
+Each 8-bit channel is stored as `(c >> 2) << 10`, which is what
+wd24adv's DAC read of `channel >> 10` turns back into the top 6 bits.
+Keys come from a raw tty (canonical and echo off, one byte, `poll`).
+The mouse is not wired. `ram.c` still allocates a heap buffer. The
+8bpp plotter writes index 0 when `palette` is NULL, so the same patch
+creates that palette on the ram surface. Without it a ram 8bpp frame
+stays zero.
 
 8bpp is still in the plotters. `src/plot/Makefile` compiles `8bpp.c`
 next to `16bpp.c` and the 32bpp files. The SDL surface accepts
 `bpp` 8, 16, or 32 and, for 8, calls `nsfb_palette_generate_nsfb_8bpp`
 and `SDL_SetColors` for 256 entries. That palette is SDL's, not the
-VGA DAC. A wd24adv session would need the 256 RGB triples programmed
-with the existing `FBIOPUTCMAP` path. Stock `nsfb` cannot do that
-mmap today.
+VGA DAC. The linux surface above is the path that programs the DAC
+through `FBIOPUTCMAP`.
 
 The Tiny Core 16 x86 extension `netsurf.tcz` is version 3.11, info
 Size 2.3M, tags gtk2, and the comment says "This version works only
@@ -57,10 +68,10 @@ That extension is the wrong frontend.
 
 ## RAM
 
-36 MB is the whole machine. This run did not measure a framebuffer
-NetSurf RSS. The browser, libcss, libdom, libhubbub, and the image
-decoders have to sit beside the kernel and wd24adv. JavaScript stays
-off. The internal bitmap font avoids FreeType and a font file.
+36 MB is the whole machine, 36*1024 = 36864 KiB. The qemu-user
+smoke below peaked at 16392 KiB, and that figure includes the
+emulator. JavaScript stays off. The internal bitmap font avoids
+FreeType and a font file.
 
 ## What has to be built
 
@@ -79,24 +90,64 @@ names are the ones `docs/env.sh` builds for a non-GTK target
 | libnsgif | GIF | not giflib7.tcz |
 | libnsbmp | BMP | not a tcz |
 | libnsutils libnspsl libnslog | support | not a tcz |
-| libsvgtiny | SVG | not a tcz |
-| librosprite | sprites | not a tcz |
+| libsvgtiny | SVG, not linked here | not a tcz |
+| librosprite | sprites, not linked here | not a tcz |
 | libnsfb `a287525` | plotters, ram/SDL/X/VNC/Wayland | not a tcz |
 | netsurf `170d894` framebuffer | `nsfb` | netsurf.tcz is GTK 3.11 |
 | libpng | PNG | libpng.tcz exists |
-| libjpeg-turbo | JPEG | libjpeg-turbo.tcz exists |
-| zlib | inflate | in the base system |
-| curl | fetches | curl.tcz exists; a file page still links it unless the build is cut |
-| freetype 2.13.3 | optional glyphs | freetype.tcz exists; not used for the internal font |
+| libjpeg 9f | JPEG | libjpeg-turbo.tcz exists; this build uses IJG jpeg 9f |
+| zlib 1.3.1 | inflate | in the base system |
+| curl | not linked | `NETSURF_USE_CURL=NO`. The page is `file:` only |
+| freetype | not linked | `NETSURF_FB_FONTLIB=internal` |
+| expat | not linked | libdom `WITH_EXPAT_BINDING=no` |
 
-`tools/wd24-browser/build.sh` prints those two pins and exits 2.
-`i486-linux-musl-gcc` is not on this machine, and there is no
-`/dev/fb0` surface to smoke-test. The script does not download.
+## Build
+
+`tools/wd24-browser/build.sh` downloads the musl.cc toolchain
+`i486-linux-musl-cross.tgz` (110230922 bytes, 23 Nov 2021, GCC
+11.2.1 20211120) and checks SHA-512
+`0a6e508d919d2b5404e53c5bad7ea10924967c4b528012495ecc41ca3f4b371a0da4d814a2a5a18e079b1c330fa808ab0eaa924a3571f3792bcf9004feee856c`.
+It then checks SHA-256 of zlib 1.3.1
+`9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23`,
+the GitHub tag archive of libpng 1.6.47
+`631a4c58ea6c10c81f160c4b21fa8495b715d251698ebc2552077e8450f30454`,
+and IJG `jpegsrc.v9f.tar.gz`
+`04705c110cb2469caa79fb71fba3d7bf834914706e9641a4589485c1f832565b`.
+Library commits are pinned in the script. Flags are
+`-O2 -march=i486 -mtune=i486`. Upstream makefiles also pass `-Werror`;
+the script appends `-Wno-error` so GCC 11 warnings do not stop the
+link. `Makefile.config` turns curl, OpenSSL, duktape, webp, jpegxl,
+svg, and librosprite off, and turns PNG, GIF, JPEG, and BMP on.
+
+The stripped static binary is not committed. This run wrote
+`/tmp/wd24-ns-prefix/bin/nsfb.strip`:
+
+- 3358656 bytes, unstripped sibling 6523364 bytes
+- sha256 `beeb6ae7ac78642cda3b3554be2b57ad6d556d89f7ae5ef39db2e1c6e887fe4e`
+- `file`: ELF 32-bit LSB pie, Intel 80386, static-pie, stripped
+- objdump of that file showed no cmov, endbr, rdtsc, cpuid, syscall, or sysenter
+
+Smoke was `qemu-i386-static -cpu 486` on the ram surface, not
+`qemu-system-i386`. A guest kernel was unnecessary once the static
+binary ran. The command was `-f ram -b 8 -w 640 -h 480` with
+`file://` `tools/wd24-browser/pages/canvas.html`, from the netsurf
+source directory so `./frontends/framebuffer/res/Messages` loads.
+`tools/wd24-browser/patches/netsurf-fb-dump.patch` writes the ram
+buffer after three seconds when `WD24X_FB_DUMP` is set. The dump was
+307200 bytes, sha256
+`a77b4e7e616f6cae31bd1d328fb8856f4ac6cd4050a620cf754ccdc70b22abeb`,
+71 distinct indexes. Index 0 (black) was 261465 pixels. The three
+solid blocks landed on indexes 4 (1599), 35 (1445), and 200 (1652),
+the same counts a 32bpp run gave for red, green, and blue. GNU
+`time -v` reported maximum resident set size 16392 kB. That is the
+qemu-user process, so it is an upper bound on the guest. 16392 is
+under 36864.
 
 ## Transfer
 
-XMODEM at 1970 bytes/s. The Size field is the published tcz, not a
-static framebuffer binary, which was not produced here.
+XMODEM at 1970 bytes/s. The stripped `nsfb` is the file to move.
+3358656 / 1970 is 1704 seconds with 1776 bytes left, so 1705 seconds.
+The tcz sizes below are the X frontends, not this binary.
 
 | published file | size used | seconds at 1970 B/s |
 |---|---|---|
@@ -106,5 +157,5 @@ static framebuffer binary, which was not produced here.
 | gtk2.tcz 2.3MB | same 2411724 | 1225 |
 
 One mebibyte is 1048576/1970 = 532 seconds, plus 496 bytes, so 533
-seconds. A static framebuffer link was not measured. The pieces
-above are a lower bound only for the wrong X frontends.
+seconds. The stripped framebuffer binary measured above is the
+transfer, not those tcz files.

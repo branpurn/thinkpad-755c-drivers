@@ -1,18 +1,30 @@
 Browser pass, after the eight steps in `docs/s6d-morning.txt`.
-It does not replace them and it does not run until
-`tools/wd24-browser/build.sh` can produce a binary. Today that
-script exits 2. No hardware contact in this file.
+It does not replace them. No hardware contact in this file.
 
-Stage on the CF card, not over the 1970 B/s link if the binary is
-more than a few hundred kilobytes. The page set is small:
+`tools/wd24-browser/build.sh` now produces the binary. The stripped
+file from this run is not in git. Copy
+`/tmp/wd24-ns-prefix/bin/nsfb.strip` and check it before the first
+insmod:
+
+- 3358656 bytes
+- sha256 `beeb6ae7ac78642cda3b3554be2b57ad6d556d89f7ae5ef39db2e1c6e887fe4e`
+- XMODEM at 1970 B/s: 1704 seconds, plus 1776 bytes, so 1705 seconds
+- qemu-user `-cpu 486` peak RSS 16392 kB, against 36*1024 = 36864 kB.
+  That number includes the emulator.
+
+Stage it on the CF card. 1705 seconds is the floppy-link cost if it
+goes over XMODEM instead. The page set is small:
 
 - `tools/wd24-browser/pages/canvas.html`
 - `bands.png`, `quad.gif`, `pixel.gif`, `dot.jpg`
 - `tools/wd24-browser/fbhash.sh`
 
-When a binary exists, record its sha256 and size next to the morning
-sums before the first insmod. `WD24X_DOOM_FAST` is unrelated. Leave
-`settle_blank` at 0.
+The qemu ram dump of `canvas.html` at 640x480x8 was 307200 bytes,
+sha256 `a77b4e7e616f6cae31bd1d328fb8856f4ac6cd4050a620cf754ccdc70b22abeb`.
+That hash is the offline render. It is not the pass value for the
+panel: the hardware frame includes the DAC and the fbdev surface, and
+step 3 records whatever `/dev/fb0` actually holds. `WD24X_DOOM_FAST`
+is unrelated. Leave `settle_blank` at 0.
 
 Stop on the first failure. Do not start the next step.
 
