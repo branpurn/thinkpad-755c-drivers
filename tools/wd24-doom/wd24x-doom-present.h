@@ -277,7 +277,14 @@ static inline void wd24x_doom_present(int mode, const uint8_t *src,
 	}
 }
 
-/* 64000 index bytes as aligned 32-bit stores. The tail past n is not written. */
+/*
+ * 64000 index bytes, one movl at a time. The tail past n is not written.
+ * A plain store loop becomes rep movsl at -O2 -march=i486 once this is
+ * inlined. A string move into the chain-4 window does not wait the way
+ * one movl does, and the CRTC then shows the frame rotated: the status
+ * bar at the top and the weapon wrapped onto the side. The kernel
+ * present path uses writel, which is also one movl. The asm keeps that.
+ */
 static inline void wd24x_doom_copy_dwords(uint8_t *dst, const uint8_t *src,
 					  unsigned int n)
 {
@@ -287,7 +294,10 @@ static inline void wd24x_doom_copy_dwords(uint8_t *dst, const uint8_t *src,
 		uint32_t w;
 
 		memcpy(&w, src + i, 4);
-		memcpy(dst + i, &w, 4);
+		asm volatile("movl %1, %0"
+			     : "=m"(*(uint32_t *)(dst + i))
+			     : "r"(w)
+			     : "memory");
 	}
 }
 

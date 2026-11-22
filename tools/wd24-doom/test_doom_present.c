@@ -150,6 +150,36 @@ int main(void)
 		T(memcmp(dst, src, 64000) == 0, "dword copy");
 		T(dst[64000] == 0xa5 && dst[64003] == 0xa5, "copy stops at 64000");
 	}
+	{
+		uint8_t frame[64000];
+		uint8_t win_io[65536];
+		uint8_t win_ap[65536];
+		uint8_t win_cp[65536];
+		unsigned x, y;
+
+		/* Known frame: view in rows 0..167, weapon centered on
+		 * row 150, status bar in rows 168..199. */
+		memset(frame, 0x11, sizeof frame);
+		for (y = 168; y < 200; y++)
+			memset(frame + y * 320u, 0xb0, 320);
+		for (x = 140; x < 180; x++)
+			frame[150u * 320u + x] = 0xee;
+		memset(win_io, 0, sizeof win_io);
+		memset(win_ap, 0, sizeof win_ap);
+		memset(win_cp, 0, sizeof win_cp);
+		wd24x_doom_copy_dwords(win_io, frame, 64000);
+		wd24x_doom_copy_dwords(win_cp, frame, 64000);
+		memcpy(win_ap, frame, 64000);
+		T(memcmp(win_io, win_ap, 65536) == 0, "ioctl matches aperture");
+		T(memcmp(win_cp, win_ap, 65536) == 0, "copy matches aperture");
+		T(win_cp[0] == 0x11, "row 0 is the view");
+		T(win_cp[168u * 320u] == 0xb0 &&
+		  win_cp[199u * 320u + 319u] == 0xb0, "status bar rows 168..199");
+		T(win_cp[150u * 320u + 140u] == 0xee &&
+		  win_cp[150u * 320u + 179u] == 0xee, "weapon stays centered");
+		T(win_cp[150u * 320u] != 0xee, "weapon is not at the left edge");
+		T(win_cp[64000] == 0, "window tail stays clear");
+	}
 
 	{
 		struct wd24x_doom_time tm;

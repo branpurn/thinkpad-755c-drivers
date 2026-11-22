@@ -154,6 +154,18 @@ Each column store is an uncached write. That can be slower than the
 ioctl copy. The morning batch measures it. It does not replace the
 ioctl timedemo.
 
+`aperturecopy` must not copy with `rep movsl`. At `-O2 -march=i486`
+a normal store loop inlines to that string move. The chain-4 window
+does not take a string move the way it takes one `movl`, and the
+CRTC then shows the frame rotated: status bar at the top, weapon
+wrapped to the side. `wd24x_doom_copy_dwords` is one `movl` per
+dword, the same shape as the kernel `writel` on the ioctl path.
+A host render of one frame through ioctl, aperture, and aperturecopy
+is byte-identical, and rows 168..199 stay the status bar. The
+stripped `FAST=all` binary is `/tmp/wd24x-doom.s`, 557944 bytes,
+sha256 `f0857f0cae65f1165966a7fd0e67577982eccd6d8b2076594a49ac9a5d25d7e0`.
+Put that sha in `WD24X_DOOM_SHA` before the next hardware run.
+
 ## Render bucket
 
 There is no `default.cfg`. The script refuses to run if one is present,

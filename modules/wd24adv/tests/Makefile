@@ -39,6 +39,7 @@ test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test
 	/tmp/wd24-test-doom-pick
 	$(CC) $(CFLAGS) -I../../../tools/wd24-doom -o /tmp/wd24-test-doom-present ../../../tools/wd24-doom/test_doom_present.c
 	/tmp/wd24-test-doom-present
+	dash ./test_doom_copy_asm.sh
 	$(CC) $(CFLAGS) -o /tmp/wd24-test-draw-exact ../../../tools/wd24-doom/test_draw_exact.c
 	/tmp/wd24-test-draw-exact
 	$(CC) $(CFLAGS) -I.. -o /tmp/wd24-test-13h-map test_13h_map.c
