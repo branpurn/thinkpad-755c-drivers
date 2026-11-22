@@ -201,18 +201,19 @@ s6d_after() {
 }
 
 session_ok() {
+	# s6d_fb_release (user != 0) sets s6d_cmap_frozen and clears
+	# s6d_busy. It does not clear published. xcmp does not open
+	# /dev/fb0. The close is the fb fd (Xfbdev fbdevCardFini:
+	# munmap, then close). A later PUT is refused while frozen.
+	# Thrash stays 0. busy is not required: the release cleared it.
 	s6d=$(cat "$P/proc/wd24adv/s6d" 2>/dev/null) || return 1
 	echo "$s6d"
 	case "$s6d" in
-	*"cmap_param 1 published 1 frozen 0"*) ;;
+	*"cmap_param 1 published 1 frozen 1"*) ;;
 	*) return 1 ;;
 	esac
 	case "$s6d" in
 	*" thrash 0 latched 0 "*) ;;
-	*) return 1 ;;
-	esac
-	case "$s6d" in
-	*" busy 1 "*) ;;
 	*) return 1 ;;
 	esac
 	return 0
