@@ -1,0 +1,38 @@
+Browser pass, after the eight steps in `docs/s6d-morning.txt`.
+It does not replace them and it does not run until
+`tools/wd24-browser/build.sh` can produce a binary. Today that
+script exits 2. No hardware contact in this file.
+
+Stage on the CF card, not over the 1970 B/s link if the binary is
+more than a few hundred kilobytes. The page set is small:
+
+- `tools/wd24-browser/pages/canvas.html`
+- `bands.png`, `quad.gif`, `pixel.gif`, `dot.jpg`
+- `tools/wd24-browser/fbhash.sh`
+
+When a binary exists, record its sha256 and size next to the morning
+sums before the first insmod. `WD24X_DOOM_FAST` is unrelated. Leave
+`settle_blank` at 0.
+
+Stop on the first failure. Do not start the next step.
+
+1. Same module as the morning desktop step, 640x480-8, trial 180,
+   `s6d=1 s6d_cmap=1`. Pass: insmod rc 0, `session ON` if a client
+   opens the fb, text console still the VGA driver until that open.
+2. Open the local page only. No network. Pass: the red, green, blue,
+   and white blocks are visible, the PNG bands are visible, the GIF
+   and JPEG do not draw as empty boxes. Brandon looks at the panel
+   for this line.
+3. `sh /tmp/fbhash.sh` while the page is up. Pass: one
+   `WD24X-BROWSER fb <64 hex> 307200` line, then the s6d text with
+   `faults 0`, `thrash 0`, and `mode letter` (this is 640x480, not
+   13h). Record `accel`, `gate`, and `match`.
+4. Scroll to `end of page`. Brandon confirms the view moved. Run
+   `fbhash.sh` again. Pass: the hash changed, faults still 0.
+5. Quit the browser so `/dev/fb0` closes. Pass: rmmod, then dmesg
+   `live text: 0` and `mismatches 0`, and no `readback:` line.
+   `WD24X-BROWSER live` from the hash script is not required after
+   rmmod; read dmesg.
+
+If step 2 never draws, stop. Do not switch to Dillo or to the GTK
+`netsurf.tcz`. Those are X clients and are not this test.
