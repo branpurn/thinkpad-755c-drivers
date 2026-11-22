@@ -62,12 +62,19 @@ EOF
 #!/bin/sh
 echo "INPUT=${WD24X_DOOM_INPUT-unset}" >> "$WD24X_MOCK/doom.args"
 echo "FB=${WD24X_DOOM_FB-unset}" >> "$WD24X_MOCK/doom.args"
+echo "PRESENT=${WD24X_DOOM_PRESENT-unset}" >> "$WD24X_MOCK/doom.args"
 echo "$*" >> "$WD24X_MOCK/doom.args"
 echo "WD24X-DOOM fb ioctl 320 200"
-echo "WD24X-DOOM present letterbox"
-echo "WD24X-DOOM blit letterbox dword"
 echo "WD24X-DOOM palette put 256"
-echo "WD24X-DOOM present switches 5"
+if [ "${WD24X_DOOM_PRESENT:-}" = "13h" ]; then
+	echo "WD24X-DOOM present 13h"
+	echo "WD24X-DOOM blit direct 64000"
+	echo "WD24X-DOOM present switches 0"
+else
+	echo "WD24X-DOOM present letterbox"
+	echo "WD24X-DOOM blit letterbox dword"
+	echo "WD24X-DOOM present switches 5"
+fi
 case " $* " in
 *" -timedemo "*)
 	echo "WD24X-DOOM input none"
@@ -158,7 +165,23 @@ grep -q "FRAMES=60" "$M/doom.args" && ok || bad "frames"
 grep -q "TIME=30" "$M/doom.args" && ok || bad "time env"
 grep -q "WD24X-DOOM-RUN measure frames 60" "$M/out" && ok || bad "measure line"
 grep -q "timedemo" "$M/out" && bad "measure wants gametics" || ok
+grep -q "mode=640x480-8" "$M/insmod.args" && ok || bad "measure mode"
+grep -q "present_mode=13h" "$M/insmod.args" && bad "measure 13h param" || ok
 [ "$rc" = 0 ] && ok || bad "measure rc"
+
+setup "$ROOT/modules/wd24adv/tests/.doom-13h"
+rc=$(run "$ROOT/modules/wd24adv/tests/.doom-13h" measure13h)
+M=$ROOT/modules/wd24adv/tests/.doom-13h
+grep -q "WD24X-DOOM-RUN done" "$M/out" && ok || bad "13h done"
+grep -q "trial=180" "$M/insmod.args" && ok || bad "13h trial"
+grep -q "mode=320x200-8" "$M/insmod.args" && ok || bad "13h mode"
+grep -q "present_mode=13h" "$M/insmod.args" && ok || bad "13h param"
+grep -q "mode=640x480-8" "$M/insmod.args" && bad "13h still 640" || ok
+grep -q "PRESENT=13h" "$M/doom.args" && ok || bad "13h env"
+grep -q "FRAMES=60" "$M/doom.args" && ok || bad "13h frames"
+grep -q "WD24X-DOOM-RUN measure13h frames 60" "$M/out" && ok || bad "13h line"
+grep -q "present 13h refused" "$M/out" && bad "13h refused" || ok
+[ "$rc" = 0 ] && ok || bad "13h rc"
 
 echo "test_doom_run: $pass passed, $fail failed"
 [ "$fail" = 0 ]

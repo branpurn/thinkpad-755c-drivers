@@ -7,10 +7,12 @@
 #   sh s6d-doom-run.sh demo3
 #   sh s6d-doom-run.sh eyes
 #   sh s6d-doom-run.sh measure
+#   sh s6d-doom-run.sh measure13h
 # demoN is -timedemo with no tty input. eyes opts into WD24X_DOOM_INPUT=tty
 # and is the keyboard test, not the unattended run. measure is demo1 for
 # 60 frames with WD24X_DOOM_TIME=30, trial 180, so the clock cannot
-# expire mid-run. Trial is otherwise 600s, the module maximum. The
+# expire mid-run. measure13h is the same 60 frames with present_mode=13h
+# and mode=320x200-8. Trial is otherwise 600s, the module maximum. The
 # engine's completed timedemo exits 255: I_Error prints
 # "timed N gametics in N realtics" and then exit(-1). That 255 is this
 # script's success, together with the gametics line. No VGA register writes
@@ -139,7 +141,7 @@ have_line() {
 
 case "$mode" in
 demo1|demo2|demo3|eyes) ;;
-measure) trial=180 ;;
+measure|measure13h) trial=180 ;;
 *) stop "mode" ;;
 esac
 
@@ -190,7 +192,15 @@ if grep -q '^wd90c24fb ' "$P/proc/modules" 2>/dev/null; then
 	stop "wd90c24fb"
 fi
 
-insmod "$KO" dryrun=0 live=1 mode=640x480-8 trial=$trial s6d=1 s6d_cmap=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
+gfx=640x480-8
+present=letterbox
+extra=
+if [ "$mode" = "measure13h" ]; then
+	gfx=320x200-8
+	present=13h
+	extra=present_mode=13h
+fi
+insmod "$KO" dryrun=0 live=1 mode=$gfx trial=$trial s6d=1 s6d_cmap=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=0 $extra
 rc=$?
 echo "RC=$rc"
 [ "$rc" = "0" ] || stop "insmod"
@@ -200,17 +210,17 @@ start=$(date +%s 2>/dev/null || echo 0)
 echo "WD24X-DOOM-RUN mode $mode"
 
 if [ "$mode" = "eyes" ]; then
-	WD24X_DOOM_FB=ioctl WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=letterbox \
+	WD24X_DOOM_FB=ioctl WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=$present \
 		WD24X_DOOM_INPUT=tty WD24X_DOOM_FRAMES= \
 		"$BIN" -iwad "$WAD" -nosound -nogui \
 		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
-elif [ "$mode" = "measure" ]; then
-	WD24X_DOOM_FB=ioctl WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=letterbox \
+elif [ "$mode" = "measure" ] || [ "$mode" = "measure13h" ]; then
+	WD24X_DOOM_FB=ioctl WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=$present \
 		WD24X_DOOM_INPUT= WD24X_DOOM_FRAMES=60 WD24X_DOOM_TIME=30 \
 		"$BIN" -iwad "$WAD" -timedemo demo1 -nosound -nogui \
 		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
 else
-	WD24X_DOOM_FB=ioctl WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=letterbox \
+	WD24X_DOOM_FB=ioctl WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=$present \
 		WD24X_DOOM_INPUT= WD24X_DOOM_FRAMES= \
 		"$BIN" -iwad "$WAD" -timedemo "$mode" -nosound -nogui \
 		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
@@ -222,24 +232,42 @@ cat "$P/tmp/wd24x-doom.err"
 if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM fb ioctl 320 200"; then
 	fail "ioctl"
 fi
-if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM present switches 5"; then
-	fail "switches"
-fi
-if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM present letterbox"; then
-	fail "present"
-fi
-if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM blit letterbox dword"; then
-	fail "blit"
-fi
 if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM palette put 256"; then
 	fail "palette"
+fi
+if [ "$mode" = "measure13h" ]; then
+	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM present 13h refused"; then
+		fail "refused"
+	fi
+	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM present 13h"; then
+		fail "present"
+	fi
+	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM blit direct 64000"; then
+		fail "blit"
+	fi
+	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM present switches 0"; then
+		fail "switches"
+	fi
+	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM blit letterbox dword"; then
+		fail "letterbox"
+	fi
+else
+	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM present switches 5"; then
+		fail "switches"
+	fi
+	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM present letterbox"; then
+		fail "present"
+	fi
+	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM blit letterbox dword"; then
+		fail "blit"
+	fi
 fi
 
 if [ "$mode" = "eyes" ]; then
 	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM input tty"; then
 		fail "input"
 	fi
-elif [ "$mode" = "measure" ]; then
+elif [ "$mode" = "measure" ] || [ "$mode" = "measure13h" ]; then
 	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM input tty"; then
 		fail "input"
 	fi
@@ -249,7 +277,11 @@ elif [ "$mode" = "measure" ]; then
 	if [ "$dr" != "0" ]; then
 		fail "doom rc"
 	fi
-	echo "WD24X-DOOM-RUN measure frames 60"
+	if [ "$mode" = "measure13h" ]; then
+		echo "WD24X-DOOM-RUN measure13h frames 60"
+	else
+		echo "WD24X-DOOM-RUN measure frames 60"
+	fi
 else
 	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM input tty"; then
 		fail "input"

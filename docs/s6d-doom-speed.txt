@@ -4,12 +4,12 @@ Measured on ead705ed: the ioctl path is correct (switches 5, faults 0,
 thrash 0, restore clean) and about 1.95 frames/s. 1167 presents filled
 the 600 s trial, which then expired before the timedemo printed
 gametics. Win98 on this machine is roughly ten times that. Do not
-raise the thrash bound. The first hardware step is the measurement
-below, not a new mode.
+raise the thrash bound. The letterbox measurement is the baseline.
+The fast path below is present_mode=13h, default off.
 
 ## What the current present does
 
-`WD24S6D_IOC_PRESENT` accepts only LETTER2X. Userspace hands over the
+`WD24S6D_IOC_PRESENT` accepts LETTER2X on the 640x480 session. Userspace hands over the
 320x200 index buffer (64000 bytes). The kernel copies that once, then
 for each of five 64 KiB windows calls the proven SETWIN and stores
 32-bit groups. Each group is expanded in C from the 320x200 source
@@ -19,10 +19,8 @@ write combining. The only port I/O in the loop is those five window
 programs. The fault counter is not touched, so the bound stays 32.
 
 The userspace ioctl path does not build a second 640x480 buffer unless
-`WD24X_DOOM_SUM=1`. It does hash the 64000 source bytes every frame
-even when the sum is off. That hash is in the render bucket of the
-timing line. It is the first thing to drop after the numbers, not
-before.
+`WD24X_DOOM_SUM=1`. The 64000-byte index hash runs only when that sum
+is on. With the sum off it is not in the render bucket.
 
 `tools/wd24-doom/build.sh` was `-Os`. The measurement build is `-O2
 -DNDEBUG -march=i486`, still stripped, still no `-g` and no `-pg`.
@@ -64,5 +62,10 @@ No 2x expand, no five window programs, no 300 KiB frame. `320x240-8x`
 stays UNPROVEN and is not the path. A banked mmap of 640x480 is the
 path that latches the thrash bound. Do not use it for the timedemo.
 
-This file does not switch the live session to 13h. Measure the
-letterbox path first.
+`present_mode=13h` is that path, and it is off unless the parameter is
+set. The session is `mode=320x200-8`. The present op is the 64000-byte
+copy. Trial expiry is the same text restore as the 2026-11-02 run.
+`WD24X_DOOM_PRESENT=13h` asks with `FBIOPUT_VSCREENINFO` 320x200x8 and
+the direct ioctl, and uses letterbox if a 640x480 frame refuses.
+`sh docs/s6d-doom-run.sh measure13h` is the 60-frame gate. The letterbox
+measurement on ead705ed does not load this parameter.
