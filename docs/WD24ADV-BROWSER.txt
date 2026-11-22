@@ -1,0 +1,110 @@
+Framebuffer browser for exercising wd24adv. Decision from the
+upstream trees read on 2026-11-22, not from the project homepages
+where they disagree with the source.
+
+## Choice
+
+Use the NetSurf framebuffer frontend (`nsfb`), not Dillo.
+
+Dillo 3.2.0 is the Tiny Core 16 x86 extension `dillo.tcz` (info Size
+544K). Its dep file lists `wget.tcz`, `fltk-1.3.tcz` (FLTK 1.3.11,
+info Size 500KB), `dejavu-fonts-ttf.tcz`, `mbedtls3-lib.tcz`, and
+`libwebp1.tcz`. Upstream `doc/install.md` requires FLTK 1.3 and names
+libpng, libjpeg, libwebp, and brotli as well. The Tiny Core 17 x86_64
+build log links FLTK as `-lfltk -lXcursor -lXext -lX11`. The x86
+`dillo.tcz.info` says it was tested on Xorg and Xvesa. There is no
+framebuffer frontend in that install document. GitHub issue 453 asks
+for a framebuffer build and points at NetSurf's frontends tree; it
+does not add one. Dillo on this machine would be an X client. That
+does not exercise the 8bpp fbdev path.
+
+NetSurf's framebuffer frontend is `frontends/framebuffer` and the
+binary name in its Makefile is `nsfb` (installed as `netsurf-fb`).
+It links `libnsfb` and optionally FreeType. The internal bitmap font
+is selected with `NETSURF_FB_FONTLIB=internal` (`FB_FONT_internal_ns-sans`
+in that Makefile). Image handlers are compiled from
+`content/handlers/image/Makefile` when `NETSURF_USE_PNG`,
+`NETSURF_USE_JPEG`, and `NETSURF_USE_GIF` are on: `png.c`, `jpeg.c`,
+`gif.c`. GIF and BMP go through NetSurf's `libnsgif` and `libnsbmp`,
+not giflib.
+
+`libnsfb` master `a287525eeafa4b9e721822670e1e03eeeef6b31c`
+(2026-11-15) `src/surface/Makefile` builds `surface.c` and `ram.c`
+always, and adds `sdl.c`, `x.c`, `vnc.c`, or `wld.c` only when that
+library was detected. The README lists SDL 1.2, libxcb, wayland-client,
+and libvncserver. It does not list a Linux fbdev provider.
+`src/surface/linux.c` was removed in commit `b2bb565` (2018-07-29,
+"remove broken surface handlers for ABLE and linux framebuffer
+interface"). `ram.c` allocates a heap buffer with `realloc`. It does
+not open `/dev/fb0`. The older using-framebuffer note that names
+`-f linux` does not match this Makefile. `./nsfb -f ?` in that older
+note prints `ram`, `sdl`, `x`, `vnc`, `wld`.
+
+8bpp is still in the plotters. `src/plot/Makefile` compiles `8bpp.c`
+next to `16bpp.c` and the 32bpp files. The SDL surface accepts
+`bpp` 8, 16, or 32 and, for 8, calls `nsfb_palette_generate_nsfb_8bpp`
+and `SDL_SetColors` for 256 entries. That palette is SDL's, not the
+VGA DAC. A wd24adv session would need the 256 RGB triples programmed
+with the existing `FBIOPUTCMAP` path. Stock `nsfb` cannot do that
+mmap today.
+
+The Tiny Core 16 x86 extension `netsurf.tcz` is version 3.11, info
+Size 2.3M, tags gtk2, and the comment says "This version works only
+with Xorg." Its dep file lists `gtk2.tcz` (2.24.33, info Size 2.3MB),
+`curl.tcz`, `librsvg.tcz`, `glibc_gconv.tcz`, and `libwebp1.tcz`.
+Those Size fields are each squashfs, not the transitive X stack.
+That extension is the wrong frontend.
+
+## RAM
+
+36 MB is the whole machine. This run did not measure a framebuffer
+NetSurf RSS. The browser, libcss, libdom, libhubbub, and the image
+decoders have to sit beside the kernel and wd24adv. JavaScript stays
+off. The internal bitmap font avoids FreeType and a font file.
+
+## What has to be built
+
+These are not Tiny Core extensions of the framebuffer frontend. The
+names are the ones `docs/env.sh` builds for a non-GTK target
+(`NS_INTERNAL_LIBS` and `NS_FRONTEND_LIBS`):
+
+| piece | role | on TC 16 x86 |
+|---|---|---|
+| buildsystem | NetSurf makefiles | not a tcz |
+| libwapcaplet | strings | not a tcz |
+| libparserutils | charset | not a tcz |
+| libhubbub | HTML | not a tcz |
+| libdom | DOM | not a tcz |
+| libcss | CSS | not a tcz |
+| libnsgif | GIF | not giflib7.tcz |
+| libnsbmp | BMP | not a tcz |
+| libnsutils libnspsl libnslog | support | not a tcz |
+| libsvgtiny | SVG | not a tcz |
+| librosprite | sprites | not a tcz |
+| libnsfb `a287525` | plotters, ram/SDL/X/VNC/Wayland | not a tcz |
+| netsurf `170d894` framebuffer | `nsfb` | netsurf.tcz is GTK 3.11 |
+| libpng | PNG | libpng.tcz exists |
+| libjpeg-turbo | JPEG | libjpeg-turbo.tcz exists |
+| zlib | inflate | in the base system |
+| curl | fetches | curl.tcz exists; a file page still links it unless the build is cut |
+| freetype 2.13.3 | optional glyphs | freetype.tcz exists; not used for the internal font |
+
+`tools/wd24-browser/build.sh` prints those two pins and exits 2.
+`i486-linux-musl-gcc` is not on this machine, and there is no
+`/dev/fb0` surface to smoke-test. The script does not download.
+
+## Transfer
+
+XMODEM at 1970 bytes/s. The Size field is the published tcz, not a
+static framebuffer binary, which was not produced here.
+
+| published file | size used | seconds at 1970 B/s |
+|---|---|---|
+| dillo.tcz 544K | 544*1024 = 557056 | 282, plus 1516 bytes, so 283 |
+| fltk-1.3.tcz 500KB | 500*1024 = 512000 | 259, plus 1730 bytes, so 260 |
+| netsurf.tcz 2.3M | 2.3*1024*1024 = 2411724 | 1224, plus 444 bytes, so 1225 |
+| gtk2.tcz 2.3MB | same 2411724 | 1225 |
+
+One mebibyte is 1048576/1970 = 532 seconds, plus 496 bytes, so 533
+seconds. A static framebuffer link was not measured. The pieces
+above are a lower bound only for the wrong X frontends.
