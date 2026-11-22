@@ -71,6 +71,10 @@ int main(void)
 		T(wd24_blit_allow(&bad) == -22, "dst");
 	}
 
+	T(wd24_present_ns(0, 5, 100) == 50000000ull, "five ticks at 100 Hz");
+	T(wd24_present_ns(10, 10, 100) == 0, "same tick");
+	T(wd24_present_ns(0, 1, 0) == 0, "no tick rate");
+
 	printf("test_present_thrash: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;
 }

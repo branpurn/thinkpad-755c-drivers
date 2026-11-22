@@ -23,6 +23,18 @@
 #define WD24_PRESENT_LETTER_Y	40u
 #define WD24_PRESENT_WINS	8u
 
+/* Jiffy span as ns. HZ is the kernel tick. 100 and 250 divide 1e9. */
+static inline unsigned long long wd24_present_ns(unsigned long begin,
+						 unsigned long end,
+						 unsigned long hz)
+{
+	unsigned long d = end - begin;
+
+	if (!hz)
+		return 0;
+	return (unsigned long long)d * (1000000000ul / hz);
+}
+
 struct wd24_blit_check {
 	u32 src_w;
 	u32 src_h;

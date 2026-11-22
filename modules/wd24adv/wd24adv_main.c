@@ -1865,6 +1865,7 @@ static struct fb_info *s6d_info;
 static bool s6d_armed, s6d_busy;
 static bool s6d_cmap_published, s6d_cmap_frozen;
 static u32 s6d_pf_frames, s6d_pf_last, s6d_pf_total;
+static u64 s6d_pf_ns, s6d_pf_copy_ns;
 /* One 64000-byte buffer for the blit. vmalloc, not kmalloc: a fixed
  * allocation above 8 KiB on i386 is __kmalloc_large_noprof, which this
  * floppy kernel does not export. Not freed per frame. */
@@ -2838,10 +2839,15 @@ static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long ar
 	}
 	if (!s6d_present_src)
 		return -ENOMEM;
-	if (copy_from_user(s6d_present_src,
-			   (void __user *)(unsigned long)req.pixels,
-			   WD24S6D_PRESENT_SRC))
-		return -EFAULT;
+	{
+		unsigned long c0 = jiffies;
+
+		if (copy_from_user(s6d_present_src,
+				   (void __user *)(unsigned long)req.pixels,
+				   WD24S6D_PRESENT_SRC))
+			return -EFAULT;
+		s6d_pf_copy_ns += wd24_present_ns(c0, jiffies, HZ);
+	}
 	hw_acq();
 	if (!s6d_st || !s6d_st->active || !s6d_armed || s6d_st->stopping ||
 	    !vmem || !hw || hw->in_text || hw_dead || vram_dead) {
@@ -2868,7 +2874,13 @@ static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long ar
 		hw->tag = "S6d: present";
 	}
 #endif
-	err = s6d_present_now(s6d_present_src, &nsw);
+	{
+		unsigned long p0 = jiffies;
+
+		err = s6d_present_now(s6d_present_src, &nsw);
+		if (!err)
+			s6d_pf_ns += wd24_present_ns(p0, jiffies, HZ);
+	}
 #ifndef WD24S1_QEMU_FAKE
 	if (hw)
 		hw->be->end(hw);
@@ -3044,6 +3056,8 @@ static void s6d_arm(const struct wd24_mode *m)
 	s6d_pf_frames = 0;
 	s6d_pf_last = 0;
 	s6d_pf_total = 0;
+	s6d_pf_ns = 0;
+	s6d_pf_copy_ns = 0;
 	s6d_busy = false;	/* userspace open is separate from the arm session */
 	if (!s6d_fbcon) {
 		/* Unchanged: no fbdev node, so no fbcon and no mmap. */
@@ -3153,7 +3167,7 @@ static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 			"faults %u switches %u thrash %u latched %u mapped_base 0x%x\n"
 			"why %s\n"
 			"cmap_param %d published %d frozen %d\n"
-			"present frames %u last %u total %u\n"
+			"present frames %u last %u total %u ns %llu copy_ns %llu\n"
 			"accel %u gate %u match %u\n"
 			"cursor %u show %u regs %u vram %u restored %u\n",
 			s6d_armed, s6d_st->active, s6d_st->stopping, s6d_busy,
@@ -3164,6 +3178,8 @@ static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 			s6d_st->why ? s6d_st->why : "-",
 			s6d_cmap, s6d_cmap_published, s6d_cmap_frozen,
 			s6d_pf_frames, s6d_pf_last, s6d_pf_total,
+			(unsigned long long)s6d_pf_ns,
+			(unsigned long long)s6d_pf_copy_ns,
 			accel, s6d_agate, s6d_amatch,
 			cursor_gate, cur_show, cur_regs, cur_vram, cur_rest);
 	}
