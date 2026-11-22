@@ -48,9 +48,7 @@ its done line.
 
 ```
 sh /tmp/s6d-desktop-run.sh
-sh /tmp/s6d-doom-run.sh demo1
-sh /tmp/s6d-doom-run.sh demo2
-sh /tmp/s6d-doom-run.sh demo3
+sh /tmp/s6d-doom-run.sh timedemo13h
 ```
 
 The desktop script is the startx stand-in: Xfbdev on `/dev/fb0`, the
@@ -58,7 +56,7 @@ palette checked against `/proc/wd24adv/cmap`, then the trial puts
 text back. Do not run a second X, and do not startx by hand on top of
 that session.
 
-After those four done lines, and only then:
+After those done lines, and only then:
 
 ```
 sh /tmp/s6d-fbcon-run.sh
@@ -96,25 +94,47 @@ is that same gate with fbcon bound, then `WD24X-SCROLL line` on tty0.
 | accel | 0 | CPU fills and no copy. 1 uses the S4 rectangle program |
 | accel_gate | 0 | with accel=1, the 64x16 readback at (16,112) |
 | cursor_gate | 0 | one canned cursor show, then the bytes and block 2 back |
+| present_mode | empty | Doom sets `13h`: proven 320x200-8, one 64000-byte copy |
 
 `accel=1` without a passing gate is not the load to keep. A timeout
 after the blitter has started does not fall back to CPU stores.
 
-Run `demo2` and `demo3` only after `WD24X-DOOM-RUN done`. Doom sets
-`WD24X_DOOM_FB=ioctl`. That is the blit: 320 by 200, scale 2, 64000
-bytes. The pass line is `WD24X-DOOM present switches 5`. Faults stay
-0 and the thrash latch stays clear. A completed timedemo exits 255
-because the engine reports the timing and then exits. That 255 with
-the gametics line is success.
+`timedemo13h` is the Doom run. It loads `mode=320x200-8` and
+`present_mode=13h`. The present is one 64000-byte copy, no expansion
+and no window program. Pass lines include `WD24X-DOOM blit direct
+64000`, `WD24X-DOOM present switches 0`, Doom's `timed N gametics in
+N realtics` line, and `WD24X-DOOM-RUN restore mismatches 0`. Faults
+stay 0 and the thrash latch stays clear. A completed timedemo exits
+255 because the engine reports the timing and then exits. That 255
+with the gametics line is success. There is no `default.cfg`, so the
+engine keeps `screenblocks` 10 and `detaillevel` 0. The command
+passes `-nosound -nogui`.
+
+On module `2436a39a` with `wd24x-doom` `f95ae448`, 60 frames of that
+path took 1735 ms to render, 1005 ms to present, and 16 ms of
+palette: 28.92 ms, 16.75 ms, and 0.27 ms per frame, 45.93 ms together,
+about 21.8 frames/s. The letterbox present on `ead705ed` was 427.18 ms
+per frame.
+
+`demo1` is the older letterbox gate (`present switches 5`). Run
+`demo2` and `demo3` only after a letterbox `WD24X-DOOM-RUN done`.
 
 `sh /tmp/s6d-doom-run.sh eyes` is the keyboard run. Only while someone
 is watching. It does not call `KDSETMODE`.
 
-The Win98 comparison is the same wad, screen size 9, high detail, no
-config file, `doom -timedemo demo1`. `fps_x100` is
-`gametics * 3500 / realtics`. No number in this tree is that bar.
-`600000` in the zone line is a hex print of 6 MiB. `couldn't open
-demo1.lmp` is the external-file probe. The demo in the wad still runs.
+The Win98 comparison is the same shareware `doom1.wad` v1.9, the same
+settings, and sound off:
+
+```
+doom -timedemo demo1
+```
+
+On Win98, `default.cfg` must set `screenblocks` 10 and `detaillevel`
+0, and sound must be off. Our gate passes `-nosound` and refuses a
+config file, which is those compiled defaults. `fps_x100` is
+`gametics * 3500 / realtics`. `600000` in the zone line is a hex
+print of 6 MiB. `couldn't open demo1.lmp` is the external-file probe.
+The demo in the wad still runs.
 
 ## Recover
 

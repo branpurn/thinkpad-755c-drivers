@@ -72,22 +72,31 @@ sees one.
 
 ## What the Win98 run compares
 
-Same wad. Vanilla defaults: screen size 9 (status bar visible), high
-detail (`detaillevel` 0). No custom config. `doom -timedemo demo1`,
-then demo2 and demo3 the same way. Our command does not pass a screen
-size and does not load a config, which is that default in this engine.
-The script prints `WD24X-DOOM-FPS gametics N realtics N fps_x100 N`
-with `fps_x100 = gametics * 3500 / realtics` (35 Hz). A completed
-timedemo exits 255 because the engine reports the timing through
-`I_Error` and then `exit(-1)`. That 255 plus the `timed N gametics in
-N realtics` line is success, not a driver fault. No fps number in this
-tree is the bar. The Win98 timedemo on this machine is the bar.
+Same wad. This engine's compiled defaults, with no config file:
+`screenblocks` 10 and `detaillevel` 0 (high detail, view 320x168,
+status bar still drawn). Sound off. The Win98 comparison is that
+same shareware wad and those settings:
 
-The timedemo blit is letterbox, 320x200 doubled into the 640x400 band
-at rows 40..439, done in the kernel. Five window programs per frame.
-Two source pixels per aligned 32-bit store. No mmap fault on that
-path. `WD24X_DOOM_FB=mmap` still exists and is not what the script
-sets. Fill stays available and is not the timedemo.
+```
+doom -timedemo demo1
+```
+
+On Win98, `default.cfg` must contain `screenblocks 10` and
+`detaillevel 0`, and sound must be off. Our gate is
+`sh docs/s6d-doom-run.sh timedemo13h`. It passes `-nosound -nogui`
+and `present_mode=13h`. The script prints Doom's `timed N gametics
+in N realtics` line and `WD24X-DOOM-FPS gametics N realtics N
+fps_x100 N` with `fps_x100 = gametics * 3500 / realtics` (35 Hz).
+A completed timedemo exits 255 because the engine reports the timing
+through `I_Error` and then `exit(-1)`. That 255 plus the gametics
+line is success, not a driver fault.
+
+The Doom present is mode 13h: one 64000-byte copy, no expansion, no
+window program. On module `2436a39a` with `wd24x-doom` `f95ae448`,
+60 frames were 28.92 ms render, 16.75 ms present, 0.27 ms palette,
+45.93 ms/frame, about 21.8 frames/s. `demo1` remains the letterbox
+gate (five window programs, `present switches 5`). `WD24X_DOOM_FB=mmap`
+still exists and is not what the script sets.
 
 ## Order
 
@@ -112,16 +121,17 @@ directory. Do not export `WD24X_MOCK`.
    This is not a long-lived X session and not a panel reading of hue.
 
 2. Doom timedemo, after the new module and `wd24x-doom` are pinned.
-   Do not use `fdf30c77` for this. `sh /tmp/s6d-doom-run.sh demo1`
-   Then, only after `WD24X-DOOM-RUN done`, `demo2`, then `demo3`.
-   Each is its own insmod, trial 600. Input stays off. Pass adds
+   Do not use `fdf30c77` for this. `sh /tmp/s6d-doom-run.sh timedemo13h`
+   One insmod, `mode=320x200-8 present_mode=13h`, trial 600. Input
+   stays off. Sound is off. `screenblocks` 10, `detaillevel` 0.
+   Pass adds
    `WD24X-DOOM fb ioctl 320 200`,
-   `WD24X-DOOM present switches 5`,
-   `WD24X-DOOM blit letterbox dword`,
+   `WD24X-DOOM blit direct 64000`,
+   `WD24X-DOOM present switches 0`,
    `WD24X-DOOM palette put 256`,
-   the gametics line, and `WD24X-DOOM-RUN done`.
-   `/proc/wd24adv/s6d` grows `present frames N last 5 total ...`.
-   Faults stay 0. The thrash latch stays clear.
+   the gametics line, and `WD24X-DOOM-RUN restore mismatches 0`.
+   Faults stay 0. The thrash latch stays clear. The script rmmods
+   when Doom exits. It does not wait out the trial.
 
 3. Normal play, only while someone is watching the panel.
    `sh /tmp/s6d-doom-run.sh eyes`

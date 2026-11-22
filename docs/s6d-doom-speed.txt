@@ -64,13 +64,22 @@ No 2x expand, no five window programs, no 300 KiB frame. `320x240-8x`
 stays UNPROVEN and is not the path. A banked mmap of 640x480 is the
 path that latches the thrash bound. Do not use it for the timedemo.
 
-`present_mode=13h` is that path, and it is off unless the parameter is
-set. The session is `mode=320x200-8`. The present op is the 64000-byte
-copy. Trial expiry is the same text restore as the 2026-11-02 run.
+`present_mode` still defaults to empty, so a 640x480 load stays
+letterbox. The Doom run sets `present_mode=13h`. The session is
+`mode=320x200-8`. The present op is the 64000-byte copy. Trial expiry
+is the same text restore as the 2026-11-02 run.
 `WD24X_DOOM_PRESENT=13h` asks with `FBIOPUT_VSCREENINFO` 320x200x8 and
 the direct ioctl, and uses letterbox if a 640x480 frame refuses.
-`sh docs/s6d-doom-run.sh measure13h` is the 60-frame gate. The letterbox
-measurement on ead705ed does not load this parameter.
+
+`measure13h` on module `2436a39a` with `wd24x-doom` `f95ae448`: 60
+frames, render 1735 ms, present 1005 ms, palette 16 ms. Per frame
+that is 28.92 ms, 16.75 ms, and 0.27 ms, 45.93 ms together, about
+21.8 frames/s. `blit direct 64000`, switches 0, faults 0, thrash 0,
+rmmod mismatches 0. The script in that run still waited for the trial
+and then failed `live_ok`. `measure13h` and `timedemo13h` now rmmod
+instead. `sh docs/s6d-doom-run.sh timedemo13h` is the full
+`-timedemo demo1`. The Win98 comparison is `doom -timedemo demo1`
+on the same wad with `screenblocks` 10, `detaillevel` 0, and sound off.
 
 ## Render bucket
 

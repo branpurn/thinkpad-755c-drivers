@@ -31,7 +31,13 @@ Doom), direct mapping and, later, page flipping on the **internal panel only**.
 
 `modprobe wd24adv` with no arguments does not touch the panel.
 `docs/s6d-desktop-run.sh` is the startx stand-in (Xfbdev, palette
-check, trial restore). `docs/s6d-doom-run.sh` is the timedemo.
+check, trial restore). `docs/s6d-doom-run.sh timedemo13h` is the Doom run: `present_mode=13h`,
+one 64000-byte copy. Measured on module `2436a39a` with `wd24x-doom`
+`f95ae448`: 28.92 ms render, 16.75 ms present, 0.27 ms palette,
+45.93 ms/frame, about 21.8 frames/s. Settings are `screenblocks` 10,
+`detaillevel` 0, `-nosound`. The Win98 bar is `doom -timedemo demo1`
+with that same wad and those settings. The module parameter still
+defaults to empty, so a 640x480 load stays letterbox.
 `docs/s6d-fbcon-run.sh` is the console, and it waits until those done
 lines exist. `accel=0` is the default. `docs/s6d-accel-run.sh` and
 `docs/s6d-scroll-run.sh` are the next build, pinned in
