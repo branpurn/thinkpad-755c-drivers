@@ -20,8 +20,10 @@ WD24X_DOOM_FAST=all
 Leave `WD24X_DOOM_DETAIL` unset. `low` changes the picture. Pin
 `wd24x-doom` before the first run. `FAST=all` is
 `-fomit-frame-pointer`, the direct 320x200 buffer, and the unrolled
-column and span. It does not turn on either aperture path. One
-binary runs all three Doom steps.
+column, span, fuzz, and translated column. It does not turn on
+either aperture path. One binary runs all three Doom steps. That
+binary is the fast-render build. There is no fourth Doom script.
+Script hashes are `docs/s6d-morning-SHA256SUMS`.
 
 Order, one script at a time, each with its own insmod and rmmod.
 Do not start the next until the previous done line is on the serial

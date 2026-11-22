@@ -160,6 +160,8 @@ The demo in the wad still runs.
 Every port write, its read-back mask, and the restore that puts the
 load-time value back are in `docs/WD24ADV-REGS.txt`.
 
+Acceptance for a release candidate is `docs/WD24ADV-ACCEPT.txt`.
+
 ## Recover
 
 Read the script's `stop` line. Do not insmod again while `wd24adv` is

@@ -51,7 +51,10 @@ lines exist. `accel=0` is the default. `docs/s6d-accel-run.sh` and
 `docs/s6d-cursor-run.sh` is the canned cursor show (`cursor_gate=0`
 unless that script sets it). `fb_cursor` is not connected.
 Recovery, including a blitter timeout and a cursor restore miss, is
-in the USE file.
+in the USE file. The acceptance list is
+[`docs/WD24ADV-ACCEPT.txt`](../../docs/WD24ADV-ACCEPT.txt). Register
+writes are [`docs/WD24ADV-REGS.txt`](../../docs/WD24ADV-REGS.txt).
+The morning order is [`docs/s6d-morning.txt`](../../docs/s6d-morning.txt).
 
 ## Files
 
