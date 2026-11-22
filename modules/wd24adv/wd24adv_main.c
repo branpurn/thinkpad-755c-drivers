@@ -219,7 +219,8 @@ static size_t plan_len, modes_len, self_len;
  * console_lock while already holding hw_lock from a path fbcon can re-enter
  * (fault is the exception that is ordered console_lock, then hw_lock).
  * hw_task lets fb draw nest when printk fires on the holder: the mutex
- * itself is not recursive. */
+  * itself is not recursive.
+  */
 static DEFINE_MUTEX(hw_lock);
 static struct task_struct *hw_task;
 static int s6d_in_draw;
@@ -252,7 +253,8 @@ static bool hw_nested(void)
 /* Same-task reentry (printk into fbcon while this task holds hw_lock)
  * must not draw and must not lock again. The mutex is not recursive.
  * A nested draw used to run whenever the outer section was not itself
- * a draw; that touched the aperture mid-critical-section. */
+  * a draw; that touched the aperture mid-critical-section.
+  */
 static bool s6d_registering;
 static bool wd24_exiting;
 static struct wd24s6d *s6d_st;
@@ -274,7 +276,8 @@ static void __iomem *vmem;
 static bool have_ports;
 static bool hw_dead;	/* a live load failed after writing: restored, inert */
 /* sticky: an S3 BITBLT timed out and was not seen idle afterwards; no
- * video memory access of any kind, module pinned (rmmod refused) */
+  * video memory access of any kind, module pinned (rmmod refused)
+  */
 static bool vram_dead;
 static bool s3_pinned;
 static struct wd24s3 *s3st;
@@ -363,7 +366,8 @@ static ssize_t live_read(struct file *f, char __user *b, size_t n, loff_t *p)
 	/* Non-blocking: a draw or mode set may hold hw_lock. A blocked
 	 * proc read is not what stopped the 2026-11-05 insmod (that task
 	 * never returned to the shell). trylock still keeps a later read
-	 * from sleeping behind a long paint. */
+	 * from sleeping behind a long paint.
+	 */
 	static const char busy[] =
 		"wd24adv: hw busy (draw/mode holds lock); retry\n";
 	ssize_t r;
@@ -724,7 +728,8 @@ static int hw_mode(const struct wd24_mode *m)
 		/* Local timer base. queue_delayed_work_on(WORK_CPU_UNBOUND)
 		 * can park the timer on a housekeeping CPU this UP build
 		 * never runs. mod_timer stays on the CPU that armed it.
-		 * A cmap publish with no mmap must not be required to fire it. */
+		 * A cmap publish with no mmap must not be required to fire it.
+		 */
 		mod_timer(&trial_timer, jiffies + (unsigned long)trial * HZ);
 		pr_info("%s set: write \"confirm\" to /proc/wd24adv/control within %u s or it reverts to text\n",
 			m->name, trial);
@@ -750,7 +755,8 @@ static void trial_fn(struct work_struct *w)
 	gate.active = s6d_st && s6d_st->active;
 	/* register_framebuffer may have dropped hw_lock. Do not tear the
 	 * session down under it; run this expiry once registration returns.
-	 * faults == 0 is not a reason to wait. */
+	 * faults == 0 is not a reason to wait.
+	 */
 	if (!wd24_trial_expire_now(&gate, s6d_registering, READ_ONCE(wd24_exiting))) {
 		if (s6d_registering && !READ_ONCE(wd24_exiting) && gate.pending) {
 			hw_rel();
@@ -1239,7 +1245,8 @@ static bool s3_region;	/* 23C0-23C3 held by s3_live */
 /* caller holds hw_lock.  0: video memory may be accessed.  After an S3
  * timeout, a bounded read-only ACT poll decides; still busy -> sticky
  * vram_dead (hw->no_vram: registers-only restore; every memory path
- * refused; module stays pinned). */
+  * refused; module stays pinned).
+  */
 static int vram_gate(const char *what)
 {
 	bool got = false;
@@ -1560,7 +1567,8 @@ static void s6b_report(const char *what, int err)
 
 #ifdef WD24S1_QEMU_FAKE
 /* the fake window is plain memory: flush it to the model before any bank
- * change, reload it after (steady state: b3 on, b7 off) */
+  * change, reload it after (steady state: b3 on, b7 off)
+  */
 static void s6b_sync(bool out)
 {
 	if (!s6b_st || s6b_st->state != WD24S6B_ON)
@@ -1570,13 +1578,17 @@ static void s6b_sync(bool out)
 	else
 		s6b_mio.mr(s6b_mio.priv, 0, s6b_win, 0x10000);
 }
-#define S6B_HW_BEGIN()	do { } while (0)
-#define S6B_HW_END()	do { } while (0)
+#define S6B_HW_BEGIN()	do { \
+} while (0)
+#define S6B_HW_END()	do { \
+} while (0)
 #else
 static void s6b_sync(bool out) { }
 #define S6B_HW_BEGIN()	do { console_lock(); hw->be->begin(hw); \
-	hw->tag = "S6b: dual-window session"; } while (0)
-#define S6B_HW_END()	do { hw->be->end(hw); console_unlock(); } while (0)
+	hw->tag = "S6b: dual-window session"; \
+} while (0)
+#define S6B_HW_END()	do { hw->be->end(hw); console_unlock(); \
+} while (0)
 #endif
 
 /* caller holds hw_lock */
@@ -1597,7 +1609,8 @@ static void s6b_end_locked(const char *why)
 }
 
 /* hw_run (text, mode, trial expiry, rmmod): the session ends first and
- * no new session can start */
+  * no new session can start
+  */
 static void s6b_stop(const char *why)
 {
 	s6b_armed = false;
@@ -1874,7 +1887,8 @@ static u32 s6d_pf_frames, s6d_pf_last, s6d_pf_total;
 static u64 s6d_pf_ns, s6d_pf_copy_ns;
 /* One 64000-byte buffer for the blit. vmalloc, not kmalloc: a fixed
  * allocation above 8 KiB on i386 is __kmalloc_large_noprof, which this
- * floppy kernel does not export. Not freed per frame. */
+  * floppy kernel does not export. Not freed per frame.
+  */
 static u8 *s6d_present_src;
 static unsigned int s6d_agate, s6d_amatch;
 static unsigned int cur_show, cur_regs, cur_vram, cur_rest;
@@ -1883,7 +1897,8 @@ static unsigned int cur_show, cur_regs, cur_vram, cur_rest;
  * module's vm_ops go away. Caller holds hw_lock. Order matches
  * wd24s6d_stop_step(): quiesce, unmap, then the caller ends the session.
  * unmap_mapping_range takes its own locks, so hw_lock is dropped across it.
- * stopping is set first so a fault cannot pass its check in that window. */
+  * stopping is set first so a fault cannot pass its check in that window.
+  */
 static void s6d_drop_maps(void)
 {
 	struct address_space *mapping = NULL;
@@ -1908,7 +1923,8 @@ static void s6d_end_locked(const char *why)
 	/* Caller holds hw_lock. A fault holds console_lock, then hw_lock.
 	 * Taking console_lock here while still holding hw_lock deadlocks
 	 * that fault. Drop hw first. s6d_ender keeps another hw_run from
-	 * restoring text until wd24s6b_end has finished. */
+	 * restoring text until wd24s6b_end has finished.
+	 */
 	s6d_yield_ender();
 	if (!s6d_st || !s6d_st->active)
 		return;
@@ -1939,7 +1955,8 @@ static void s6d_end_locked(const char *why)
 #endif
 	/* Drop hw before printk. A fault may hold console_lock and be
 	 * waiting for hw_lock; printing while holding hw_lock deadlocks it.
-	 * s6d_ender stays set so another hw_run does not restore text yet. */
+	 * s6d_ender stays set so another hw_run does not restore text yet.
+	 */
 	hw_rel();
 	if (err)
 		pr_err("S6d: end (%s): %d\n", why, err);
@@ -1966,10 +1983,12 @@ static void s6d_stop(const char *why)
 	bool need_unreg = false;
 
 	/* Before any lock drop. A SET waiting on hw_lock must see this
-	 * and return without a 3C9 write. Text restore follows s6d_stop. */
+	 * and return without a 3C9 write. Text restore follows s6d_stop.
+	 */
 	s6d_cmap_frozen = true;
 	/* quiesce + unmap, end-session, then unregister. text-restore is
-	 * hw_run's next step (trial expiry, "text", rmmod), not here. */
+	 * hw_run's next step (trial expiry, "text", rmmod), not here.
+	 */
 	s6d_armed = false;
 	if (s6d_st && s6d_st->fb_reg) {
 		s6d_st->fb_reg = false;
@@ -2001,7 +2020,8 @@ static vm_fault_t s6d_fault(struct vm_fault *vmf)
 		return VM_FAULT_SIGBUS;
 	/* console_lock then hw_lock, same order as fbcon. Both sleeps are
 	 * uninterruptible: a userspace alarm or SIGKILL cannot pull the
-	 * task out of this fault. */
+	 * task out of this fault.
+	 */
 #ifndef WD24S1_QEMU_FAKE
 	console_lock();
 #endif
@@ -2196,7 +2216,8 @@ static void s6d_cmap_apply(struct fb_info *info, struct wd24_cmap_fault f)
 /* Caller holds info->lock and hw_lock. A matching read publishes <<10.
  * The read writes 3C6=FFh and 3C7=00 before the compare. It does not
  * write 3C9. A mismatch latches failed and does not free the cache.
- * busy is the caller's job, after this returns 0. */
+  * busy is the caller's job, after this returns 0.
+  */
 static int s6d_cmap_publish(struct fb_info *info)
 {
 	u8 live_dac[768];
@@ -2242,7 +2263,8 @@ static int s6d_cmap_publish(struct fb_info *info)
  * FBIOPUT_VSCREENINFO holds console_lock, then info->lock, then
  * fb_set_var calls fb_set_cmap on the published cache. Same lock order
  * as a fault (console, then hw). This function does not print: the
- * caller may already hold console_lock. */
+  * caller may already hold console_lock.
+  */
 static int s6d_fb_setcmap(struct fb_cmap *cmap, struct fb_info *info)
 {
 	struct wd24_cmap_view view;
@@ -2297,7 +2319,8 @@ static int s6d_fb_open(struct fb_info *info, int user)
 	/* user=0 is fbcon. Refusing it makes fbcon_startup return NULL on
 	 * the first registration, so do_take_over_console does not bind.
 	 * Safe only when no framebuffer is already registered (fbcon's
-	 * console driver is not in the table yet). /proc/fb must be empty. */
+	 * console driver is not in the table yet). /proc/fb must be empty.
+	 */
 	if (!user)
 		return s6d_bind ? 0 : -EBUSY;
 	hw_acq();
@@ -2371,7 +2394,8 @@ static int s6d_fb_release(struct fb_info *info, int user)
 	 * inverts fbcon's order and can stall the trial worker. A mapped
 	 * fd still has to drop PTEs now; the banking end runs after this
 	 * returns. A publish-only fd never mapped, so it must not set
-	 * stopping or end the session: the trial timer still owns the mode. */
+	 * stopping or end the session: the trial timer still owns the mode.
+	 */
 	hw_acq();
 	s6d_cmap_frozen = true;
 	gate.pending = hw && hw->trial_pending;
@@ -2402,17 +2426,20 @@ static int s6d_fb_release(struct fb_info *info, int user)
 /* Banked CPU fill for fbcon — SETWIN + A0000 writes; no accel.
  * printk on console=tty0 re-enters these while the same task holds
  * hw_lock. Nest instead of taking the mutex again, and do not print
- * from inside the draw (that recurses). */
+  * from inside the draw (that recurses).
+  */
 static bool s6d_draw_enter(bool *took)
 {
 	/* Any same-task reentry already holds hw_lock. Drawing here would
-	 * run inside that critical section; locking again would sleep forever. */
+	 * run inside that critical section; locking again would sleep forever.
+	 */
 	if (hw_nested())
 		return false;
 	*took = true;
 	hw_acq();
 	/* Do not yield here. fbcon calls this with console_lock held, and
-	 * the end path is waiting for that lock. */
+	 * the end path is waiting for that lock.
+	 */
 	if (!s6d_st || !s6d_st->active || s6d_st->stopping || !vmem || vram_dead ||
 	    s6d_13h) {
 		hw_rel();
@@ -2837,7 +2864,8 @@ static void s6d_imageblit(struct fb_info *info, const struct fb_image *img)
 }
 
 /* One SETWIN per 64 KiB window, then aligned 32-bit stores. No fault,
- * no thrash note. Caller holds hw_lock. console_lock is the caller's. */
+  * no thrash note. Caller holds hw_lock. console_lock is the caller's.
+  */
 static int s6d_present_now(const u8 *src, u32 *nsw)
 {
 	struct wd24_present_win w[WD24_PRESENT_WINS];
@@ -2886,7 +2914,8 @@ static int s6d_present_13h(const u8 *src, u32 *nsw)
 
 /* fb_ioctl on 6.18.57 is called with info->lock held. Do not take that
  * lock again. Drop hw before console_lock: the trial worker takes
- * console_lock, then hw_lock. */
+  * console_lock, then hw_lock.
+  */
 static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
 {
 	struct wd24s6d_present req;
@@ -3201,11 +3230,13 @@ static void s6d_arm(const struct wd24_mode *m)
 		 * keeps the trial worker out of the session. The module
 		 * cannot see whether fbcon's console driver is already
 		 * registered (filp_open/kernel_read are not exported);
-		 * that check is a shell step before insmod. */
+		 * that check is a shell step before insmod.
+		 */
 		err = register_framebuffer(s6d_info);
 	} else {
 		/* fbcon draw takes hw_lock under console_lock. Cannot hold
-		 * hw_lock across register or that draw sleeps forever. */
+		 * hw_lock across register or that draw sleeps forever.
+		 */
 		s6d_registering = true;
 		hw_rel();
 		err = register_framebuffer(s6d_info);
@@ -3223,7 +3254,8 @@ static void s6d_arm(const struct wd24_mode *m)
 		int node = s6d_info ? s6d_info->node : -1;
 
 		/* fbcon_startup failed: device is linked, VT was not bound.
-		 * Any other result (including 0) means bind was not refused. */
+		 * Any other result (including 0) means bind was not refused.
+		 */
 		if (err == -ENODEV && node >= 0) {
 			s6d_st->fb_reg = true;
 			hw_rel();
@@ -3324,7 +3356,8 @@ static const struct proc_ops s6d_ops = {
 
 /* Published cache only. lock_fb_info waits out fb_setcmap's copy.
  * No hw_lock and no DAC ports: a second /dev/fb0 open would be -EBUSY
- * and its close would drop the mapped client's PTEs. */
+  * and its close would drop the mapped client's PTEs.
+  */
 static ssize_t cmap_read(struct file *f, char __user *ubuf, size_t count,
 			 loff_t *p)
 {
@@ -3338,12 +3371,14 @@ static ssize_t cmap_read(struct file *f, char __user *ubuf, size_t count,
 	int len;
 	ssize_t n;
 	/* Both sizes stay in the kmalloc caches. 8192 and above can become
-	 * __kmalloc_large_noprof, which this floppy kernel does not export. */
+	 * __kmalloc_large_noprof, which this floppy kernel does not export.
+	 */
 	enum { WD24_CMAP_TEXT = 6144 };
 
 	(void)f;
 	/* 6.18.57 lock_fb_info() returns void. The older helper returned
-	 * int. Do not use the value. */
+	 * int. Do not use the value.
+	 */
 	if (!s6d_info)
 		return rd(ubuf, count, p, WD24_CMAP_ABSENT,
 			  sizeof(WD24_CMAP_ABSENT) - 1);

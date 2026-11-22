@@ -136,9 +136,9 @@ static inline u32 wd24_present_letter_dword(const u8 *src, u32 off)
 }
 
 /* One entry per 64 KiB window that the frame touches. Returns the count. */
-static inline unsigned wd24_present_wins(struct wd24_present_win *w, unsigned cap)
+static inline unsigned int wd24_present_wins(struct wd24_present_win *w, unsigned int cap)
 {
-	unsigned n = 0;
+	unsigned int n = 0;
 	u32 off = 0;
 
 	if (!w)
@@ -175,12 +175,12 @@ static inline void wd24_present_fill(u8 *dst, const u8 *src)
  * the latch fires, or -1 if it does not. *faults counts notes that
  * were allowed. The latching note is not a successful fault.
  */
-static inline int wd24_present_mmap_latch(unsigned frames, u32 bound,
+static inline int wd24_present_mmap_latch(unsigned int frames, u32 bound,
 					  u32 *faults, u32 *at_switch)
 {
 	struct wd24s6d_thrash t;
 	struct wd24_present_win w[WD24_PRESENT_WINS];
-	unsigned n, f, i;
+	unsigned int n, f, i;
 
 	n = wd24_present_wins(w, WD24_PRESENT_WINS);
 	wd24s6d_thrash_init(&t, bound ? bound : WD24S6D_THRASH_BOUND_DEFAULT);

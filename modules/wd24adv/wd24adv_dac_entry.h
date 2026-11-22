@@ -75,9 +75,9 @@ static inline int wd24_cmap_param_refuse(int cmap, int s6d, int dryrun,
 
 /* What the hook may do. Filled by the caller under hw_lock. */
 struct wd24_cmap_view {
-	unsigned param, dryrun, live, bind, fbcon;
-	unsigned armed, active, stopping, busy, registering;
-	unsigned in_text, hw_dead, have_cmap, bad, published, frozen;
+	unsigned int param, dryrun, live, bind, fbcon;
+	unsigned int armed, active, stopping, busy, registering;
+	unsigned int in_text, hw_dead, have_cmap, bad, published, frozen;
 };
 
 static inline int wd24_cmap_allow(const struct wd24_cmap_view *v)
@@ -93,9 +93,9 @@ static inline int wd24_cmap_allow(const struct wd24_cmap_view *v)
 }
 
 /* Publish reads only when this is 0. A latched mismatch is `bad`. */
-static inline int wd24_cmap_before_read(unsigned frozen, unsigned dead,
-					unsigned have, unsigned in_text,
-					unsigned bad)
+static inline int wd24_cmap_before_read(unsigned int frozen, unsigned int dead,
+					unsigned int have, unsigned int in_text,
+					unsigned int bad)
 {
 	if (frozen || dead || !have || in_text || bad)
 		return -19;
@@ -113,15 +113,15 @@ static inline int wd24_cmap_before_read(unsigned frozen, unsigned dead,
  */
 struct wd24_cmap_fault {
 	int err;
-	unsigned published;
-	unsigned rewrite;
-	unsigned invalidate;
-	unsigned latch;
+	unsigned int published;
+	unsigned int rewrite;
+	unsigned int invalidate;
+	unsigned int latch;
 };
 
 static inline struct wd24_cmap_fault wd24_cmap_settle(int put_err,
 						      int restore_err,
-						      unsigned had_arrays)
+						      unsigned int had_arrays)
 {
 	struct wd24_cmap_fault f;
 
@@ -155,7 +155,7 @@ static inline struct wd24_cmap_fault wd24_cmap_read_mismatch(void)
 	return f;
 }
 
-static inline void wd24_cmap_latch(unsigned *failed, unsigned *nmismatch)
+static inline void wd24_cmap_latch(unsigned int *failed, unsigned int *nmismatch)
 {
 	*failed = 1;
 	if (nmismatch)

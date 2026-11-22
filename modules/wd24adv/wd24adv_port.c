@@ -110,7 +110,8 @@ static u8 port_read(struct wd24_ctx *c, enum wd24_rf rf, u8 idx)
 }
 
 /* wd24probe3: with the SR06 latch locked only index bits 2:0 stick
- * (write 11h, read 01h); unlocked they read back 11h */
+  * (write 11h, read 01h); unlocked they read back 11h
+  */
 static int port_seq_unlocked(struct wd24_ctx *c)
 {
 	u8 save = in(c, P_SRI), r;

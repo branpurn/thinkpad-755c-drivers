@@ -94,7 +94,8 @@ enum wd24_rf {
 #define WD24_PR1_APERTURE	0x30
 
 /* The only panel state wd24adv accepts: live-verified on the 755C
- * (wd90c24fb load message and wd24probe3, 2026-11-02). */
+  * (wd90c24fb load message and wd24probe3, 2026-11-02).
+  */
 #define WD24_LIVE_PR18		0xc7	/* single TFT, LCD-only route */
 #define WD24_LIVE_PR19		0x54	/* LCD on, CRT off, centring on */
 
@@ -134,10 +135,12 @@ struct wd24_backend {
 	int (*write)(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 val);
 	u8 (*read)(struct wd24_ctx *c, enum wd24_rf rf, u8 idx);
 	/* 3C4 index width test (wd24probe3): 1 = SR06 latch unlocked
-	 * (index bits 5:3 stick), 0 = locked, <0 = no hardware */
+	 * (index bits 5:3 stick), 0 = locked, <0 = no hardware
+	 */
 	int (*seq_unlocked)(struct wd24_ctx *c);
 	/* DAC: 3C8/3C7 index 0, 768 bytes via 3C9 (vgastate cmap order);
-	 * pel = 3C6 value written first (vgastate writes FFh) */
+	 * pel = 3C6 value written first (vgastate writes FFh)
+	 */
 	void (*dac_read)(struct wd24_ctx *c, u8 pel, u8 *rgb768);
 	void (*dac_write)(struct wd24_ctx *c, u8 pel, const u8 *rgb768);
 	/* video memory window A0000-AFFFF, as currently mapped by the chip */
@@ -305,7 +308,8 @@ int wd24_plan_text(struct wd24_ctx *c);
 int wd24_pattern(struct wd24_ctx *c, const struct wd24_mode *m);
 bool wd24_has_pattern(const struct wd24_mode *m);
 /* trial: every successful mode set leaves trial_pending; expiry without a
- * confirm runs the text restore (the kernel module arms a timer) */
+  * confirm runs the text restore (the kernel module arms a timer)
+  */
 int wd24_confirm(struct wd24_ctx *c);
 int wd24_trial_expire(struct wd24_ctx *c);
 

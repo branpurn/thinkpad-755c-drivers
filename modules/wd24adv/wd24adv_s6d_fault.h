@@ -47,7 +47,8 @@ struct wd24s6d_mapact {
 };
 
 /* Pages of the 64 KiB window at base_pg that are fully inside vma_len.
- * The 640x480 frame is page-aligned, so the last window is short. */
+  * The 640x480 frame is page-aligned, so the last window is short.
+  */
 static inline u32 wd24s6d_pages_in_vma(u32 base_pg, u32 vma_len)
 {
 	u32 off = base_pg << 12;
@@ -127,13 +128,14 @@ static inline void wd24s6d_plan_fault(struct wd24s6d_thrash *t,
 }
 
 /* Bounded mmap script. 8x8 stamps use BIOS text-DAC indices; hue is not
- * claimed here. Tail byte then a return to window 0 are single bytes. */
+  * claimed here. Tail byte then a return to window 0 are single bytes.
+  */
 #define WD24S6D_STAMP		8u
 #define WD24S6D_STAMP_N		5u
 #define WD24S6D_TOUCH_N		7u
 #define WD24S6D_FRAME_BYTES	0x4b000u
 
-static inline u32 wd24s6d_stamp_off(unsigned i)
+static inline u32 wd24s6d_stamp_off(unsigned int i)
 {
 	static const u32 off[WD24S6D_STAMP_N] = {
 		0x00000u, 0x10000u, 0x20000u, 0x30000u, 0x40000u
@@ -142,7 +144,7 @@ static inline u32 wd24s6d_stamp_off(unsigned i)
 	return i < WD24S6D_STAMP_N ? off[i] : 0;
 }
 
-static inline u8 wd24s6d_stamp_pix(unsigned i)
+static inline u8 wd24s6d_stamp_pix(unsigned int i)
 {
 	static const u8 pix[WD24S6D_STAMP_N] = { 1, 2, 4, 14, 15 };
 
@@ -150,7 +152,7 @@ static inline u8 wd24s6d_stamp_pix(unsigned i)
 }
 
 /* First-byte touches, in order. Stamps are filled only after touch i<5. */
-static inline u32 wd24s6d_touch_off(unsigned i)
+static inline u32 wd24s6d_touch_off(unsigned int i)
 {
 	static const u32 off[WD24S6D_TOUCH_N] = {
 		0x00000u, 0x10000u, 0x20000u, 0x30000u, 0x40000u,
@@ -162,15 +164,17 @@ static inline u32 wd24s6d_touch_off(unsigned i)
 }
 
 /* Faults and successful switches for wd24s6d_touch_off[] on a full-frame VMA
- * with the thrash bound left at its default (no latch). */
+  * with the thrash bound left at its default (no latch).
+  */
 #define WD24S6D_PROBE_FAULTS	6u
 #define WD24S6D_PROBE_SWITCHES	6u
 
 /* Stop / teardown order. unregister is skipped when no fb was registered.
  * text-restore is the caller's next step (trial expiry, "text", rmmod),
- * not inside the fb stop itself. */
+  * not inside the fb stop itself.
+  */
 #define WD24S6D_STOP_N		5
-static inline const char *wd24s6d_stop_step(unsigned i)
+static inline const char *wd24s6d_stop_step(unsigned int i)
 {
 	static const char *const name[WD24S6D_STOP_N] = {
 		"quiesce", "unmap", "end-session", "unregister", "text-restore"

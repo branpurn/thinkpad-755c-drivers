@@ -16,7 +16,8 @@ struct wd24_trial_gate {
 };
 
 /* User fd went away. A mapped fd ends the banking session. A publish-only
- * fd does not: the trial timer still owns the mode. pending is not cleared. */
+  * fd does not: the trial timer still owns the mode. pending is not cleared.
+  */
 static inline void wd24_trial_note_release(struct wd24_trial_gate *g)
 {
 	if (!g)
@@ -28,7 +29,8 @@ static inline void wd24_trial_note_release(struct wd24_trial_gate *g)
 }
 
 /* 1 = run text restore now. 0 = not yet (still registering, or nothing pending).
- * faults, stopping, and active are deliberately unused. */
+  * faults, stopping, and active are deliberately unused.
+  */
 static inline int wd24_trial_expire_now(const struct wd24_trial_gate *g,
 					int registering, int exiting)
 {

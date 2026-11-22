@@ -214,7 +214,8 @@ const struct wd24s3_prog wd24s3_prog5h = {
 	"S5 HOSTCOL", wd24s5h_ops, WD24S5H_NOPS, 0x10000, 0x10, 400, 80, "s5", true, 2600 };
 
 /* registers S3 may write (snapshot restore allowed): block 1 idx 1-A, E;
- * a host-data program (S5) also B (BG) */
+  * a host-data program (S5) also B (BG)
+  */
 static bool s3_reg(const struct wd24s3_prog *p, unsigned int idx)
 {
 	return (idx >= 1 && idx <= 0xa) || idx == 0xe || (p->host && idx == 0xb);
@@ -228,7 +229,8 @@ u32 wd24s3_sum(const u8 *p, u32 n, u32 h)
 }
 
 /* DS Table 19-3 abcd: result bit = code bit (3 - (2 * src + dst)), the
- * X11 GX numbering (clear 0, and 1, copy 3, xor 6, or 7, invert A, set F) */
+  * X11 GX numbering (clear 0, and 1, copy 3, xor 6, or 7, invert A, set F)
+  */
 u8 wd24s3_rop(u16 rop, u8 src, u8 dst)
 {
 	unsigned int code = (rop >> 8) & 0xf, b;
@@ -494,7 +496,8 @@ static void vread(struct wd24s3 *s, u8 *dst)
 }
 
 /* busy wait: 0 idle (CNTRL1 word in *last), -ETIMEDOUT; only the first
- * and the last read are logged, the count is kept */
+  * and the last read are logged, the count is kept
+  */
 static int wait_idle(struct wd24s3 *s, u32 *spins, bool *busy, u16 *last)
 {
 	u32 n;
@@ -583,7 +586,8 @@ static const char *snapshot(struct wd24s3 *s)
 }
 
 /* banks 0-6 except the program's bank: checksums (S3: 0-5); then the
- * program's bank (left selected) into dst */
+  * program's bank (left selected) into dst
+  */
 static int vram_pass(struct wd24s3 *s, u32 *crc, u8 *dst)
 {
 	unsigned int b, k = 0;
@@ -1189,7 +1193,8 @@ static u16 fake_reg[WD24S1_NSEL] = {
 };
 static unsigned int fake_busy;
 /* 0: busy 3 reads per op (S5: until the words are in); 1: the first start never finishes; 2: the first
- * start stays busy for SPINS + 100 reads (S3 times out, then goes idle) */
+  * start stays busy for SPINS + 100 reads (S3 times out, then goes idle)
+  */
 static int fake_hang;
 module_param(fake_hang, int, 0444);
 static bool fake_started;
@@ -1257,7 +1262,8 @@ static void fake_blt(u16 c1)
 		return;
 	}
 	/* BACK: addresses are the bottom-right pixel, rows bottom-up, right
-	 * to left; result = ROP (idx 9 bits 11:8) of source and destination */
+	 * to left; result = ROP (idx 9 bits 11:8) of source and destination
+	 */
 	for (r = 0; r < h; r++)
 		for (i = 0; i < w; i++) {
 			bool bk = c1 & 0x0400;

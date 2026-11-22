@@ -96,7 +96,8 @@ struct wd24s1 {
 /* select k (0..24) of a pass: block 1 idx 0..F, then block 2 idx 0..8 */
 u16 wd24s1_sel(unsigned int k);
 /* the closed list: 0 or -EPERM.  Only 23C0h; only the 25 selects before
- * the restore, and only S & 1FFFh as the one restore. */
+  * the restore, and only S & 1FFFh as the one restore.
+  */
 int wd24s1_guard_out(const struct wd24s1 *s, u16 port, u16 val);
 /* reads: 23C0h, 23C2h (16 bit), 3C0h/3C1h (8 bit, alias check); 0/-EPERM */
 int wd24s1_guard_in(u16 port, int width);

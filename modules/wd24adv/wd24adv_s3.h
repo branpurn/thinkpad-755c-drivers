@@ -69,7 +69,8 @@
 /* HOSTCOL probe op (pat 4): if the engine is still busy after the 2 px/word
  * count, the 1 px/word hypothesis is fed (pre-planned words, value px|px<<8,
  * at most w*h words in all, each after an ACT read) instead of holding:
- * idle then = HCOL_ALT (stopped, restored, not dead). */
+  * idle then = HCOL_ALT (stopped, restored, not dead).
+  */
 #define WD24S5_PAT_PROBE 4
 
 struct wd24s3_par {
@@ -127,7 +128,8 @@ extern const struct wd24s3_prog wd24s3_prog5, wd24s3_prog5h;
 /* host data: words owed after the start (DS 21.14 mono: 4 px in bits 3:0,
  * msb = leftmost, as wd90c24fb cexp var 0, OBS-FB; DS 21.12 colour: 4 px
  * per two words, low word first, low byte = left pixel: UNPROVEN); no
- * word straddles rows; pad pixels 0 */
+  * word straddles rows; pad pixels 0
+  */
 u32 wd24s5_words(const struct wd24s3_op *o);
 u32 wd24s5_wpr(const struct wd24s3_op *o);
 u16 wd24s5_word(const struct wd24s3_op *o, u32 n);
@@ -215,12 +217,14 @@ int wd24s3_run(struct wd24s3 *s);	/* 0 = OK */
 int wd24s4_kick(struct wd24s3 *s, const struct wd24s3_op *op);
 /* after TIMEOUT: reads only (23C0h must still be 1001h, then <= SPINS
  * 23C2h reads); 1 = CNTRL1 ACT seen clear (sets idle_seen), 0 = busy or
- * unknown.  Not dead or already idle: 1, no access. */
+  * unknown.  Not dead or already idle: 1, no access.
+  */
 int wd24s3_idle_poll(struct wd24s3 *s);
 const char *wd24s3_res_name(enum wd24s3_res r);
 void wd24s3_apply(const struct wd24s3_op *o, u8 *win);	/* model, bank 6 */
 /* model for a window starting at base: ROP (fill: fg op dst), copy in
- * the engine's order (BACK: bottom row first, right to left) */
+  * the engine's order (BACK: bottom row first, right to left)
+  */
 void wd24s3_apply_at(const struct wd24s3_op *o, u8 *win, u32 base);
 u8 wd24s3_rop(u16 rop, u8 src, u8 dst);
 u32 wd24s3_sum(const u8 *p, u32 n, u32 h);		/* FNV-1a */

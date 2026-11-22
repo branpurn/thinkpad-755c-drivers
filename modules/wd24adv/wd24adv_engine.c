@@ -16,7 +16,8 @@
 /* CNTRL1, DS 19.1.1 / 21.15.1: always packed (b9:8 = 01), always with the
  * activation bit (so the guard can never write the "0 while in progress"
  * value the DS 19.1.1 CAUTION warns about), never linear (b7/b6), never
- * destination = system I/O (b5:4 = 10), never reserved encodings. */
+  * destination = system I/O (b5:4 = 10), never reserved encodings.
+  */
 static const u16 c1_set[] = {
 	WD24X_C1_ACT | WD24X_C1_PACKED,				/* COPY forward */
 	WD24X_C1_ACT | WD24X_C1_PACKED | WD24X_C1_BACK,		/* COPY backward */
@@ -26,7 +27,8 @@ static const u16 c1_set[] = {
 	WD24X_C1_ACT | WD24X_C1_PACKED | WD24X_C1_SRC_IO,	/* HOSTCOL */
 };
 /* CNTRL2, DS 19.1.2 / 21.15.2: no line draw, IRQ, quick start, update
- * destination, pattern, colour transparency; b1 reserved = 0. */
+  * destination, pattern, colour transparency; b1 reserved = 0.
+  */
 static const u16 c2_set[] = { 0x000, WD24X_C2_MTRANS };
 static const u16 pitch_set[] = { WD24X_PITCH };
 /* DS 19.7 Table 19-3; the X GC functions of design S4 */
@@ -36,11 +38,13 @@ static const u16 rop_set[] = {
 };
 static const u16 mask_set[] = { 0x0ff };	/* all planes/maps updated */
 /* cursor control, DS 18.1: off, or 32x32 2-bit pattern (b10:9 = 00),
- * two-colour with inversion (b7:5 = 001), no plane protection (b8) */
+  * two-colour with inversion (b7:5 = 001), no plane protection (b8)
+  */
 static const u16 cc_set[] = { 0x000, WD24X_CC_2COL_INV,
 			      WD24X_CC_ENABLE | WD24X_CC_2COL_INV };
 /* pattern address = the design's cursor slot 4D000h in doubleword units
- * (DS 18.2 + Table 18-3 packed mode) = 13400h */
+  * (DS 18.2 + Table 18-3 packed mode) = 13400h
+  */
 static const u16 cpl_set[] = { (WD24X_CURSOR >> 2) & 0xfff };
 static const u16 cph_set[] = { (WD24X_CURSOR >> 2) >> 12 };
 
@@ -154,7 +158,8 @@ int wd24x_guard(const struct wd24x *x, u16 port, u16 val)
 		blk = val & WD24X_IX_BLK_MASK;
 		idx = (val >> WD24X_IX_RIDX_SHIFT) & 0xf;
 		/* our selects: block 1 or 2, a listed index, always NOINC so a
-		 * stray read cannot move the index (DS 17.2 bit 12) */
+		 * stray read cannot move the index (DS 17.2 bit 12)
+		 */
 		if (!(val & WD24X_IX_NOINC))
 			return -EINVAL;
 		if (blk != WD24X_BLK_BLT && blk != WD24X_BLK_CUR)
@@ -173,7 +178,8 @@ int wd24x_guard(const struct wd24x *x, u16 port, u16 val)
 			return -EBUSY;	/* only inside a validated plan */
 		if (blk == WD24X_BLK_BLT) {
 			/* never reprogram a running engine (OBS-W waits idle;
-			 * DS 19.2 "should not read ... while in progress") */
+			 * DS 19.2 "should not read ... while in progress")
+			 */
 			if (x->busy || !x->idle_seen)
 				return -EBUSY;
 			if (idx == WD24X_B_CNTRL1 && data != x->plan_cntrl1)
@@ -184,7 +190,8 @@ int wd24x_guard(const struct wd24x *x, u16 port, u16 val)
 		if (x->dead)
 			return -EBUSY;
 		/* DS 21.12: with no op waiting the chip holds the host off
-		 * (UNPROVEN what follows): only words the op is owed */
+		 * (UNPROVEN what follows): only words the op is owed
+		 */
 		return (x->busy && x->host_op && x->host_left) ? 0 : -EBUSY;
 	default:
 		return -EPERM;	/* VGA, PM 24h-27h, 23C6h... not representable */
@@ -340,7 +347,8 @@ static int status(struct wd24x *x, bool *busy)
 /* bounded wait for CNTRL1 b11 = 0 (DS 19.1.1: resets automatically).
  * On timeout: latch dead.  Never writes CNTRL1 (no abort: DS 19.1.1
  * CAUTION; DS 21.18 says an abort ends "within a few memory clocks" but
- * the op cannot be resumed; which applies on the 755C is UNPROVEN). */
+  * the op cannot be resumed; which applies on the 755C is UNPROVEN).
+  */
 static int wait_idle(struct wd24x *x, u32 spins)
 {
 	u32 n;
@@ -419,7 +427,8 @@ bool wd24x_surface(u32 off, u32 w, u32 h, u32 *base)
  * no word straddles rows; msb first, no padding: OBS-FB var 0) and DS
  * 21.12 (colour: 32-bit groups as two 16-bit writes, low word first; no
  * doubleword straddles rows: UNPROVEN on the 755C).  Source alignment
- * (SRC_LO low 2 bits) is always 0. */
+  * (SRC_LO low 2 bits) is always 0.
+  */
 u32 wd24x_host_words(const struct wd24x_cmd *cmd)
 {
 	u32 per4 = (cmd->w + 3) / 4;
@@ -435,7 +444,8 @@ u32 wd24x_host_words(const struct wd24x_cmd *cmd)
 }
 
 /* same pitch: a destination above the source in memory is copied from
- * the end (bottom-right first, DS 19.1.1 b10 and 19.3 starting corner) */
+  * the end (bottom-right first, DS 19.1.1 b10 and 19.3 starting corner)
+  */
 bool wd24x_backward(const struct wd24x_cmd *cmd)
 {
 	return cmd->op == WD24X_COPY && cmd->dst > cmd->src;
