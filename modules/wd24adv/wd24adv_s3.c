@@ -21,16 +21,20 @@
 
 #define LO(a)	((a) & 0xfff)
 #define HI(a)	((a) >> 12)
-#define PARS(s, d, w, h)	{ 2, LO(s) }, { 3, HI(s) }, { 4, LO(d) }, { 5, HI(d) }, \
-	{ 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, 0x300 }, { 1, 0 }
 
 const struct wd24s3_op wd24s3_ops[WD24S3_NOPS] = {
 	{ "FILL 8x8 @60000h c=3Ch", true, 0x60000, 0x60000, 8, 8, 0x3c, WD24S3_FILL, 11,
-	  { PARS(0x60000, 0x60000, 8, 8), { 0xa, 0x3c } }, 0x300, false, 0, false, 0, 0 },
+	  { { 2, LO(0x60000) }, { 3, HI(0x60000) }, { 4, LO(0x60000) }, { 5, HI(0x60000) },
+	    { 8, WD24S3_PITCH }, { 6, 8 }, { 7, 8 }, { 0xe, 0xff }, { 9, 0x300 }, { 1, 0 },
+	    { 0xa, 0x3c } }, 0x300, false, 0, false, 0, 0 },
 	{ "FILL 32x32 @60200h c=C3h", true, 0x60200, 0x60200, 32, 32, 0xc3, WD24S3_FILL, 11,
-	  { PARS(0x60200, 0x60200, 32, 32), { 0xa, 0xc3 } }, 0x300, false, 0, false, 0, 0 },
+	  { { 2, LO(0x60200) }, { 3, HI(0x60200) }, { 4, LO(0x60200) }, { 5, HI(0x60200) },
+	    { 8, WD24S3_PITCH }, { 6, 32 }, { 7, 32 }, { 0xe, 0xff }, { 9, 0x300 }, { 1, 0 },
+	    { 0xa, 0xc3 } }, 0x300, false, 0, false, 0, 0 },
 	{ "COPY 32x32 60200h->60100h fwd", false, 0x60200, 0x60100, 32, 32, 0, WD24S3_COPY, 10,
-	  { PARS(0x60200, 0x60100, 32, 32) }, 0x300, false, 0, false, 0, 0 },
+	  { { 2, LO(0x60200) }, { 3, HI(0x60200) }, { 4, LO(0x60100) }, { 5, HI(0x60100) },
+	    { 8, WD24S3_PITCH }, { 6, 32 }, { 7, 32 }, { 0xe, 0xff }, { 9, 0x300 }, { 1, 0 } },
+	  0x300, false, 0, false, 0, 0 },
 };
 
 /*
@@ -44,15 +48,20 @@ const struct wd24s3_op wd24s3_ops[WD24S3_NOPS] = {
  * programmed at the bottom-right pixel (wd_blt_copy_lin).
  */
 #define A(x, y)	((u32)(y) * WD24S3_PITCH + (x))
-#define PARR(s, d, w, h, r)	{ 2, LO(s) }, { 3, HI(s) }, { 4, LO(d) }, { 5, HI(d) }, \
-	{ 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, r }, { 1, 0 }
 #define FILL4(nm, x, rop, c) { nm, true, A(x, 112), A(x, 112), 64, 16, c, WD24S3_FILL, 11, \
-	{ PARR(A(x, 112), A(x, 112), 64, 16, rop), { 0xa, c } }, rop, false, 0, false, 0, 0 }
+	{ { 2, LO(A(x, 112)) }, { 3, HI(A(x, 112)) }, { 4, LO(A(x, 112)) }, { 5, HI(A(x, 112)) }, \
+	  { 8, WD24S3_PITCH }, { 6, 64 }, { 7, 16 }, { 0xe, 0xff }, { 9, rop }, { 1, 0 }, \
+	  { 0xa, c } }, rop, false, 0, false, 0, 0 }
 #define BR(a, w, h)	((a) + ((h) - 1) * WD24S3_PITCH + (w) - 1)
 #define COPYF(nm, s, d, w, h) { nm, false, s, d, w, h, 0, WD24S3_COPY, 10, \
-	{ PARR(s, d, w, h, 0x300) }, 0x300, false, 0, false, 0, 0 }
+	{ { 2, LO(s) }, { 3, HI(s) }, { 4, LO(d) }, { 5, HI(d) }, \
+	  { 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, 0x300 }, { 1, 0 } }, \
+	0x300, false, 0, false, 0, 0 }
 #define COPYB(nm, s, d, w, h) { nm, false, s, d, w, h, 0, WD24S3_BACKC, 10, \
-	{ PARR(BR(s, w, h), BR(d, w, h), w, h, 0x300) }, 0x300, true, 0, false, 0, 0 }
+	{ { 2, LO(BR(s, w, h)) }, { 3, HI(BR(s, w, h)) }, \
+	  { 4, LO(BR(d, w, h)) }, { 5, HI(BR(d, w, h)) }, \
+	  { 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, 0x300 }, { 1, 0 } }, \
+	0x300, true, 0, false, 0, 0 }
 
 const struct wd24s3_op wd24s4_ops[WD24S4_NOPS] = {
 	FILL4("FILL 64x16 (16,112) SRC c=3Ch", 16, 0x300, 0x3c),
@@ -79,11 +88,10 @@ const struct wd24s3_op wd24s4_ops[WD24S4_NOPS] = {
  * Before every 23C4h word, 23C2h (select 1001h) must read ACT set; the
  * guard allows a 23C4h write only for the running op's next owed word.
  */
-#define MPARS(d, w, h, t, f, b)	{ 2, 0 }, { 3, 0 }, { 4, LO(d) }, { 5, HI(d) }, \
-	{ 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, 0x300 }, \
-	{ 1, (t) ? 8 : 0 }, { 0xa, f }, { 0xb, b }
 #define MONO(nm, x, y, w, h, t, f, b, pt) { nm, false, A(x, y), A(x, y), w, h, f, \
-	WD24S3_MONO, 12, { MPARS(A(x, y), w, h, t, f, b) }, 0x300, false, 1, t, b, pt }
+	WD24S3_MONO, 12, { { 2, 0 }, { 3, 0 }, { 4, LO(A(x, y)) }, { 5, HI(A(x, y)) }, \
+	{ 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, 0x300 }, \
+	{ 1, (t) ? 8 : 0 }, { 0xa, f }, { 0xb, b } }, 0x300, false, 1, t, b, pt }
 #define HCOL(nm, x, y, w, h, pt) { nm, false, A(x, y), A(x, y), w, h, 0, \
 	WD24S3_HCOL, 10, { { 2, 0 }, { 3, 0 }, { 4, LO(A(x, y)) }, { 5, HI(A(x, y)) }, \
 	{ 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, 0x300 }, { 1, 0 } }, \

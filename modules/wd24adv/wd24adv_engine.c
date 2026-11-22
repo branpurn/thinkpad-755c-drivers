@@ -48,15 +48,14 @@ static const u16 cc_set[] = { 0x000, WD24X_CC_2COL_INV,
 static const u16 cpl_set[] = { (WD24X_CURSOR >> 2) & 0xfff };
 static const u16 cph_set[] = { (WD24X_CURSOR >> 2) >> 12 };
 
-#define SET(a)	(a), (u8)(sizeof(a) / sizeof((a)[0]))
 #define P	WD24_PROVEN
 #define U	WD24_UNPROVEN
 
 const struct wd24x_rule wd24x_rules[] = {
-	{ 1, WD24X_B_CNTRL1, 0x0fff, 0, 0x0fff, SET(c1_set), 0x0010, P, "CNTRL1",
+	{ 1, WD24X_B_CNTRL1, 0x0fff, 0, 0x0fff, c1_set, (u8)(sizeof(c1_set) / sizeof(c1_set[0])), 0x0010, P, "CNTRL1",
 	  "DS 19.1.1; COPY fwd/back + FILL: OBS-FB (self-test, X); MONO: OBS-FB "
 	  "(cexp var 0) + OBS-W; HOSTCOL (set[4]): UNPROVEN" },
-	{ 1, WD24X_B_CNTRL2, 0x0fff, 0, 0x0fff, SET(c2_set), 0, P, "CNTRL2",
+	{ 1, WD24X_B_CNTRL2, 0x0fff, 0, 0x0fff, c2_set, (u8)(sizeof(c2_set) / sizeof(c2_set[0])), 0, P, "CNTRL2",
 	  "DS 19.1.2; 000 and 008 (mono transparency): OBS-FB" },
 	{ 1, WD24X_B_SRC_LO, 0x0fff, 0, 0x0fff, NULL, 0, 0, P, "SRC_LO",
 	  "DS 19.2.1 bits 11:0 of a byte address (packed, DS 19.3.2): OBS-FB" },
@@ -70,23 +69,23 @@ const struct wd24x_rule wd24x_rules[] = {
 	  "DS 19.4.1 1..2K pixels, value = width: OBS-FB (w=1 cexp case)" },
 	{ 1, WD24X_B_DIM_Y, 0x0fff, 1, WD24X_DIM_MAX, NULL, 0, 0, P, "DIM_Y",
 	  "DS 19.4.2 1..2K rows: OBS-FB" },
-	{ 1, WD24X_B_PITCH, 0x0fff, 0, 0x0fff, SET(pitch_set), 0, P, "PITCH",
+	{ 1, WD24X_B_PITCH, 0x0fff, 0, 0x0fff, pitch_set, (u8)(sizeof(pitch_set) / sizeof(pitch_set[0])), 0, P, "PITCH",
 	  "DS 19.4.3 bytes, packed: low 2 bits 0, shared by src/dst: OBS-FB" },
-	{ 1, WD24X_B_ROP, 0x0f00, 0, 0x0f00, SET(rop_set), 0x007c, P, "ROP",
+	{ 1, WD24X_B_ROP, 0x0f00, 0, 0x0f00, rop_set, (u8)(sizeof(rop_set) / sizeof(rop_set[0])), 0x007c, P, "ROP",
 	  "DS 19.7 Table 19-3, 7:0 reserved; SRC, XOR: OBS-FB; CLEAR, AND, OR, "
 	  "INVDST, SET: UNPROVEN" },
 	{ 1, WD24X_B_FG, 0x00ff, 0, 0x00ff, NULL, 0, 0, P, "FG",
 	  "DS 19.5.1, 11:8 reserved: OBS-FB" },
 	{ 1, WD24X_B_BG, 0x00ff, 0, 0x00ff, NULL, 0, 0, P, "BG",
 	  "DS 19.5.2, 11:8 reserved: OBS-FB" },
-	{ 1, WD24X_B_MASK, 0x00ff, 0, 0x00ff, SET(mask_set), 0, P, "MASK",
+	{ 1, WD24X_B_MASK, 0x00ff, 0, 0x00ff, mask_set, (u8)(sizeof(mask_set) / sizeof(mask_set[0])), 0, P, "MASK",
 	  "DS 19.6.3; FFh updates all (OBS-FB), 0 prevents update (DS 21.7)" },
 	/* block 1 C (transparency colour), D (transparency mask), F: refused */
-	{ 2, WD24X_C_CTRL, 0x0fff, 0, 0x0fff, SET(cc_set), 0x0007, U, "CUR_CTRL",
+	{ 2, WD24X_C_CTRL, 0x0fff, 0, 0x0fff, cc_set, (u8)(sizeof(cc_set) / sizeof(cc_set[0])), 0x0007, U, "CUR_CTRL",
 	  "DS 18.1; never written by wd24adv/wd90c24fb on the 755C: UNPROVEN" },
-	{ 2, WD24X_C_PAT_LO, 0x0fff, 0, 0x0fff, SET(cpl_set), 0x0001, U, "CUR_PAT_LO",
+	{ 2, WD24X_C_PAT_LO, 0x0fff, 0, 0x0fff, cpl_set, (u8)(sizeof(cpl_set) / sizeof(cpl_set[0])), 0x0001, U, "CUR_PAT_LO",
 	  "DS 18.2.1; doubleword units in packed mode (Table 18-3): UNPROVEN" },
-	{ 2, WD24X_C_PAT_HI, 0x00ff, 0, 0x00ff, SET(cph_set), 0x0001, U, "CUR_PAT_HI",
+	{ 2, WD24X_C_PAT_HI, 0x00ff, 0, 0x00ff, cph_set, (u8)(sizeof(cph_set) / sizeof(cph_set[0])), 0x0001, U, "CUR_PAT_HI",
 	  "DS 18.2.2 bits 19:12, 11:8 reserved: UNPROVEN" },
 	{ 2, WD24X_C_PRIMARY, 0x00ff, 0, 0x00ff, NULL, 0, 0, U, "CUR_PRIMARY",
 	  "DS 18.5.1: UNPROVEN" },
