@@ -40,9 +40,10 @@
  *    write of any kind (no abort, no restore, no PR0A, no 23C0h) and no
  *    VRAM access; latched (dead); the trial expiry restores the text state.
  * Guard: 23C0h only the 25 selects and the final 1002h; 23C2h only block 1
- * (never block 2, never 23C4h), only the current op's listed word for that
- * register, or the snapshot word of a register S3 writes; CNTRL1 only the
- * current op's word, once, right after the idle check.
+ * (block 2 data only during the canned cursor one-shot, never 23C4h),
+ * only the current op's listed word for that register, or the snapshot
+ * word of a register S3 writes; CNTRL1 only the current op's word, once,
+ * right after the idle check.
  */
 #ifndef WD24ADV_S3_H
 #define WD24ADV_S3_H
@@ -186,6 +187,10 @@ struct wd24s3 {
 	u32 ndiff, diff_off;
 	u8 diff_got, diff_want;
 	bool dirty[WD24S1_N_BLT];
+	/* Canned cursor one-shot. Off unless that run set cursor. */
+	bool cursor, chide, crestore;
+	unsigned int cstep;
+	bool cdirty[WD24S1_N_CUR];
 	u32 restore_fail;
 	u16 restore_rb;
 	u16 alias;

@@ -54,6 +54,9 @@ test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test
 	dash ./test_fbcon_run.sh
 	dash ./test_accel_run.sh
 	dash ./test_scroll_run.sh
+	$(CC) $(CFLAGS) -o test_cur test_cur.c ../wd24adv_s3.c ../wd24adv_s2.c ../wd24adv_s1.c ../wd24adv_engine.c $(CORE)
+	./test_cur
+	dash ./test_cursor_run.sh
 	$(CC) $(CFLAGS) -I.. -I../../../tools/wd24-doom -o /tmp/wd24-test-present-thrash test_present_thrash.c
 	/tmp/wd24-test-present-thrash
 	$(CC) $(CFLAGS) -o /tmp/wd24-test-fb-api test_fb_api_61857.c
@@ -85,6 +88,9 @@ test_s3: test_s3.c ../wd24adv_s3.c ../wd24adv_s3.h ../wd24adv_s2.c ../wd24adv_s1
 
 test_s5: test_s5.c ../wd24adv_s3.c ../wd24adv_s3.h ../wd24adv_s2.c ../wd24adv_s1.c $(CORE) ../wd24adv_core.h
 	$(CC) $(CFLAGS) -o $@ test_s5.c ../wd24adv_s3.c ../wd24adv_s2.c ../wd24adv_s1.c ../wd24adv_engine.c $(CORE)
+
+test_cur: test_cur.c ../wd24adv_s3.c ../wd24adv_cur.h ../wd24adv_s3.h ../wd24adv_s2.c ../wd24adv_s1.c $(CORE) ../wd24adv_core.h
+	$(CC) $(CFLAGS) -o $@ test_cur.c ../wd24adv_s3.c ../wd24adv_s2.c ../wd24adv_s1.c ../wd24adv_engine.c $(CORE)
 
 test_s4: test_s4.c ../wd24adv_s3.c ../wd24adv_s3.h ../wd24adv_s2.c ../wd24adv_s1.c $(CORE) ../wd24adv_core.h
 	$(CC) $(CFLAGS) -o $@ test_s4.c ../wd24adv_s3.c ../wd24adv_s2.c ../wd24adv_s1.c ../wd24adv_engine.c $(CORE)

@@ -75,6 +75,7 @@ that contains `accel`. Pin it in `docs/s6d-accel.env`. Leave
 ```
 sh /tmp/s6d-accel-run.sh
 sh /tmp/s6d-scroll-run.sh
+sh /tmp/s6d-cursor-run.sh
 ```
 
 The accel script does not bind fbcon. Pass is
@@ -94,6 +95,7 @@ is that same gate with fbcon bound, then `WD24X-SCROLL line` on tty0.
 | s6d_cmap | 0 | RAMDAC palette. The desktop script turns it on |
 | accel | 0 | CPU fills and no copy. 1 uses the S4 rectangle program |
 | accel_gate | 0 | with accel=1, the 64x16 readback at (16,112) |
+| cursor_gate | 0 | one canned cursor show, then the bytes and block 2 back |
 
 `accel=1` without a passing gate is not the load to keep. A timeout
 after the blitter has started does not fall back to CPU stores.
@@ -126,3 +128,5 @@ is the power-cycle.
 means the blitter was left busy. Those scripts do not rmmod. Do not
 rmmod, and do not insmod again. Power-cycle. The same rule is the S4
 one-shot: after that timeout, video memory stays untouched.
+`WD24X-CURSOR-RUN stop restore` is the same: the cursor bytes did not
+come back, so the script does not rmmod.

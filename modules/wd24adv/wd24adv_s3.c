@@ -5,6 +5,7 @@
  * guard.  Shared by the kernel module (s3=1) and tests/test_s3.c.
  */
 #include "wd24adv_s3.h"
+#include "wd24adv_cur.h"
 #ifdef __KERNEL__
 #include <linux/io.h>
 #include <linux/vmalloc.h>
@@ -321,6 +322,28 @@ int wd24s3_guard_out(const struct wd24s3 *s, u16 port, u16 val)
 	}
 	if (port != WD24S1_P_DATA || !s->armed || s->wdata >= s->prog->max_data)
 		return -EPERM;		/* everything else: never */
+	if (s->cursor) {
+		unsigned int ci = val >> 12;
+
+		/*
+		 * Block comes from the index register. The register number
+		 * is the data word's high nibble, as wd_cur_reg writes it.
+		 */
+		if ((s->cur & 0xf0ff) != (WD24S1_NOINC | 2) || ci >= WD24S1_N_CUR)
+			return -EPERM;
+		if (s->cstep < WD24CUR_NSHOW && !s->chide && !s->crestore) {
+			u16 want = ((u16)wd24cur_show[s->cstep].idx << 12) |
+				   wd24cur_show[s->cstep].val;
+
+			return val == want ? 0 : -EPERM;
+		}
+		if (s->chide)
+			return val == WD24CUR_HIDE ? 0 : -EPERM;
+		if (s->crestore && s->snap_ok &&
+		    val == s->snap[WD24S1_N_BLT + ci])
+			return 0;
+		return -EPERM;
+	}
 	if ((s->cur & 0xf0ff) != (WD24S1_NOINC | 1))
 		return -EPERM;		/* block 1 only: cursor block never */
 	idx = (s->cur >> 8) & 0xf;
@@ -436,6 +459,13 @@ static int out16(struct wd24s3 *s, u16 port, u16 val)
 		return 0;
 	} else {
 		s->wdata++;
+		if (s->cursor && !s->chide && !s->crestore &&
+		    s->cstep < WD24CUR_NSHOW)
+			s->cstep++;
+		else if (s->cursor && s->chide) {
+			s->chide = false;
+			s->crestore = true;
+		}
 	}
 	logacc(s, true, 16, port, val);
 	return 0;
@@ -941,6 +971,203 @@ unstarted:
 	s->restored = true;
 	s->prog = NULL;
 	return 1;
+}
+
+static const struct wd24s3_prog wd24cur_prog = {
+	"cursor", NULL, 0, 0, 0, 800, 40, "cursor_gate", false, 0 };
+
+static int cur_block(struct wd24s3 *s)
+{
+	return sel_rb(s, WD24S1_NOINC | 2);
+}
+
+static int cur_wr(struct wd24s3 *s, u8 idx, u16 val)
+{
+	u16 w = ((u16)idx << 12) | (val & 0xfff);
+
+	if (s->cur != (WD24S1_NOINC | 2) && cur_block(s))
+		return -EIO;
+	if (out16(s, WD24S1_P_DATA, w))
+		return -EIO;
+	s->cdirty[idx] = true;
+	return 0;
+}
+
+static int cur_rd(struct wd24s3 *s, u8 idx, u16 *full)
+{
+	if (sel_rb(s, wd24s1_sel(WD24S1_N_BLT + idx)))
+		return -EIO;
+	*full = in16(s, WD24S1_P_DATA);
+	return 0;
+}
+
+static int cur_putback(struct wd24s3 *s)
+{
+	unsigned int i;
+	int bad = 0;
+
+	if (s->cstep == WD24CUR_NSHOW) {
+		s->chide = true;
+		if (cur_wr(s, 0, WD24CUR_HIDE)) {
+			bad = 1;
+			s->chide = false;
+		}
+	}
+	s->crestore = true;
+	for (i = 0; i < WD24S1_N_CUR; i++) {
+		if (!s->cdirty[i])
+			continue;
+		if (cur_wr(s, (u8)i, s->snap[WD24S1_N_BLT + i] & 0xfff))
+			bad = 1;
+	}
+	return bad;
+}
+
+static int cur_post(struct wd24s3 *s)
+{
+	unsigned int k;
+
+	if (read_all(s, s->post, &s->npost))
+		return -EIO;
+	for (k = 0; k < WD24S1_NSEL; k++)
+		if (s->post[k] != s->snap[k])
+			return -EIO;
+	if (s->post[0] & WD24S1_ACT)
+		return -EIO;
+	return 0;
+}
+
+int wd24cur_run(struct wd24s3 *s, const struct wd24cur_mem *m,
+		struct wd24cur_res *out)
+{
+	u8 saved[WD24CUR_BYTES], got[WD24CUR_BYTES], pat[WD24CUR_BYTES];
+	unsigned int i, nmatch;
+	u16 a, b, w;
+	int wrote = 0, vram_back = 1, regs_back = 1, ix_ok = 0;
+
+	if (out)
+		memset(out, 0, sizeof(*out));
+	if (!s || !s->io || !m || !m->read || !m->write)
+		return -EINVAL;
+	memset(s->cdirty, 0, sizeof(s->cdirty));
+	s->cursor = false;
+	s->chide = false;
+	s->crestore = false;
+	s->cstep = 0;
+	s->restored = false;
+	s->have_saved = false;
+	s->snap_ok = false;
+	s->armed = false;
+	s->dead = false;
+	s->prog = &wd24cur_prog;
+	s->wix = 0;
+	s->wdata = 0;
+	s->nlog = 0;
+	a = in16(s, WD24S1_P_INDEX);
+	b = in16(s, WD24S1_P_INDEX);
+	if (a != b || a != WD24S2_S) {
+		s->why = "23C0h is not 1002h";
+		s->prog = NULL;
+		return -ENODEV;
+	}
+	s->saved = a;
+	s->have_saved = true;
+	if (snapshot(s)) {
+		s->why = "cursor snapshot refused";
+		goto index;
+	}
+	s->snap_ok = true;
+	wd24cur_pattern(pat);
+	if (m->read(m->priv, WD24CUR_PAT, saved, WD24CUR_BYTES)) {
+		s->why = "cursor pattern save failed";
+		goto index;
+	}
+	if (m->write(m->priv, WD24CUR_PAT, pat, WD24CUR_BYTES)) {
+		s->why = "cursor pattern write failed";
+		wrote = 1;
+		goto vram;
+	}
+	wrote = 1;
+	if (m->read(m->priv, WD24CUR_PAT, got, WD24CUR_BYTES)) {
+		s->why = "cursor pattern read failed";
+		goto vram;
+	}
+	for (i = nmatch = 0; i < WD24CUR_BYTES; i++)
+		nmatch += got[i] == pat[i];
+	if (out)
+		out->vram = nmatch;
+	if (nmatch != WD24CUR_BYTES) {
+		s->why = "cursor pattern did not read back";
+		goto vram;
+	}
+	s->cursor = true;
+	s->armed = true;
+	for (i = 0; i < WD24CUR_NSHOW - 1; i++) {
+		if (cur_wr(s, wd24cur_show[i].idx, wd24cur_show[i].val)) {
+			s->why = "cursor register write refused";
+			goto regs;
+		}
+	}
+	if (cur_rd(s, 1, &w) || w != ((1u << 12) | wd24cur_expect[1]) ||
+	    cur_rd(s, 2, &w) || w != ((2u << 12) | wd24cur_expect[2])) {
+		s->why = "cursor address did not read back";
+		goto regs;
+	}
+	if (cur_wr(s, wd24cur_show[WD24CUR_NSHOW - 1].idx,
+		   wd24cur_show[WD24CUR_NSHOW - 1].val)) {
+		s->why = "cursor enable write refused";
+		goto regs;
+	}
+	if (out)
+		out->regs = 0;
+	for (i = 0; i < 8; i++) {
+		if (cur_rd(s, (u8)i, &w))
+			break;
+		if ((w & 0xfff) == wd24cur_expect[i] && (w >> 12) == i && out)
+			out->regs++;
+	}
+	if (out)
+		out->show = out->regs == 8;
+	if (!out || !out->show) {
+		s->why = "cursor registers did not read back";
+		goto regs;
+	}
+	if (m->hold)
+		m->hold(m->priv);
+regs:
+	regs_back = cur_putback(s) == 0 && cur_post(s) == 0;
+vram:
+	if (wrote) {
+		vram_back = 0;
+		if (!m->write(m->priv, WD24CUR_PAT, saved, WD24CUR_BYTES) &&
+		    !m->read(m->priv, WD24CUR_PAT, got, WD24CUR_BYTES)) {
+			for (i = nmatch = 0; i < WD24CUR_BYTES; i++)
+				nmatch += got[i] == saved[i];
+			vram_back = nmatch == WD24CUR_BYTES;
+		}
+	}
+index:
+	if (s->have_saved && !s->restored) {
+		if (out16(s, WD24S1_P_INDEX, s->saved & IDX_WR) == 0 &&
+		    in16(s, WD24S1_P_INDEX) == s->saved) {
+			s->restored = true;
+			ix_ok = 1;
+		}
+	} else if (!s->have_saved) {
+		ix_ok = 1;
+	}
+	s->armed = false;
+	s->cursor = false;
+	s->prog = NULL;
+	if (out)
+		out->restored = regs_back && vram_back && (s->restored || ix_ok);
+	if (out && out->restored && out->show && out->vram == WD24CUR_BYTES)
+		s->why = NULL;
+	else if (!s->why)
+		s->why = "cursor restore mismatch";
+	if (!out)
+		return s->why ? -EIO : 0;
+	return out->show && out->vram == WD24CUR_BYTES && out->restored ? 0 : -EIO;
 }
 
 #ifdef __KERNEL__

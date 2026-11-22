@@ -101,12 +101,12 @@ with the same gate, then one line on tty0.
 
 ## M5 — hardware cursor
 
-Not implemented. `docs/WD90C24.md` records why. The wd90c24fb cursor
-(data book section 8, pattern at 0x50000, 755C readback
-`0=820 1=000 2=014 3=00f 4=000 5=000 6=140 7=0f0`) is not a wd24adv
-sequence. S2 restored cursor registers with the enable bit clear and
-never wrote the enable or the pattern address. The S3 guard refuses
-block 2 data writes. No `fb_cursor`, and no new cursor parameter.
+`cursor_gate=0` by default. `docs/s6d-cursor-run.sh` is the one canned
+show: pattern at 0x50000, the 755C centre register line, 3 seconds,
+then the snapshot and the pattern bytes back. Pass is
+`cursor 1 show 1 regs 8 vram 256 restored 1`. `fb_cursor` is not
+connected: the guard allows that one program and not a moving pointer.
+`docs/WD90C24.md` has the register list.
 
 ## M6 — 800x600x4 external, blank, DPMS, APM
 

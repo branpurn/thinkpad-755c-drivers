@@ -35,9 +35,11 @@ check, trial restore). `docs/s6d-doom-run.sh` is the timedemo.
 `docs/s6d-fbcon-run.sh` is the console, and it waits until those done
 lines exist. `accel=0` is the default. `docs/s6d-accel-run.sh` and
 `docs/s6d-scroll-run.sh` are the next build, pinned in
-`docs/s6d-accel.env`, not the in-flight module. There is no
-`fb_cursor`: `docs/WD90C24.md` says which cursor writes are still
-missing. Recovery, including a blitter timeout, is in the USE file.
+`docs/s6d-accel.env`, not the in-flight module.
+`docs/s6d-cursor-run.sh` is the canned cursor show (`cursor_gate=0`
+unless that script sets it). `fb_cursor` is not connected.
+Recovery, including a blitter timeout and a cursor restore miss, is
+in the USE file.
 
 ## Files
 

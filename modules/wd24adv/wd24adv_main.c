@@ -110,6 +110,7 @@
 #include "wd24adv_s2.h"
 #include "wd24adv_s3.h"
 #include "wd24adv_s4fb.h"
+#include "wd24adv_cur.h"
 #include "wd24adv_s1.h"
 #include "wd24adv_s6.h"
 #include "wd24adv_s6b.h"
@@ -428,6 +429,9 @@ MODULE_PARM_DESC(accel, "S6d: 1 programs packed fills and copies the way the S4 
 static unsigned int accel_gate;
 module_param(accel_gate, uint, 0444);
 MODULE_PARM_DESC(accel_gate, "With accel=1: one 64x16 fill at (16,112), CPU readback against the programmed fill, then those bytes are put back. 0 skips it");
+static unsigned int cursor_gate;
+module_param(cursor_gate, uint, 0444);
+MODULE_PARM_DESC(cursor_gate, "1: one show of the canned cursor at 50000h, read back, hold 3s, restore. 0 (default) does not touch block 2");
 
 static struct wd24s6 *s6st;
 static u8 *s6_save;
@@ -1866,6 +1870,7 @@ static u32 s6d_pf_frames, s6d_pf_last, s6d_pf_total;
  * floppy kernel does not export. Not freed per frame. */
 static u8 *s6d_present_src;
 static unsigned int s6d_agate, s6d_amatch;
+static unsigned int cur_show, cur_regs, cur_vram, cur_rest;
 
 /* Drop every userspace PTE before the aperture is reprogrammed or the
  * module's vm_ops go away. Caller holds hw_lock. Order matches
@@ -2508,6 +2513,94 @@ done:
 		s6d_accel_cpu();
 }
 
+static int cur_vram_rd(void *p, u32 off, u8 *buf, u32 n)
+{
+	u32 i;
+
+	(void)p;
+	for (i = 0; i < n; i++) {
+		u32 local;
+
+		if (s6d_ensure_off(off + i))
+			return -EIO;
+		local = (off + i) - (s6d_st->mapped_base << 12);
+		buf[i] = readb(vmem + local);
+	}
+	return 0;
+}
+
+static int cur_vram_wr(void *p, u32 off, const u8 *buf, u32 n)
+{
+	u32 i;
+
+	(void)p;
+	for (i = 0; i < n; i++) {
+		u32 local;
+
+		if (s6d_ensure_off(off + i))
+			return -EIO;
+		local = (off + i) - (s6d_st->mapped_base << 12);
+		writeb(buf[i], vmem + local);
+	}
+	return 0;
+}
+
+static void cur_hold(void *p)
+{
+	unsigned long end = jiffies + (WD24CUR_HOLD_MS / 1000) * HZ;
+
+	/* jiffies is already imported. A sleep here would be a new symbol. */
+	(void)p;
+	while (time_before(jiffies, end))
+		cpu_relax();
+}
+
+/*
+ * Caller holds hw. Shows the canned cursor, then puts block 2 and the
+ * pattern bytes back before returning.
+ */
+static void s6d_cursor_gate(void)
+{
+	struct wd24s3 *s;
+	struct wd24cur_mem mem;
+	struct wd24cur_res res;
+
+	cur_show = 0;
+	cur_regs = 0;
+	cur_vram = 0;
+	cur_rest = 0;
+	if (!cursor_gate || !s6d_st || !s6d_st->active || !vmem)
+		return;
+	s = vmalloc(sizeof(*s));
+	if (!s)
+		return;
+	wd24s3_init(s, &wd24s3_kernel_io, &s3_memops, NULL, NULL, NULL);
+	mem.read = cur_vram_rd;
+	mem.write = cur_vram_wr;
+	mem.hold = cur_hold;
+	mem.priv = NULL;
+	if (!request_region(WD24S1_P_INDEX, 4, "wd24adv cursor")) {
+		vfree(s);
+		return;
+	}
+#ifndef WD24S1_QEMU_FAKE
+	if (hw)
+		hw->be->begin(hw);
+#endif
+	wd24cur_run(s, &mem, &res);
+#ifndef WD24S1_QEMU_FAKE
+	if (hw)
+		hw->be->end(hw);
+#endif
+	release_region(WD24S1_P_INDEX, 4);
+	s6d_ensure_off(0);
+	cur_show = res.show;
+	cur_regs = res.regs;
+	cur_vram = res.vram;
+	cur_rest = res.restored;
+	vfree(s);
+}
+
 static void s6d_fillrect(struct fb_info *info, const struct fb_fillrect *r)
 {
 	u32 x, y, w, h, color, row, col;
@@ -2989,6 +3082,7 @@ static void s6d_arm(const struct wd24_mode *m)
 			pr_info("S6d: STOP if dmesg shows Console: switching to colour — bind was not refused\n");
 			hw_acq();
 			s6d_accel_gate();
+			s6d_cursor_gate();
 			return;
 		}
 		hw_rel();
@@ -3031,12 +3125,13 @@ static void s6d_arm(const struct wd24_mode *m)
 			node, s6d_thrash_bound);
 		hw_acq();
 		s6d_accel_gate();
+		s6d_cursor_gate();
 	}
 }
 
 static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 {
-	char local[896];
+	char local[1024];
 	int len;
 	static const char busy[] = "wd24adv s6d: hw busy; retry\n";
 
@@ -3052,7 +3147,8 @@ static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 			"why %s\n"
 			"cmap_param %d published %d frozen %d\n"
 			"present frames %u last %u total %u\n"
-			"accel %u gate %u match %u\n",
+			"accel %u gate %u match %u\n"
+			"cursor %u show %u regs %u vram %u restored %u\n",
 			s6d_armed, s6d_st->active, s6d_st->stopping, s6d_busy,
 			s6d_st->fb_reg, s6d_info ? s6d_info->node : -1,
 			s6d_fbcon, s6d_bind,
@@ -3061,7 +3157,8 @@ static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 			s6d_st->why ? s6d_st->why : "-",
 			s6d_cmap, s6d_cmap_published, s6d_cmap_frozen,
 			s6d_pf_frames, s6d_pf_last, s6d_pf_total,
-			accel, s6d_agate, s6d_amatch);
+			accel, s6d_agate, s6d_amatch,
+			cursor_gate, cur_show, cur_regs, cur_vram, cur_rest);
 	}
 	hw_rel();
 	if (len < 0)
