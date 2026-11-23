@@ -75,6 +75,7 @@ test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test
 	dash ./test_ko_exports.sh
 	dash ./test_fbcon_run.sh
 	dash ./test_xfbdev_launch.sh
+	dash ./test_soak_run.sh
 	dash ./test_accel_run.sh
 	dash ./test_scroll_run.sh
 	$(CC) $(CFLAGS) -o test_cur test_cur.c ../wd24adv_s3.c ../wd24adv_s2.c ../wd24adv_s1.c ../wd24adv_engine.c $(CORE)
