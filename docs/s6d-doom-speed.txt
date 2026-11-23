@@ -284,7 +284,12 @@ VGA wait states. They are not a 755C fps.
 | low detail, two byte stores, half the samples | 55 | measured, qemu |
 | low detail, one word store of the same two bytes | 62 | measured, qemu, slower |
 
-The dword span is the new pixel-identical change in `FAST=all`. 90/111
+An 8-pixel column loop around a C `for` was 150 us against 71 us for
+the explicit 4-pixel unroll, same qemu run, so the 4-pixel form stays.
+A dword store at a column pixel would also write the next three
+columns: those pixels are 320 bytes apart, and `wd24_col_dword_ok`
+accepts a store only when the stride is 1. That is a span, not a
+column. The dword span is the new pixel-identical change in `FAST=all`. 90/111
 is the instruction stream only. The kernel's 5.56 us/dword was an
 `ioremap` `writel`, and a 50 ms frame shows the aperture byte stores
 are not that slow, so this is not a claim of several fps. The word
