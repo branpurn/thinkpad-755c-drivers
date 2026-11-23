@@ -3540,7 +3540,10 @@ static int s6d_setup(void)
 	fix->accel = FB_ACCEL_NONE;		/* no id for this chip */
 	/* 13h can move CR0C/CR0D by a row. 640x480 scroll stays a copy. */
 	fix->xpanstep = 0;
-	fix->ypanstep = present_13h ? 1 : 0;
+	/* 640x480 scroll stays a copy. 13h may pan by a row. */
+	fix->ypanstep = 0;
+	if (present_13h)
+		fix->ypanstep = 1;
 	fix->ywrapstep = 0;
 	if (accel)
 		info->flags |= FBINFO_HWACCEL_COPYAREA | FBINFO_HWACCEL_FILLRECT;
