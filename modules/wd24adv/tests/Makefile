@@ -56,6 +56,8 @@ test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test
 	/tmp/wd24-test-flip
 	$(CC) $(CFLAGS) -o /tmp/wd24-test-latch test_latch.c
 	/tmp/wd24-test-latch
+	$(CC) $(CFLAGS) -o /tmp/wd24-test-fbops test_fbops.c
+	/tmp/wd24-test-fbops
 	$(CC) $(CFLAGS) -I../../../tools/wd24-doom -o /tmp/wd24-test-tty-own ../../../tools/wd24-doom/test_tty_own.c ../../../tools/wd24-doom/wd24x-tty-own.c -lutil
 	/tmp/wd24-test-tty-own
 	$(CC) $(CFLAGS) -I.. -o /tmp/wd24-test-trial-nomap test_trial_nomap.c

@@ -119,6 +119,7 @@
 #include "wd24adv_13h_map.h"
 #include "wd24adv_flip.h"
 #include "wd24adv_latch.h"
+#include "wd24adv_fbops.h"
 #include "wd24adv_ioctl.h"
 #include "wd24adv_dac_entry.h"
 #include "wd24adv_cmap_cache.h"
@@ -3157,6 +3158,25 @@ static int s6d_flip_now(struct wd24s6d_flip *req)
 	return 0;
 }
 
+/* 3DA bit 3, capped. Not used by the page flip. */
+static int wd24_wait_vsync(void)
+{
+	unsigned long deadline = jiffies + HZ / 10;
+	u8 st;
+
+	if (!hw || !hw->io || !hw->io->inb)
+		return -ENODEV;
+	for (;;) {
+		st = hw->io->inb(hw->io->priv, 0x3da);
+		if (wd24_vsync_seen(!!(st & 0x08),
+				    time_after(jiffies, deadline) ? 0 : 1) > 0)
+			return 0;
+		if (time_after(jiffies, deadline))
+			return -ETIMEDOUT;
+		cpu_relax();
+	}
+}
+
 static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
 {
 	struct wd24s6d_present req;
@@ -3164,6 +3184,18 @@ static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long ar
 	int err = 0;
 
 	(void)info;
+	if (cmd == FBIO_WAITFORVSYNC) {
+		u32 crt = 0;
+
+		if (copy_from_user(&crt, (void __user *)arg, sizeof(crt)))
+			return -EFAULT;
+		if (crt)
+			return -EINVAL;
+		hw_acq();
+		err = wd24_wait_vsync();
+		hw_rel();
+		return err;
+	}
 	if (cmd == WD24S6D_IOC_FLIP) {
 		struct wd24s6d_flip fr;
 
@@ -3298,11 +3330,94 @@ static int s6d_fb_check_var(struct fb_var_screeninfo *var,
 	return 0;
 }
 
+/* check_var already replaced a foreign geometry with the programmed
+ * one, so this writes no register.
+ */
+static int s6d_fb_set_par(struct fb_info *info)
+{
+	if (!info)
+		return -EINVAL;
+	return 0;
+}
+
+/* DAC programming stays on fb_setcmap, installed only for s6d_cmap=1.
+ * fbcon calls this per entry and must not touch the RAMDAC.
+ */
+static int s6d_fb_setcolreg(unsigned int regno, unsigned int red,
+			    unsigned int green, unsigned int blue,
+			    unsigned int transp, struct fb_info *info)
+{
+	(void)red;
+	(void)green;
+	(void)blue;
+	(void)transp;
+	(void)info;
+	if (regno > 255)
+		return -EINVAL;
+	return 0;
+}
+
+/* SR01 bit 5. VESA hsync/vsync suspend is the same screen-off bit.
+ * vga16fb rewrites CRTC sync timing for those levels; that changes
+ * the mode, so this path does not.
+ */
+static int s6d_fb_blank(int blank, struct fb_info *info)
+{
+	int err;
+
+	(void)info;
+	if (!hw || hw->in_text)
+		return -ENODEV;
+	hw_acq();
+	hw->be->begin(hw);
+	err = wd24_screen_on(hw, blank == WD24_BLANK_UNBLANK);
+	hw->be->end(hw);
+	hw_rel();
+	return err;
+}
+
+/* 13h only. yoffset 0 leaves the start alone. A nonzero y writes
+ * CR0C/CR0D. 640x480 stays ypanstep 0, so a nonzero pan is refused.
+ */
+static int s6d_fb_pan_display(struct fb_var_screeninfo *var,
+			      struct fb_info *info)
+{
+	struct wd24_pan pan;
+	int err = 0;
+
+	if (!var || !info)
+		return -EINVAL;
+	if (!s6d_13h)
+		return (var->xoffset || var->yoffset) ? -EINVAL : 0;
+	wd24_pan_start(var->xoffset, var->yoffset, info->fix.line_length, 1,
+		       &pan);
+	if (pan.err)
+		return -EINVAL;
+	if (!hw || hw->in_text)
+		return -ENODEV;
+	hw_acq();
+	hw->be->begin(hw);
+	err = wd24_write(hw, WD24_CR, 0x0c, pan.cr0c);
+	if (!err)
+		err = wd24_write(hw, WD24_CR, 0x0d, pan.cr0d);
+	hw->be->end(hw);
+	hw_rel();
+	if (err)
+		return err;
+	info->var.xoffset = 0;
+	info->var.yoffset = var->yoffset;
+	return 0;
+}
+
 static const struct fb_ops s6d_fbops = {
 	.owner		= THIS_MODULE,
 	.fb_open	= s6d_fb_open,
 	.fb_release	= s6d_fb_release,
 	.fb_check_var	= s6d_fb_check_var,
+	.fb_set_par	= s6d_fb_set_par,
+	.fb_setcolreg	= s6d_fb_setcolreg,
+	.fb_blank	= s6d_fb_blank,
+	.fb_pan_display	= s6d_fb_pan_display,
 	.fb_mmap	= s6d_fb_mmap,
 	.fb_ioctl	= s6d_fb_ioctl,
 	.fb_fillrect	= s6d_fillrect,
@@ -3315,6 +3430,10 @@ static const struct fb_ops s6d_fbops_cmap = {
 	.fb_open	= s6d_fb_open,
 	.fb_release	= s6d_fb_release,
 	.fb_check_var	= s6d_fb_check_var,
+	.fb_set_par	= s6d_fb_set_par,
+	.fb_setcolreg	= s6d_fb_setcolreg,
+	.fb_blank	= s6d_fb_blank,
+	.fb_pan_display	= s6d_fb_pan_display,
 	.fb_mmap	= s6d_fb_mmap,
 	.fb_ioctl	= s6d_fb_ioctl,
 	.fb_fillrect	= s6d_fillrect,
@@ -3416,12 +3535,14 @@ static int s6d_setup(void)
 	fix->type = FB_TYPE_PACKED_PIXELS;
 	fix->visual = FB_VISUAL_PSEUDOCOLOR;
 	fix->line_length = present_13h ? WD24_PRESENT_SRC_W : WD24S6D_LINE;
-	fix->smem_start = 0;			/* no contiguous phys */
+	fix->smem_start = 0;			/* banked; no linear phys */
 	fix->smem_len = present_13h ? WD24_PRESENT_SRC : WD24S6D_MMAP_LEN;
-	/* The S4 sequence does not move the CRTC start. Scroll is a copy. */
-	fix->ypanstep = 0;
+	fix->accel = FB_ACCEL_NONE;		/* no id for this chip */
+	/* 13h can move CR0C/CR0D by a row. 640x480 scroll stays a copy. */
+	fix->xpanstep = 0;
+	fix->ypanstep = present_13h ? 1 : 0;
 	fix->ywrapstep = 0;
-	if (s4fb && accel_gate)
+	if (accel)
 		info->flags |= FBINFO_HWACCEL_COPYAREA | FBINFO_HWACCEL_FILLRECT;
 
 #ifndef WD24S1_QEMU_FAKE
