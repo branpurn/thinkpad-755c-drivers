@@ -41,6 +41,10 @@ EOF
 #!/bin/sh
 echo "$*" >> "$WD24X_MOCK/insmod.args"
 printf '%s\n' 'wd24adv 1 - Live' >> "$WD24X_MOCK/proc/modules"
+mkdir -p "$WD24X_MOCK/sys/class/vtconsole/vtcon1"
+printf '%s\n' 'frame buffer device' > "$WD24X_MOCK/sys/class/vtconsole/vtcon1/name"
+printf '%s\n' 1 > "$WD24X_MOCK/sys/class/vtconsole/vtcon1/bind"
+printf '%s\n' '0 wd24adv' > "$WD24X_MOCK/proc/fb"
 exit 0
 EOF
 	cat > "$M/bin/rmmod" <<'EOF'
@@ -51,7 +55,8 @@ EOF
 	cat > "$M/bin/dmesg" <<'EOF'
 #!/bin/sh
 if [ "${1:-}" = "-c" ]; then exit 0; fi
-echo "wd24adv: session ON"
+echo "Console: switching to colour frame buffer device 80x30"
+echo "wd24adv: S6d: armed + registered fb0 (s6d_bind=1; fbcon may bind)"
 EOF
 	cat > "$M/bin/sleep" <<'EOF'
 #!/bin/sh
@@ -60,6 +65,7 @@ if [ "${1:-}" = 180 ]; then
 		'port writes: data 1, index 1; readback mismatches 0; in_text 1; trial -' \
 		> "$WD24X_MOCK/proc/wd24adv/live"
 	: > "$WD24X_MOCK/proc/fb"
+	rm -rf "$WD24X_MOCK/sys/class/vtconsole/vtcon1"
 fi
 exit 0
 EOF
@@ -98,6 +104,8 @@ rc=$(run "$M")
 grep -q "stop timeout" "$M/out" && ok || bad "timeout"
 [ "$rc" != 0 ] && ok || bad "timeout rc"
 [ ! -e "$M/rmmod.args" ] && ok || bad "timeout rmmod"
+grep -q "WD24X-SCROLL-RUN unbind vtcon1" "$M/out" && ok || bad "timeout unbind"
+[ "$(cat "$M/sys/class/vtconsole/vtcon1/bind")" = 0 ] && ok || bad "timeout bind"
 grep -q "WD24X-SCROLL line" "$M/dev/tty0" && bad "tty after timeout" || ok
 
 echo "test_scroll_run: $pass passed, $fail failed"

@@ -118,6 +118,7 @@
 #include "wd24adv_s6d.h"
 #include "wd24adv_13h_map.h"
 #include "wd24adv_flip.h"
+#include "wd24adv_latch.h"
 #include "wd24adv_ioctl.h"
 #include "wd24adv_dac_entry.h"
 #include "wd24adv_cmap_cache.h"
@@ -878,6 +879,46 @@ static void trial_fn(struct work_struct *w)
 		hw_run(OP_EXPIRE, NULL);
 	}
 	hw_rel();
+}
+
+static int s6d_latch_noted;
+static void s6d_latch_work_fn(struct work_struct *w);
+static DECLARE_WORK(s6d_latch_work, s6d_latch_work_fn);
+
+/*
+ * fbcon calls imageblit with console_lock held. A pr_err from that
+ * callback writes the same console, so console_unlock never finishes.
+ * trial_fn is queued on this CPU and unregister_framebuffer takes
+ * that lock (fbcon_fb_unbind -> do_unbind_con_driver). The 180s
+ * expiry therefore does not return the VT while the flood runs.
+ * This work is the same text restore as expiry, after the draw has
+ * returned the lock. One schedule, no printk from the draw.
+ */
+static void s6d_latch_work_fn(struct work_struct *w)
+{
+	(void)w;
+	pr_err("S6d: thrash latch; unbind fbcon and restore text\n");
+	hw_acq();
+	if (!hw || hw->in_text || READ_ONCE(wd24_exiting)) {
+		hw_rel();
+		return;
+	}
+	if (hw->trial_pending)
+		hw_run(OP_EXPIRE, NULL);
+	else
+		hw_run(OP_TEXT, NULL);
+	hw_rel();
+}
+
+/* Caller has dropped hw_lock. console_lock may still be held. */
+static void s6d_note_draw_stop(const char *why)
+{
+	int latched = s6d_st && s6d_st->thrash.latched;
+
+	if (wd24_latch_arm(latched, &s6d_latch_noted))
+		queue_work(system_percpu_wq, &s6d_latch_work);
+	else if (why && !latched)
+		pr_err_once("S6d: draw stop (%s)\n", why);
 }
 
 static ssize_t control_write(struct file *f, const char __user *b, size_t n,
@@ -2895,7 +2936,7 @@ static void s6d_fillrect(struct fb_info *info, const struct fb_fillrect *r)
 		}
 		s6d_draw_leave(took);
 		if (why)
-			pr_err("S6d: fillrect stop (%s)\n", why);
+			s6d_note_draw_stop(why);
 	}
 }
 
@@ -3012,7 +3053,7 @@ static void s6d_imageblit(struct fb_info *info, const struct fb_image *img)
 		}
 		s6d_draw_leave(took);
 		if (why)
-			pr_err("S6d: imageblit stop (%s)\n", why);
+			s6d_note_draw_stop(why);
 	}
 }
 
@@ -3436,6 +3477,7 @@ static void s6d_arm(const struct wd24_mode *m)
 	s6d_scan_unmap = false;
 	flip_cpu = 0;
 	flip_scans = 0;
+	s6d_latch_noted = 0;
 	if (!direct) {
 		S6B_HW_BEGIN();
 		err = wd24s6b_begin(s6d_b, s6b_io ? s6b_io : &s6_live_io);
@@ -4083,6 +4125,7 @@ static void __exit wd24adv_exit(void)
 		timer_delete_sync(&trial_timer);
 		cancel_work_sync(&trial_work);
 		cancel_work_sync(&s6d_release_work);
+		cancel_work_sync(&s6d_latch_work);
 		/* trial_timer_fn may have queued the work as it was deleted. */
 		timer_delete_sync(&trial_timer);
 		cancel_work_sync(&trial_work);

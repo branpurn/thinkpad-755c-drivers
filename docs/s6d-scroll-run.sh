@@ -44,6 +44,9 @@ own_cleanup() {
 		echo "WD24X-SCROLL-RUN s6d"
 		cat "$P/proc/wd24adv/s6d"
 	fi
+	if [ "$owned" = 1 ]; then
+		sh "$(dirname "$0")/s6d-unbind-fbcon.sh" WD24X-SCROLL-RUN
+	fi
 	if [ "$owned" = 1 ] && grep -q '^wd24adv ' "$P/proc/modules" 2>/dev/null; then
 		rmmod wd24adv
 		rmst=$?
@@ -123,14 +126,29 @@ rc=$?
 echo "RC=$rc"
 [ "$rc" = "0" ] || stop "insmod"
 owned=1
-dmesg -c >/dev/null
 sleep 5
-dmesg | grep -q "session ON" || fail "no session"
+dmesg | grep -q "switching to colour frame buffer device" || fail "no bind"
+dmesg | grep -q "armed + registered" || fail "no arm"
+fb=$(cat "$P/proc/fb" 2>/dev/null || echo "")
+echo "WD24X-SCROLL-RUN after FB=[$fb]"
+[ -n "$fb" ] || fail "no fb"
+bound_fb=0
+for c in "$P"/sys/class/vtconsole/vtcon*; do
+	[ -e "$c" ] || continue
+	[ -r "$c/name" ] || continue
+	name=$(cat "$c/name" 2>/dev/null || echo "")
+	b=$(cat "$c/bind" 2>/dev/null || echo "")
+	case "$name" in
+	*frame\ buffer*) [ "$b" = 1 ] && bound_fb=1 ;;
+	esac
+done
+[ "$bound_fb" = 1 ] || fail "no fbcon"
 s6d=$(cat "$P/proc/wd24adv/s6d" 2>/dev/null) || fail "s6d"
 echo "$s6d"
 case "$s6d" in
 *"gate 2 "*)
 	echo "WD24X-SCROLL-RUN stop timeout"
+	sh "$(dirname "$0")/s6d-unbind-fbcon.sh" WD24X-SCROLL-RUN
 	echo "WD24X-SCROLL-RUN power cycle: rmmod not attempted"
 	exit 1
 	;;

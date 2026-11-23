@@ -47,6 +47,11 @@ own_cleanup() {
 		echo "WD24X-FBCON-RUN s6d"
 		cat "$P/proc/wd24adv/s6d"
 	fi
+	if [ "$owned" = 1 ]; then
+		# vt.c store_bind(0) -> vt_unbind -> do_unbind_con_driver.
+		# rmmod is EBUSY while fbcon still holds the fb.
+		sh "$(dirname "$0")/s6d-unbind-fbcon.sh" WD24X-FBCON-RUN
+	fi
 	if [ "$owned" = 1 ] && grep -q '^wd24adv ' "$P/proc/modules" 2>/dev/null; then
 		rmmod wd24adv
 		rmst=$?
@@ -126,6 +131,7 @@ esac
 KO="$P$WD24X_CANDIDATE_KO"
 [ -f "$KO" ] || stop "module missing"
 hash_ok "$KO" "$WD24X_CANDIDATE_SHA" || stop "module hash"
+echo "WD24X-FBCON-RUN before"
 console_ok || stop "console"
 if grep -q '^wd24adv ' "$P/proc/modules" 2>/dev/null; then
 	stop "wd24adv loaded"
@@ -139,9 +145,28 @@ rc=$?
 echo "RC=$rc"
 [ "$rc" = "0" ] || stop "insmod"
 owned=1
-dmesg -c >/dev/null
+# fb_open(info, 0) is fbcon. It returns 0 without the userspace
+# "fb open" line. The bind lines are the switching printk and
+# "armed + registered". Do not clear dmesg before reading them.
+# The FB=[] above is the pre-insmod check. This read is after bind.
 sleep 5
-dmesg | grep -q "session ON" || fail "no session"
+dmesg | grep -q "switching to colour frame buffer device" || fail "no bind"
+dmesg | grep -q "armed + registered" || fail "no arm"
+fb=$(cat "$P/proc/fb" 2>/dev/null || echo "")
+echo "WD24X-FBCON-RUN after FB=[$fb]"
+[ -n "$fb" ] || fail "no fb"
+bound_fb=0
+for c in "$P"/sys/class/vtconsole/vtcon*; do
+	[ -e "$c" ] || continue
+	[ -r "$c/name" ] || continue
+	name=$(cat "$c/name" 2>/dev/null || echo "")
+	b=$(cat "$c/bind" 2>/dev/null || echo "")
+	echo "WD24X-FBCON-RUN vt $(basename "$c") [$name] bind $b"
+	case "$name" in
+	*frame\ buffer*) [ "$b" = 1 ] && bound_fb=1 ;;
+	esac
+done
+[ "$bound_fb" = 1 ] || fail "no fbcon"
 if ! quiet_ok; then
 	fail "thrash"
 fi
