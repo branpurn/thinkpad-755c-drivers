@@ -325,9 +325,14 @@ elif [ "$mode" = "timedemo13h" ]; then
 		"$BIN" -iwad "$WAD" -timedemo demo1 -nosound -nogui \
 		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
 elif [ "$mode" = "timedemo13hmap" ] || [ "$mode" = "timedemo13hflip" ]; then
+	flip=0
+	if [ "$mode" = "timedemo13hflip" ]; then
+		flip=1
+	fi
+	echo "WD24X-DOOM-RUN env flip $flip"
 	WD24X_DOOM_FB=aperture WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=$present \
 		WD24X_DOOM_INPUT= WD24X_DOOM_FRAMES= \
-		WD24X_DOOM_FLIP=$([ "$mode" = "timedemo13hflip" ] && echo 1 || echo 0) \
+		WD24X_DOOM_FLIP=$flip \
 		WD24X_DOOM_VSYNC=${WD24X_DOOM_VSYNC:-0} \
 		"$BIN" -iwad "$WAD" -timedemo demo1 -nosound -nogui \
 		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
@@ -366,8 +371,11 @@ if [ "$mode" = "timedemo13hmap" ] || [ "$mode" = "timedemo13hflip" ]; then
 	*) fail "aperture mode" ;;
 	esac
 	if [ "$mode" = "timedemo13hflip" ]; then
-		if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM flip 0 vsync 0" &&
-		   ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM flip 0 vsync 1"; then
+		vs=${WD24X_DOOM_VSYNC:-0}
+		if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM flip env 1"; then
+			fail "flip env"
+		fi
+		if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM flip 1 vsync $vs show 0"; then
 			fail "flip"
 		fi
 	fi

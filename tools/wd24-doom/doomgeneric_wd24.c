@@ -565,9 +565,11 @@ fake_ready:
 		const char *fl = getenv("WD24X_DOOM_FLIP");
 		const char *vs = getenv("WD24X_DOOM_VSYNC");
 
-		do_flip = fl && fl[0] == '1';
-		do_vsync = vs && vs[0] == '1';
+		do_flip = fl && fl[0] == '1' && !fl[1];
+		do_vsync = vs && vs[0] == '1' && !vs[1];
 	}
+	if (fb_aperture || fb_apcopy || use_13h)
+		printf("WD24X-DOOM flip env %d\n", do_flip ? 1 : 0);
 	printf("WD24X-DOOM sum %s\n", sum_frames ? "on" : "off");
 	if (!wd24x_doom_input_opt_in(getenv("WD24X_DOOM_INPUT"))) {
 		printf("WD24X-DOOM input none\n");
@@ -686,8 +688,12 @@ void DG_DrawFrame(void)
 			printf("WD24X-DOOM flip refused\n");
 			do_flip = 0;
 		} else if (!flip_said) {
-			printf("WD24X-DOOM flip %u vsync %u\n",
-			       fr.show, fr.vsync);
+			/* 1 is this switch, not the page. show is the page just
+			 * displayed. The first one is 0 because drawing starts
+			 * on page 0. A log line "flip 0" was that page.
+			 */
+			printf("WD24X-DOOM flip 1 vsync %u show %u\n",
+			       fr.vsync, fr.show);
 			flip_said = 1;
 		}
 	}

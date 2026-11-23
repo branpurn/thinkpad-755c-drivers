@@ -204,7 +204,19 @@ first. Vsync is off unless that variable is 1. A retrace wait is up to
 one 70 Hz field, about 7 ms on average, so it is not how the map rate
 gets faster. Flip adds the register writes, not another 64000-byte
 copy. `sh docs/s6d-doom-run.sh timedemo13hflip` is the map path with
-flip on and vsync off. It has not been seen on the panel.
+flip on and vsync off.
+
+On `2fe57de` that run printed `WD24X-DOOM flip 0 vsync 0` and the
+picture still ghosted. The `0` is the page, not the switch: drawing
+starts on page 0, so the first flip's `show` is 0, and the gate
+accepted that line. The env did reach Doom, because that line is
+printed only after the ioctl returns. The line is now `flip 1` for
+the switch and `show 0` for the page, and the script requires
+`flip 1`. Each flip also left PR5 at 05h, which is why `scan unmap`
+said `pr_locked=0`. The unmap read is before text restore. The close
+path now writes the BIOS PR16 and PR0A and runs the existing relock
+before that read. Text restore relocks again. The page select itself
+has not been shown to move the picture.
 
 ## Render bucket
 

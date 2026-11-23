@@ -1991,6 +1991,7 @@ static struct wd24s6b *s6d_b;
 static struct fb_info *s6d_info;
 static bool s6d_armed, s6d_busy, s6d_13h;
 static unsigned int flip_cpu;
+static int flip_used;
 static bool s6d_cmap_published, s6d_cmap_frozen;
 static u32 s6d_pf_frames, s6d_pf_last, s6d_pf_total;
 static u64 s6d_pf_ns, s6d_pf_copy_ns;
@@ -2186,6 +2187,26 @@ static void s6d_vma_close(struct vm_area_struct *vma)
 	console_lock();
 #endif
 	hw_acq();
+	/* Each flip leaves PR5 at 05h so PR0A can be written. That is why
+	 * scan unmap on the flip run said pr_locked=0. Put PR16 and PR0A
+	 * back to the BIOS snapshot, then the existing relock, before the
+	 * read. Text restore relocks again.
+	 */
+	if (flip_used && hw && hw->saved) {
+		int rerr;
+
+		hw->be->begin(hw);
+		rerr = wd24_write(hw, WD24_CR, WD24_CR_PR16, hw->bios.pr16);
+		if (!rerr)
+			rerr = wd24_write(hw, WD24_GR, WD24_GR_PR0A, hw->bios.pr0a);
+		if (!rerr)
+			rerr = wd24_relock(hw, &hw->bios);
+		hw->be->end(hw);
+		flip_used = 0;
+		flip_cpu = 0;
+		if (rerr)
+			pr_err("S6d: flip relock %d\n", rerr);
+	}
 	live_append_scan("unmap");
 	hw_rel();
 #ifndef WD24S1_QEMU_FAKE
@@ -3097,6 +3118,7 @@ static int s6d_flip_now(struct wd24s6d_flip *req)
 	if (err)
 		return err;
 	flip_cpu = step.cpu;
+	flip_used = 1;
 	req->show = step.show;
 	req->cpu = step.cpu;
 	req->pr16 = step.pr16;
