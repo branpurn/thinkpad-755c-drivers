@@ -5,10 +5,17 @@
 # nonzero CR0C/CR0D. The script redirects the program's stdout so
 # those lines are not printed on the VGA console.
 #   sh s6d-scanpat-run.sh
-# Trial is 30s. The picture is up for 10s of that. pattern=0.
+#   sh s6d-scanpat-run.sh pages
+# pages fills page 0 red, banks the CPU and fills page 1 green while
+# the start stays 0, then sets CR0C/CR0D to 0x4000. Red, then still
+# red, then green means the start moved the scanout. Red turning
+# green before the second line means the CPU bank did not move.
+# Staying red after "page 1 shown" means CR0C/CR0D did not move it.
+# Trial is 30s. The picture is up for 10s of that, or about 14s for
+# pages. pattern=0.
 # s6d_bind=0 leaves vtcon0 on vgacon; the module then sets KD_GRAPHICS.
 # Stripped i486 static binary from this tree: 26132 bytes,
-# sha256 7cb7e525955b5ed0ea713390c291e9962d9c501a6a78fe6949003a8bd3c35772.
+# sha256 c9a961f5785c11f74ef70b9fdfa7ef47834f4e2c28d8ca8fbd64aa5ca25b51d1.
 # Build: i486-linux-musl-gcc -static -march=i486 -mtune=i486 -O2 -s
 #   -o /tmp/wd24x-scanpat tools/wd24-scan/scanpat.c
 P=${WD24X_MOCK:-}
@@ -53,10 +60,20 @@ if grep -q '^wd24adv ' "$P/proc/modules" 2>/dev/null; then
 	stop "loaded"
 fi
 
+mode=${1:-picture}
+case "$mode" in
+picture|pages) ;;
+*) stop "mode" ;;
+esac
+
 echo "WD24X-SCANPAT-RUN look"
-echo "red at the top, just right of the eight row bits, is start 0"
-echo "green is the top-right corner, yellow the bottom-right"
-echo "a white line every 10 rows"
+if [ "$mode" = "pages" ]; then
+	echo "red, then still red, then green: the start moved"
+else
+	echo "red at the top, just right of the eight row bits, is start 0"
+	echo "green is the top-right corner, yellow the bottom-right"
+	echo "a white line every 10 rows"
+fi
 
 insmod "$P$KO" dryrun=0 live=1 mode=320x200-8 \
 	trial=30 s6d=1 s6d_cmap=1 pattern=0 fix_sr06=1 \
@@ -66,12 +83,26 @@ echo "RC=$rc"
 [ "$rc" = "0" ] || stop "insmod"
 owned=1
 
-"$P$BIN" >"$P/tmp/wd24x-scanpat.out" 2>"$P/tmp/wd24x-scanpat.err"
+if [ "$mode" = "pages" ]; then
+	"$P$BIN" pages >"$P/tmp/wd24x-scanpat.out" 2>"$P/tmp/wd24x-scanpat.err"
+else
+	"$P$BIN" >"$P/tmp/wd24x-scanpat.out" 2>"$P/tmp/wd24x-scanpat.err"
+fi
 dr=$?
 echo "DR=$dr"
 cat "$P/tmp/wd24x-scanpat.out"
 [ "$dr" = "0" ] || stop "program rc"
-grep -q "WD24X-SCANPAT red rows 0-15 cols 40-79" "$P/tmp/wd24x-scanpat.out" || stop "legend"
+if [ "$mode" = "pages" ]; then
+	grep -q "WD24X-SCANPAT pages red then green" \
+		"$P/tmp/wd24x-scanpat.out" || stop "pages"
+	grep -q "WD24X-SCANPAT flip show 0 cr0c 00 cr0d 00 pr0a 10" \
+		"$P/tmp/wd24x-scanpat.out" || stop "page0"
+	grep -q "WD24X-SCANPAT flip show 1 cr0c 40 cr0d 00 pr0a 00" \
+		"$P/tmp/wd24x-scanpat.out" || stop "page1"
+else
+	grep -q "WD24X-SCANPAT red rows 0-15 cols 40-79" \
+		"$P/tmp/wd24x-scanpat.out" || stop "legend"
+fi
 
 live=$(cat "$P/proc/wd24adv/live" 2>/dev/null) || stop "live"
 case "$live" in

@@ -39,7 +39,7 @@ chmod 755 "$M/bin/insmod" "$M/bin/rmmod" "$M/tmp/wd24x-scanpat"
 run() {
 	WD24X_MOCK=$M WD24X_CANDIDATE_KO=/tmp/wd24adv-desktop.ko \
 		WD24X_SCANPAT=/tmp/wd24x-scanpat \
-		PATH="$M/bin:/bin:/usr/bin" dash "$SCRIPT" >"$M/out" 2>"$M/err"
+		PATH="$M/bin:/bin:/usr/bin" dash "$SCRIPT" "$@" >"$M/out" 2>"$M/err"
 	echo $?
 }
 
@@ -79,6 +79,46 @@ rc=$(run)
 grep -q "WD24X-SCANPAT-RUN start nonzero" "$M/out" && ok || bad "nonzero text"
 grep -q "WD24X-SCANPAT-RUN done" "$M/out" && bad "nonzero done" || ok
 [ "$rc" != 0 ] && ok || bad "nonzero rc"
+
+printf '%s\n' 'font 1 - Live' > "$M/proc/modules"
+printf '%s\n' 'scan mode pr_locked=1 cr08=00 cr09=41 cr0c=00 cr0d=00 dw_bytes=0' \
+	> "$M/proc/wd24adv/live"
+cat > "$M/bin/insmod" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$WD24X_MOCK/insmod.args"
+printf '%s\n' 'wd24adv 1 - Live' >> "$WD24X_MOCK/proc/modules"
+exit 0
+EOF
+chmod 755 "$M/bin/insmod"
+cat > "$M/tmp/wd24x-scanpat" <<'EOF'
+#!/bin/sh
+if [ "$1" = "pages" ]; then
+	echo "WD24X-SCANPAT pages red then green"
+	echo "WD24X-SCANPAT flip show 0 cr0c 00 cr0d 00 pr0a 10"
+	echo "WD24X-SCANPAT flip show 1 cr0c 40 cr0d 00 pr0a 00"
+	exit 0
+fi
+echo "WD24X-SCANPAT red rows 0-15 cols 40-79"
+exit 0
+EOF
+chmod 755 "$M/tmp/wd24x-scanpat"
+rc=$(run pages)
+grep -q "WD24X-SCANPAT-RUN done" "$M/out" && ok || bad "pages done"
+grep -q "flip show 1 cr0c 40" "$M/out" && ok || bad "pages line"
+[ "$rc" = 0 ] && ok || bad "pages rc"
+
+printf '%s\n' 'font 1 - Live' > "$M/proc/modules"
+cat > "$M/tmp/wd24x-scanpat" <<'EOF'
+#!/bin/sh
+echo "WD24X-SCANPAT pages red then green"
+echo "WD24X-SCANPAT flip show 0 cr0c 00 cr0d 00 pr0a 10"
+echo "WD24X-SCANPAT flip show 1 cr0c 00 cr0d 00 pr0a 00"
+exit 0
+EOF
+chmod 755 "$M/tmp/wd24x-scanpat"
+rc=$(run pages)
+grep -q "stop page1" "$M/out" && ok || bad "page1 refused"
+[ "$rc" != 0 ] && ok || bad "page1 rc"
 
 echo "test_scanpat_run: $pass passed, $fail failed"
 [ "$fail" = 0 ]

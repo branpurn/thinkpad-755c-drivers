@@ -196,15 +196,26 @@ weapon is visible in both the old and new places. The copy path draws
 in cached memory and then replaces the whole window, which is why it
 does not ghost, and why it is the slower of the two (about 9 ms for
 the 64000-byte store). Two frames do not fit in the 64K chain-4
-window. The cited split is PR16 bits 4:3, which select a 64K boundary
-while bits 6:5 stay at the BIOS 64K modulus, and PR0A 0x10, the CPU
-window at +64KiB. `WD24X_DOOM_FLIP=1` asks the module to show the page
-just drawn and bank the other one. `WD24X_DOOM_VSYNC=1` polls 3DA bit 3
-first. Vsync is off unless that variable is 1. A retrace wait is up to
-one 70 Hz field, about 7 ms on average, so it is not how the map rate
-gets faster. Flip adds the register writes, not another 64000-byte
-copy. `sh docs/s6d-doom-run.sh timedemo13hflip` is the map path with
-flip on and vsync off.
+window. The scanout start is CR0C/CR0D. This 13h set has CR14 bit 6,
+so that register counts units of 4 bytes. The next 64K of pixels is
+65536/4 = 0x4000 (CR0C=0x40, CR0D=0x00). PR3 bits 4:3 are CA17:CA16
+(datasheet 13.4). One of those bits is a +65536 character step, which
+is +256KiB in doubleword mode, not the next 64K. PR16 bits 4:3 are
+added to those same two bits (datasheet 13.13). Bit 6 of the BIOS
+value CR2F=0x42 keeps the counter at 64K locations. On `2fe57de` the
+flip wrote PR16 bit 3, left CR0C/CR0D at 0, and the picture did not
+move. PR0A (GR09) = 0x10 is only the CPU window at +64KiB
+(`wd_selftest_banks`). `WD24X_DOOM_FLIP=1` now writes CR0C/CR0D for
+the page just drawn and PR0A for the other page. It does not write
+PR16 or PR3. KD_GRAPHICS stays on so vgacon does not rewrite CR0C/D.
+`WD24X_DOOM_VSYNC=1` polls 3DA bit 3 first. Vsync is off unless that
+variable is 1. A retrace wait is up to one 70 Hz field, about 7 ms
+on average, so it is not how the map rate gets faster. Flip adds the
+register writes, not another 64000-byte copy.
+`sh docs/s6d-doom-run.sh timedemo13hflip` is the map path with flip
+on and vsync off. `sh docs/s6d-scanpat-run.sh pages` is the short
+check: page 0 solid red, page 1 solid green, and the two register
+lines. The panel has not been seen with this start address yet.
 
 On `2fe57de` that run printed `WD24X-DOOM flip 0 vsync 0` and the
 picture still ghosted. The `0` is the page, not the switch: drawing
@@ -214,9 +225,8 @@ printed only after the ioctl returns. The line is now `flip 1` for
 the switch and `show 0` for the page, and the script requires
 `flip 1`. Each flip also left PR5 at 05h, which is why `scan unmap`
 said `pr_locked=0`. The unmap read is before text restore. The close
-path now writes the BIOS PR16 and PR0A and runs the existing relock
-before that read. Text restore relocks again. The page select itself
-has not been shown to move the picture.
+path writes CR0C/CR0D back to 0, writes the BIOS PR0A, and runs the
+existing relock before that read. Text restore relocks again.
 
 ## Render bucket
 

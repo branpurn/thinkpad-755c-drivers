@@ -20,6 +20,7 @@
 #include <linux/kd.h>
 
 #include "wd24x-scanpat.h"
+#include "../../modules/wd24adv/wd24adv_ioctl.h"
 
 #define WIN 65536u
 
@@ -57,9 +58,51 @@ static int kd_hold(void)
 	return 0;
 }
 
+/* Page 0 is solid red. The first flip leaves the CRTC there and banks
+ * the CPU at +64KiB. Filling green must not change the picture if that
+ * bank moved. The second flip points CR0C/CR0D at 0x4000. The picture
+ * turns green only if that start is what the scanout uses.
+ */
+static int show_pages(int fd, uint8_t *win)
+{
+	struct wd24s6d_flip fr;
+
+	memset(win, WD24_SCAN_RED, WIN);
+	printf("WD24X-SCANPAT pages red then green\n");
+	printf("WD24X-SCANPAT page 0 red\n");
+	fflush(stdout);
+	sleep(4);
+	memset(&fr, 0, sizeof(fr));
+	if (ioctl(fd, WD24S6D_IOC_FLIP, &fr) != 0 ||
+	    fr.show != 0 || fr.cr0c != 0 || fr.cr0d != 0 || fr.pr0a != 0x10) {
+		fprintf(stderr, "WD24X-SCANPAT flip mismatch\n");
+		return 1;
+	}
+	printf("WD24X-SCANPAT flip show %u cr0c %02x cr0d %02x pr0a %02x\n",
+	       fr.show, fr.cr0c, fr.cr0d, fr.pr0a);
+	memset(win, WD24_SCAN_GRN, WIN);
+	printf("WD24X-SCANPAT page 1 written, still showing page 0\n");
+	fflush(stdout);
+	sleep(4);
+	memset(&fr, 0, sizeof(fr));
+	if (ioctl(fd, WD24S6D_IOC_FLIP, &fr) != 0 ||
+	    fr.show != 1 || fr.cr0c != 0x40 || fr.cr0d != 0 || fr.pr0a != 0) {
+		fprintf(stderr, "WD24X-SCANPAT flip mismatch\n");
+		return 1;
+	}
+	printf("WD24X-SCANPAT flip show %u cr0c %02x cr0d %02x pr0a %02x\n",
+	       fr.show, fr.cr0c, fr.cr0d, fr.pr0a);
+	printf("WD24X-SCANPAT page 1 shown\n");
+	fflush(stdout);
+	sleep(6);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
-	const char *fbdev = argc > 1 ? argv[1] : "/dev/fb0";
+	int pages_mode = argc > 1 && !strcmp(argv[1], "pages");
+	const char *fbdev = pages_mode ? (argc > 2 ? argv[2] : "/dev/fb0")
+				       : (argc > 1 ? argv[1] : "/dev/fb0");
 	struct fb_var_screeninfo var;
 	uint8_t *win;
 	int fd, y;
@@ -111,6 +154,14 @@ int main(int argc, char **argv)
 		cmap.blue = blue;
 		if (ioctl(fd, FBIOPUTCMAP, &cmap) != 0)
 			fprintf(stderr, "WD24X-SCANPAT palette refused\n");
+	}
+	if (pages_mode) {
+		int pr = show_pages(fd, win);
+
+		munmap(win, WIN);
+		close(fd);
+		kd_release();
+		return pr;
 	}
 	wd24_scanpat_fill(win);
 	memset(win + WD24_SCAN_FRAME, 0, WIN - WD24_SCAN_FRAME);

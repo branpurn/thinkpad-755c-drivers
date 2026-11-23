@@ -1992,6 +1992,7 @@ static struct fb_info *s6d_info;
 static bool s6d_armed, s6d_busy, s6d_13h;
 static unsigned int flip_cpu;
 static int flip_used;
+static unsigned int flip_scans;
 static bool s6d_cmap_published, s6d_cmap_frozen;
 static u32 s6d_pf_frames, s6d_pf_last, s6d_pf_total;
 static u64 s6d_pf_ns, s6d_pf_copy_ns;
@@ -2187,16 +2188,17 @@ static void s6d_vma_close(struct vm_area_struct *vma)
 	console_lock();
 #endif
 	hw_acq();
-	/* Each flip leaves PR5 at 05h so PR0A can be written. That is why
-	 * scan unmap on the flip run said pr_locked=0. Put PR16 and PR0A
-	 * back to the BIOS snapshot, then the existing relock, before the
-	 * read. Text restore relocks again.
+	/* Each flip leaves PR5 at 05h so PR0A can be written, and leaves
+	 * CR0C/CR0D on the page it showed. Put the start and the CPU
+	 * bank back, then the existing relock, before the read.
 	 */
 	if (flip_used && hw && hw->saved) {
 		int rerr;
 
 		hw->be->begin(hw);
-		rerr = wd24_write(hw, WD24_CR, WD24_CR_PR16, hw->bios.pr16);
+		rerr = wd24_write(hw, WD24_CR, 0x0c, 0x00);
+		if (!rerr)
+			rerr = wd24_write(hw, WD24_CR, 0x0d, 0x00);
 		if (!rerr)
 			rerr = wd24_write(hw, WD24_GR, WD24_GR_PR0A, hw->bios.pr0a);
 		if (!rerr)
@@ -2204,6 +2206,7 @@ static void s6d_vma_close(struct vm_area_struct *vma)
 		hw->be->end(hw);
 		flip_used = 0;
 		flip_cpu = 0;
+		flip_scans = 0;
 		if (rerr)
 			pr_err("S6d: flip relock %d\n", rerr);
 	}
@@ -3104,14 +3107,16 @@ static int s6d_flip_now(struct wd24s6d_flip *req)
 		return -ENODEV;
 	if (req->vsync > 1)
 		return -EINVAL;
-	wd24_flip_step(hw->bios.pr16, flip_cpu, &step);
+	wd24_flip_step(flip_cpu, &step);
 	req->late = 0;
 	if (req->vsync)
 		wd24_wait_retrace(&req->late);
 	hw->be->begin(hw);
 	err = wd24_unlock(hw);
 	if (!err)
-		err = wd24_write(hw, WD24_CR, WD24_CR_PR16, step.pr16);
+		err = wd24_write(hw, WD24_CR, 0x0c, step.cr0c);
+	if (!err)
+		err = wd24_write(hw, WD24_CR, 0x0d, step.cr0d);
 	if (!err)
 		err = wd24_write(hw, WD24_GR, WD24_GR_PR0A, step.pr0a);
 	hw->be->end(hw);
@@ -3121,8 +3126,16 @@ static int s6d_flip_now(struct wd24s6d_flip *req)
 	flip_used = 1;
 	req->show = step.show;
 	req->cpu = step.cpu;
-	req->pr16 = step.pr16;
 	req->pr0a = step.pr0a;
+	req->cr0c = step.cr0c;
+	req->cr0d = step.cr0d;
+	/* Two lines are enough: page 0 still shown, then page 1 shown.
+	 * A Doom run flips once a frame and would fill the live log.
+	 */
+	if (flip_scans < 2) {
+		flip_scans++;
+		live_append_scan("flip");
+	}
 	return 0;
 }
 
@@ -3422,6 +3435,7 @@ static void s6d_arm(const struct wd24_mode *m)
 	s6d_scan_frame = false;
 	s6d_scan_unmap = false;
 	flip_cpu = 0;
+	flip_scans = 0;
 	if (!direct) {
 		S6B_HW_BEGIN();
 		err = wd24s6b_begin(s6d_b, s6b_io ? s6b_io : &s6_live_io);

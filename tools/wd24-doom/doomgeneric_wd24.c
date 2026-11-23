@@ -694,6 +694,8 @@ void DG_DrawFrame(void)
 			 */
 			printf("WD24X-DOOM flip 1 vsync %u show %u\n",
 			       fr.vsync, fr.show);
+			printf("WD24X-DOOM flip cr0c %02x cr0d %02x pr0a %02x\n",
+			       fr.cr0c, fr.cr0d, fr.pr0a);
 			flip_said = 1;
 		}
 	}
