@@ -1,0 +1,27 @@
+X on this module. Not a hardware result.
+
+Tiny Core 16 x86 ships Xvesa and Xfbdev. This 755C video BIOS has no
+VBE, so Xvesa cannot set a mode. Xfbdev is the server the desktop gate
+already launches:
+
+    Xfbdev :1 -nolisten tcp -noreset -fb /dev/fb0
+
+xorg-server 1.14.7 hw/kdrive/fbdev/fbdev.c mmaps fix.smem_len and keeps
+a RAM shadow. shadowUpdatePacked copies that shadow into the mapping.
+It does not call fb_fillrect, fb_copyarea, or fb_imageblit. Those ops
+are what fbcon uses. Setting FBINFO_HWACCEL_FILLRECT does not make
+Xfbdev use the BITBLT engine.
+
+Xorg's fbdev driver can call those ops. This tree does not launch
+Xorg, and it does not use modesetting (no KMS, no DRM).
+
+FBIOPUT_VSCREENINFO has to succeed or fbdevEnable stops. fb_check_var
+accepts only the geometry already programmed and writes no register.
+fb_setcolreg does not program the RAMDAC. Colour writes stay on
+fb_setcmap, and that hook is refused when fbcon is bound. Xfbdev's
+FBIOPUTCMAP failure is ignored for PSEUDOCOLOR. The DAC stays as the
+mode set left it.
+
+What can use the accel engine: fbcon fillrect and copyarea when
+accel=1. What cannot: Xfbdev, Xvesa, and any client that only mmaps
+the framebuffer.
