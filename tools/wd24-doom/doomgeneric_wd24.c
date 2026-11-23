@@ -68,6 +68,7 @@ static unsigned present_switches;
 static struct wd24x_tty_own tty_own;
 static int kd_fd = -1;
 static int kd_restore;
+static int do_flip, do_vsync, flip_said;
 static struct wd24x_keys keys;
 static int have_up;
 static unsigned char pending_up;
@@ -560,6 +561,13 @@ fake_ready:
 	}
 	if (!fb_fake && (fb_aperture || fb_apcopy || use_13h))
 		kd_hold();
+	{
+		const char *fl = getenv("WD24X_DOOM_FLIP");
+		const char *vs = getenv("WD24X_DOOM_VSYNC");
+
+		do_flip = fl && fl[0] == '1';
+		do_vsync = vs && vs[0] == '1';
+	}
 	printf("WD24X-DOOM sum %s\n", sum_frames ? "on" : "off");
 	if (!wd24x_doom_input_opt_in(getenv("WD24X_DOOM_INPUT"))) {
 		printf("WD24X-DOOM input none\n");
@@ -667,6 +675,21 @@ void DG_DrawFrame(void)
 		wd24x_doom_present(present_mode, idx, present, NULL);
 		if (fb)
 			wd24x_doom_emit(fb, 0, present, WD24X_DOOM_FRAME, NULL);
+	}
+	if (do_flip && !fb_fake && fb_fd >= 0 &&
+	    (fb_aperture || fb_apcopy || use_13h)) {
+		struct wd24s6d_flip fr;
+
+		memset(&fr, 0, sizeof(fr));
+		fr.vsync = do_vsync ? 1u : 0u;
+		if (ioctl(fb_fd, WD24S6D_IOC_FLIP, &fr) != 0) {
+			printf("WD24X-DOOM flip refused\n");
+			do_flip = 0;
+		} else if (!flip_said) {
+			printf("WD24X-DOOM flip %u vsync %u\n",
+			       fr.show, fr.vsync);
+			flip_said = 1;
+		}
 	}
 	if (sum_frames)
 		present_sum = fnv(present, WD24X_DOOM_FRAME);

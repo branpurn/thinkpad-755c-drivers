@@ -2,6 +2,9 @@
 # M2. fbcon bind, still under the trial. Not the in-flight desktop/Doom run.
 # Do not start this until that run has printed its done lines.
 # No X. One insmod. s6d_bind=1. Trial 180. Stop on the first failure.
+# s6d_cmap stays off. docs/s6d-cmap.txt: the hook refuses s6d_bind=1
+# so fbcon_set_palette cannot program the RAMDAC. This gate's job is
+# the bind, not the colormap.
 # Do not set WD24X_MOCK on the target.
 P=${WD24X_MOCK:-}
 owned=
@@ -131,7 +134,7 @@ if [ -S "$P/tmp/.X11-unix/X1" ] || [ -f "$P/tmp/.X1-lock" ]; then
 	stop "stale X1"
 fi
 
-insmod "$KO" dryrun=0 live=1 mode=640x480-8 trial=180 s6d=1 s6d_cmap=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=1
+insmod "$KO" dryrun=0 live=1 mode=640x480-8 trial=180 s6d=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=1
 rc=$?
 echo "RC=$rc"
 [ "$rc" = "0" ] || stop "insmod"

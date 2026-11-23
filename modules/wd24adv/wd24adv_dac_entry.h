@@ -73,6 +73,85 @@ static inline int wd24_cmap_param_refuse(int cmap, int s6d, int dryrun,
 	return 0;
 }
 
+/*
+ * The load-time checks in wd24adv_main.c for present_mode, s6d_cmap,
+ * and the live trial window. Defaults match the module_param defaults:
+ * dryrun 1, live 0, s6d 0, bind 1, fbcon 1, cmap 0, trial 15, mode "".
+ * mode_640 for the cmap check is 640x480-8 or present_mode=13h.
+ * out_13h is optional.
+ */
+struct wd24_load_params {
+	int dryrun, live, s6d, bind, fbcon, cmap;
+	int s1, s2, s3, s4, s5, s6, s6b, s6c;
+	unsigned int trial;
+	const char *mode;
+	const char *present_mode;
+};
+
+static inline int wd24_load_streq(const char *a, const char *b)
+{
+	if (!a || !b)
+		return 0;
+	while (*a && *a == *b) {
+		a++;
+		b++;
+	}
+	return *a == 0 && *b == 0;
+}
+
+static inline int wd24_load_params_refuse(const struct wd24_load_params *p,
+					  int *out_13h, const char **why)
+{
+	int present_13h = 0;
+	int other;
+	int mode_ok;
+
+	if (out_13h)
+		*out_13h = 0;
+	if (!p) {
+		if (why)
+			*why = "load params missing";
+		return -22;
+	}
+	if (p->present_mode && p->present_mode[0]) {
+		if (!wd24_load_streq(p->present_mode, "13h")) {
+			if (why)
+				*why = "present_mode must be empty or 13h";
+			return -22;
+		}
+		present_13h = 1;
+	}
+	if (present_13h &&
+	    (!p->s6d || p->dryrun || !p->live || !p->mode ||
+	     !wd24_load_streq(p->mode, "320x200-8") ||
+	     p->s1 || p->s2 || p->s3 || p->s4 || p->s5 || p->s6 ||
+	     p->s6b || p->s6c)) {
+		if (why)
+			*why = "present_mode=13h needs s6d=1 dryrun=0 live=1 mode=320x200-8 and no other stage";
+		return -22;
+	}
+	other = p->s1 || p->s2 || p->s3 || p->s4 || p->s5 || p->s6 ||
+		p->s6b || p->s6c;
+	mode_ok = (p->mode && wd24_load_streq(p->mode, "640x480-8")) ||
+		  present_13h;
+	if (wd24_cmap_param_refuse(p->cmap, p->s6d, p->dryrun, p->live,
+				   p->bind, p->fbcon, mode_ok, other)) {
+		if (why)
+			*why = "s6d_cmap=1 refused: needs s6d=1 s6d_fbcon=1 s6d_bind=0 dryrun=0 live=1 mode=640x480-8 or present_mode=13h mode=320x200-8, and no other stage";
+		return -22;
+	}
+	if (p->live && (p->trial < 5u || p->trial > 600u)) {
+		if (why)
+			*why = "live: trial refused (5..600 s)";
+		return -22;
+	}
+	if (out_13h)
+		*out_13h = present_13h;
+	if (why)
+		*why = NULL;
+	return 0;
+}
+
 /* What the hook may do. Filled by the caller under hw_lock. */
 struct wd24_cmap_view {
 	unsigned int param, dryrun, live, bind, fbcon;

@@ -87,7 +87,10 @@ if [ "${WD24X_DOOM_FB:-}" = "aperture" ] || [ "${WD24X_DOOM_FB:-}" = "apertureco
 else
 	echo "WD24X-DOOM fb ioctl 320 200"
 fi
-echo "WD24X-DOOM palette put 256"
+	echo "WD24X-DOOM palette put 256"
+	if [ "${WD24X_DOOM_FLIP:-}" = "1" ]; then
+		echo "WD24X-DOOM flip 0 vsync ${WD24X_DOOM_VSYNC:-0}"
+	fi
 if [ "${WD24X_DOOM_FB:-}" = "aperture" ] || [ "${WD24X_DOOM_FB:-}" = "aperturecopy" ]; then
 	echo "WD24X-DOOM present 13h"
 elif [ "${WD24X_DOOM_PRESENT:-}" = "13h" ]; then
@@ -258,6 +261,15 @@ grep -q "WD24X-DOOM blit direct 64000" "$M/out" && bad "copy ioctl" || ok
 grep -q "timed 5026 gametics in 14978 realtics (11.744559 fps)" "$M/out" && ok || bad "copy timed"
 grep -q "WD24X-DOOM-RUN restore mismatches 0" "$M/out" && ok || bad "copy restore"
 [ "$rc" = 0 ] && ok || bad "copy rc"
+
+setup "$ROOT/modules/wd24adv/tests/.doom-flip"
+rc=$(run "$ROOT/modules/wd24adv/tests/.doom-flip" timedemo13hflip)
+M=$ROOT/modules/wd24adv/tests/.doom-flip
+grep -q "WD24X-DOOM-RUN done" "$M/out" && ok || bad "flip done"
+grep -q "FB=aperture" "$M/doom.args" && ok || bad "flip fb"
+grep -q "WD24X-DOOM flip 0 vsync 0" "$M/out" && ok || bad "flip line"
+grep -q "WD24X-DOOM blit direct 64000" "$M/out" && bad "flip ioctl" || ok
+[ "$rc" = 0 ] && ok || bad "flip rc"
 
 echo "test_doom_run: $pass passed, $fail failed"
 [ "$fail" = 0 ]

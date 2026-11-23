@@ -78,7 +78,7 @@ M=$ROOT/modules/wd24adv/tests/.fbcon-ok
 grep -q "WD24X-FBCON-RUN done" "$M/out" && ok || bad "done"
 [ "$rc" = 0 ] && ok || bad "rc"
 grep -q "s6d_bind=1" "$M/insmod.args" && ok || bad "bind"
-grep -q "s6d_cmap=1" "$M/insmod.args" && ok || bad "cmap"
+grep -q "s6d_cmap=1" "$M/insmod.args" && bad "cmap" || ok
 grep -q "Xfbdev" "$M/out" && bad "x" || ok
 grep -q "WD24X-FBCON line" "$M/dev/tty0" && ok || bad "tty"
 grep -q "pr14" "$M/insmod.args" && bad "baseline" || ok

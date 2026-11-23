@@ -181,7 +181,30 @@ would be 112 rows plus 160 columns. `sh docs/s6d-scanpat-run.sh`
 draws the row bands and the corner markers for ten seconds. The live
 log's `scan mode` line is the CR0C/CR0D read after that graphics hold,
 not the write trace. A later `scan frame` or `scan unmap` line is the
-same registers after a frame. This has not been seen on the panel.
+same registers after a frame. Hardware on module `2163a34` (`4d216845`), Doom `185e0403`: the wrap is
+gone by eye. `scan mode` and the later scan lines stayed `dw_bytes=0`.
+`timedemo13hmap` was 20.01 fps and `timedemo13hcopy` was 16.88 fps.
+The row bands and the white lines were in order. The red and green
+corner marks were a single row of text-palette colours 4 and 2, which
+are the same indexes as two of the bands and are dark on that palette,
+so a photo does not show them. The bit column was one pixel wide.
+The picture now uses 40 by 16 blocks at indexes 0xE0..0xE3, four pixels
+per bit, and programs those DAC entries.
+
+The map path draws into the page the CRTC is scanning, so a moved
+weapon is visible in both the old and new places. The copy path draws
+in cached memory and then replaces the whole window, which is why it
+does not ghost, and why it is the slower of the two (about 9 ms for
+the 64000-byte store). Two frames do not fit in the 64K chain-4
+window. The cited split is PR16 bits 4:3, which select a 64K boundary
+while bits 6:5 stay at the BIOS 64K modulus, and PR0A 0x10, the CPU
+window at +64KiB. `WD24X_DOOM_FLIP=1` asks the module to show the page
+just drawn and bank the other one. `WD24X_DOOM_VSYNC=1` polls 3DA bit 3
+first. Vsync is off unless that variable is 1. A retrace wait is up to
+one 70 Hz field, about 7 ms on average, so it is not how the map rate
+gets faster. Flip adds the register writes, not another 64000-byte
+copy. `sh docs/s6d-doom-run.sh timedemo13hflip` is the map path with
+flip on and vsync off. It has not been seen on the panel.
 
 ## Render bucket
 

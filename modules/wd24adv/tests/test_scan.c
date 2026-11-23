@@ -35,18 +35,24 @@ int main(void)
 	T(36000u % 320u == 160u, "36000 is half a row, not a text step");
 
 	wd24_scanpat_fill(pic);
-	T(pic[0] == 0, "row 0 bit 0 is clear");
-	T(pic[8] == 4 && pic[23] == 4, "red block");
-	T(pic[24] == 15, "row 0 stays white after the red block");
-	T(pic[319] == 2, "green corner");
-	T(pic[192 * 320 + 8] == 1 && pic[199 * 320 + 8] == 1, "blue block");
-	T(pic[199 * 320 + 319] == 14, "yellow corner");
-	T(pic[10 * 320 + 8] == 15, "row 10 is white");
-	T(pic[11 * 320 + 8] == 2, "row 11 band");
-	T(pic[55 * 320 + 8] == 6, "row 55 band");
-	T(pic[168 * 320 + 0] == 0 && pic[168 * 320 + 3] == 15 &&
-	  pic[168 * 320 + 5] == 15 && pic[168 * 320 + 7] == 15,
-	  "row 168 bits");
+	T(pic[0] == 0 && pic[3] == 0, "row 0 bit 0 is four black pixels");
+	T(pic[40] == WD24_SCAN_RED && pic[79] == WD24_SCAN_RED, "red block");
+	T(pic[15 * 320 + 40] == WD24_SCAN_RED, "red block is 16 rows");
+	T(pic[16 * 320 + 40] != WD24_SCAN_RED, "red block stops at row 16");
+	T(pic[240] == WD24_SCAN_GRN && pic[279] == WD24_SCAN_GRN, "green block");
+	T(pic[184 * 320 + 40] == WD24_SCAN_BLU &&
+	  pic[199 * 320 + 79] == WD24_SCAN_BLU, "blue block");
+	T(pic[184 * 320 + 240] == WD24_SCAN_YEL &&
+	  pic[199 * 320 + 279] == WD24_SCAN_YEL, "yellow block");
+	T(pic[10 * 320 + 32] == 15, "row 10 is white");
+	T(pic[11 * 320 + 32] == 2, "row 11 band");
+	T(pic[55 * 320 + 32] == 6, "row 55 band");
+	T(pic[168 * 320 + 0] == 0 && pic[168 * 320 + 12] == 15 &&
+	  pic[168 * 320 + 20] == 15 && pic[168 * 320 + 28] == 15,
+	  "row 168 bits are four pixels wide");
+	T(WD24_SCAN_RED > 14 && WD24_SCAN_GRN > 14 &&
+	  WD24_SCAN_BLU > 14 && WD24_SCAN_YEL > 14,
+	  "marker indexes are not the 1..14 bands");
 	T(pic[WD24_SCAN_PHOTO_BYTES] == 15, "byte 36160 is row 113 bit 0");
 	T(pic[WD24_SCAN_PHOTO_BYTES] != 4, "a 113-row start is not the red block");
 

@@ -8,7 +8,7 @@
 # Trial is 30s. The picture is up for 10s of that. pattern=0.
 # s6d_bind=0 leaves vtcon0 on vgacon; the module then sets KD_GRAPHICS.
 # Stripped i486 static binary from this tree: 26132 bytes,
-# sha256 913ed08b065dc9ae1313b693e6d02b74406deb31e2b9ad1486b3f02e763bd542.
+# sha256 7cb7e525955b5ed0ea713390c291e9962d9c501a6a78fe6949003a8bd3c35772.
 # Build: i486-linux-musl-gcc -static -march=i486 -mtune=i486 -O2 -s
 #   -o /tmp/wd24x-scanpat tools/wd24-scan/scanpat.c
 P=${WD24X_MOCK:-}
@@ -71,7 +71,7 @@ dr=$?
 echo "DR=$dr"
 cat "$P/tmp/wd24x-scanpat.out"
 [ "$dr" = "0" ] || stop "program rc"
-grep -q "WD24X-SCANPAT red row 0 cols 8-23" "$P/tmp/wd24x-scanpat.out" || stop "legend"
+grep -q "WD24X-SCANPAT red rows 0-15 cols 40-79" "$P/tmp/wd24x-scanpat.out" || stop "legend"
 
 live=$(cat "$P/proc/wd24adv/live" 2>/dev/null) || stop "live"
 case "$live" in

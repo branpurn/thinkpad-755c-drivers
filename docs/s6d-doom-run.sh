@@ -238,7 +238,7 @@ need_scan() {
 }
 
 case "$mode" in
-demo1|demo2|demo3|eyes|timedemo13h|timedemo13hmap|timedemo13hcopy) ;;
+demo1|demo2|demo3|eyes|timedemo13h|timedemo13hmap|timedemo13hcopy|timedemo13hflip) ;;
 measure|measure13h) trial=180 ;;
 *) stop "mode" ;;
 esac
@@ -294,7 +294,8 @@ gfx=640x480-8
 present=letterbox
 extra=
 if [ "$mode" = "measure13h" ] || [ "$mode" = "timedemo13h" ] ||
-   [ "$mode" = "timedemo13hmap" ] || [ "$mode" = "timedemo13hcopy" ]; then
+   [ "$mode" = "timedemo13hmap" ] || [ "$mode" = "timedemo13hcopy" ] ||
+   [ "$mode" = "timedemo13hflip" ]; then
 	gfx=320x200-8
 	present=13h
 	extra=present_mode=13h
@@ -323,9 +324,11 @@ elif [ "$mode" = "timedemo13h" ]; then
 		WD24X_DOOM_INPUT= WD24X_DOOM_FRAMES= \
 		"$BIN" -iwad "$WAD" -timedemo demo1 -nosound -nogui \
 		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
-elif [ "$mode" = "timedemo13hmap" ]; then
+elif [ "$mode" = "timedemo13hmap" ] || [ "$mode" = "timedemo13hflip" ]; then
 	WD24X_DOOM_FB=aperture WD24X_DOOM_PALETTE=put WD24X_DOOM_PRESENT=$present \
 		WD24X_DOOM_INPUT= WD24X_DOOM_FRAMES= \
+		WD24X_DOOM_FLIP=$([ "$mode" = "timedemo13hflip" ] && echo 1 || echo 0) \
+		WD24X_DOOM_VSYNC=${WD24X_DOOM_VSYNC:-0} \
 		"$BIN" -iwad "$WAD" -timedemo demo1 -nosound -nogui \
 		>"$P/tmp/wd24x-doom.out" 2>"$P/tmp/wd24x-doom.err"
 elif [ "$mode" = "timedemo13hcopy" ]; then
@@ -343,7 +346,7 @@ dr=$?
 echo "DR=$dr"
 cat "$P/tmp/wd24x-doom.out"
 cat "$P/tmp/wd24x-doom.err"
-if [ "$mode" = "timedemo13hmap" ]; then
+if [ "$mode" = "timedemo13hmap" ] || [ "$mode" = "timedemo13hflip" ]; then
 	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM fb mmap 320 200 aperture"; then
 		fail "mmap"
 	fi
@@ -362,6 +365,12 @@ if [ "$mode" = "timedemo13hmap" ]; then
 	*"mode 13h"*) ;;
 	*) fail "aperture mode" ;;
 	esac
+	if [ "$mode" = "timedemo13hflip" ]; then
+		if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM flip 0 vsync 0" &&
+		   ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM flip 0 vsync 1"; then
+			fail "flip"
+		fi
+	fi
 elif [ "$mode" = "timedemo13hcopy" ]; then
 	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM fb mmap 320 200 aperturecopy"; then
 		fail "mmap"
@@ -408,7 +417,8 @@ if [ "$mode" = "measure13h" ] || [ "$mode" = "timedemo13h" ]; then
 	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM blit letterbox dword"; then
 		fail "letterbox"
 	fi
-elif [ "$mode" != "timedemo13hmap" ] && [ "$mode" != "timedemo13hcopy" ]; then
+elif [ "$mode" != "timedemo13hmap" ] && [ "$mode" != "timedemo13hcopy" ] &&
+     [ "$mode" != "timedemo13hflip" ]; then
 	if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM present switches 5"; then
 		fail "switches"
 	fi
@@ -445,7 +455,7 @@ elif [ "$mode" = "measure" ] || [ "$mode" = "measure13h" ]; then
 	fi
 	finish_rmmod
 elif [ "$mode" = "timedemo13h" ] || [ "$mode" = "timedemo13hmap" ] ||
-     [ "$mode" = "timedemo13hcopy" ]; then
+     [ "$mode" = "timedemo13hcopy" ] || [ "$mode" = "timedemo13hflip" ]; then
 	if have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM input tty"; then
 		fail "input"
 	fi

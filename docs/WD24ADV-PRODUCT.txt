@@ -60,8 +60,8 @@ these lines have passed.
 ## M2 — fbcon, still under trial
 
 Script: `docs/s6d-fbcon-run.sh`. It is not part of the module already
-built for the desktop and Doom run. One insmod with `s6d_bind=1`,
-`s6d_cmap=1`, trial 180. It writes one line to `/dev/tty0` and does
+built for the desktop and Doom run. One insmod with `s6d_bind=1`
+and no `s6d_cmap` (that hook refuses bind=1), trial 180. It writes one line to `/dev/tty0` and does
 not start X. Pass: session ON, thrash 0, latched 0, expiry 0,
 mismatches 0, in_text 1, VGA+ bind 1, `WD24X-FBCON-RUN done`.
 Scroll speed is not judged here. `fb_copyarea` is still empty, so a

@@ -117,6 +117,7 @@
 #include "wd24adv_s6b.h"
 #include "wd24adv_s6d.h"
 #include "wd24adv_13h_map.h"
+#include "wd24adv_flip.h"
 #include "wd24adv_ioctl.h"
 #include "wd24adv_dac_entry.h"
 #include "wd24adv_cmap_cache.h"
@@ -1989,6 +1990,7 @@ static void s6b_arm(const struct wd24_mode *m) { }
 static struct wd24s6b *s6d_b;
 static struct fb_info *s6d_info;
 static bool s6d_armed, s6d_busy, s6d_13h;
+static unsigned int flip_cpu;
 static bool s6d_cmap_published, s6d_cmap_frozen;
 static u32 s6d_pf_frames, s6d_pf_last, s6d_pf_total;
 static u64 s6d_pf_ns, s6d_pf_copy_ns;
@@ -3043,6 +3045,65 @@ static int s6d_present_13h(const u8 *src, u32 *nsw)
  * lock again. Drop hw before console_lock: the trial worker takes
   * console_lock, then hw_lock.
   */
+/* 3DA bit 3 is vertical retrace (WD90C24 datasheet 15.8, CGA status).
+ * Wait until a retrace starts. Cap so a stuck bit cannot wedge the lock.
+ */
+static void wd24_wait_retrace(u32 *late)
+{
+	unsigned long deadline = jiffies + HZ / 10;
+	u8 st;
+
+	*late = 0;
+	if (!hw || !hw->io || !hw->io->inb)
+		return;
+	while ((st = hw->io->inb(hw->io->priv, 0x3da)) & 0x08) {
+		if (time_after(jiffies, deadline)) {
+			*late = 1;
+			return;
+		}
+		cpu_relax();
+	}
+	while (!((st = hw->io->inb(hw->io->priv, 0x3da)) & 0x08)) {
+		if (time_after(jiffies, deadline)) {
+			*late = 1;
+			return;
+		}
+		cpu_relax();
+	}
+}
+
+/* Caller holds hw_lock. Does not take console_lock. */
+static int s6d_flip_now(struct wd24s6d_flip *req)
+{
+	struct wd24_flip_step step;
+	int err;
+
+	if (!s6d_13h || !s6d_armed || !hw || hw->in_text || !s6d_st ||
+	    !s6d_st->active || s6d_st->stopping)
+		return -ENODEV;
+	if (req->vsync > 1)
+		return -EINVAL;
+	wd24_flip_step(hw->bios.pr16, flip_cpu, &step);
+	req->late = 0;
+	if (req->vsync)
+		wd24_wait_retrace(&req->late);
+	hw->be->begin(hw);
+	err = wd24_unlock(hw);
+	if (!err)
+		err = wd24_write(hw, WD24_CR, WD24_CR_PR16, step.pr16);
+	if (!err)
+		err = wd24_write(hw, WD24_GR, WD24_GR_PR0A, step.pr0a);
+	hw->be->end(hw);
+	if (err)
+		return err;
+	flip_cpu = step.cpu;
+	req->show = step.show;
+	req->cpu = step.cpu;
+	req->pr16 = step.pr16;
+	req->pr0a = step.pr0a;
+	return 0;
+}
+
 static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
 {
 	struct wd24s6d_present req;
@@ -3050,6 +3111,20 @@ static int s6d_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long ar
 	int err = 0;
 
 	(void)info;
+	if (cmd == WD24S6D_IOC_FLIP) {
+		struct wd24s6d_flip fr;
+
+		if (copy_from_user(&fr, (void __user *)arg, sizeof(fr)))
+			return -EFAULT;
+		hw_acq();
+		err = s6d_flip_now(&fr);
+		hw_rel();
+		if (err)
+			return err;
+		if (copy_to_user((void __user *)arg, &fr, sizeof(fr)))
+			return -EFAULT;
+		return 0;
+	}
 	if (cmd != WD24S6D_IOC_PRESENT)
 		return -ENOTTY;
 	if (copy_from_user(&req, (void __user *)arg, sizeof(req)))
@@ -3324,6 +3399,7 @@ static void s6d_arm(const struct wd24_mode *m)
 	s6d_13h = direct;
 	s6d_scan_frame = false;
 	s6d_scan_unmap = false;
+	flip_cpu = 0;
 	if (!direct) {
 		S6B_HW_BEGIN();
 		err = wd24s6b_begin(s6d_b, s6b_io ? s6b_io : &s6_live_io);
@@ -3690,27 +3766,22 @@ static int __init wd24adv_init(void)
 		pr_err("s1_echo= needs s1=1\n");
 		return -EINVAL;
 	}
-	present_13h = false;
-	if (present_mode && present_mode[0]) {
-		if (strcmp(present_mode, "13h")) {
-			pr_err("present_mode must be empty or 13h\n");
+	{
+		struct wd24_load_params lp = {
+			.dryrun = dryrun, .live = live, .s6d = s6d,
+			.bind = s6d_bind, .fbcon = s6d_fbcon, .cmap = s6d_cmap,
+			.s1 = s1, .s2 = s2, .s3 = s3, .s4 = s4, .s5 = s5,
+			.s6 = s6, .s6b = s6b, .s6c = s6c, .trial = trial,
+			.mode = mode, .present_mode = present_mode,
+		};
+		const char *why = NULL;
+		int p13 = 0;
+
+		if (wd24_load_params_refuse(&lp, &p13, &why)) {
+			pr_err("%s\n", why ? why : "load params refused");
 			return -EINVAL;
 		}
-		present_13h = true;
-	}
-	if (present_13h &&
-	    (!s6d || dryrun || !live || !mode || strcmp(mode, "320x200-8") ||
-	     s1 || s2 || s3 || s4 || s5 || s6 || s6b || s6c)) {
-		pr_err("present_mode=13h needs s6d=1 dryrun=0 live=1 mode=320x200-8 and no other stage\n");
-		return -EINVAL;
-	}
-	if (wd24_cmap_param_refuse(s6d_cmap, s6d, dryrun, live, s6d_bind,
-				   s6d_fbcon,
-				   (mode && !strcmp(mode, "640x480-8")) ||
-				   present_13h,
-				   s1 || s2 || s3 || s4 || s5 || s6 || s6b || s6c)) {
-		pr_err("s6d_cmap=1 refused: needs s6d=1 s6d_fbcon=1 s6d_bind=0 dryrun=0 live=1 mode=640x480-8 or present_mode=13h mode=320x200-8, and no other stage\n");
-		return -EINVAL;
+		present_13h = p13;
 	}
 #ifdef WD24S1_QEMU_FAKE
 	if (!dryrun && !live && !s1 && !s2 && !sx && !s6 && !s6b) {

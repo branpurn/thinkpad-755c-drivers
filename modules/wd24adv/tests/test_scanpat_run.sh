@@ -30,7 +30,7 @@ exit 0
 EOF
 cat > "$M/tmp/wd24x-scanpat" <<'EOF'
 #!/bin/sh
-echo "WD24X-SCANPAT red row 0 cols 8-23"
+echo "WD24X-SCANPAT red rows 0-15 cols 40-79"
 echo "WD24X-SCANPAT green row 0 cols 304-319"
 exit 0
 EOF
@@ -71,7 +71,7 @@ EOF
 chmod 755 "$M/bin/insmod"
 cat > "$M/tmp/wd24x-scanpat" <<'EOF'
 #!/bin/sh
-echo "WD24X-SCANPAT red row 0 cols 8-23"
+echo "WD24X-SCANPAT red rows 0-15 cols 40-79"
 exit 0
 EOF
 chmod 755 "$M/tmp/wd24x-scanpat"

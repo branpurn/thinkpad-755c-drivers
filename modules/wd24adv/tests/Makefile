@@ -47,6 +47,11 @@ test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test
 	$(CC) $(CFLAGS) -I. -o /tmp/wd24-test-scan test_scan.c vgamodel.c $(CORE)
 	/tmp/wd24-test-scan
 	dash ./test_scanpat_run.sh
+	$(CC) $(CFLAGS) -o /tmp/wd24-test-load-params test_load_params.c
+	/tmp/wd24-test-load-params dryrun=0 live=1 mode=640x480-8 trial=180 s6d=1 s6d_fbcon=1 s6d_bind=0 s6d_cmap=1
+	dash ./test_run_params.sh
+	$(CC) $(CFLAGS) -o /tmp/wd24-test-flip test_flip.c
+	/tmp/wd24-test-flip
 	$(CC) $(CFLAGS) -I../../../tools/wd24-doom -o /tmp/wd24-test-tty-own ../../../tools/wd24-doom/test_tty_own.c ../../../tools/wd24-doom/wd24x-tty-own.c -lutil
 	/tmp/wd24-test-tty-own
 	$(CC) $(CFLAGS) -I.. -o /tmp/wd24-test-trial-nomap test_trial_nomap.c

@@ -90,13 +90,35 @@ int main(int argc, char **argv)
 		kd_release();
 		return 1;
 	}
+	{
+		struct fb_cmap cmap;
+		unsigned short red[256], green[256], blue[256];
+		unsigned i;
+
+		for (i = 0; i < 256; i++)
+			red[i] = green[i] = blue[i] = 0;
+		/* Top 6 bits, the same shift the colormap path uses. */
+		red[WD24_SCAN_RED] = 63u << 10;
+		green[WD24_SCAN_GRN] = 63u << 10;
+		blue[WD24_SCAN_BLU] = 63u << 10;
+		red[WD24_SCAN_YEL] = green[WD24_SCAN_YEL] = 63u << 10;
+		red[15] = green[15] = blue[15] = 63u << 10;
+		memset(&cmap, 0, sizeof(cmap));
+		cmap.start = 0;
+		cmap.len = 256;
+		cmap.red = red;
+		cmap.green = green;
+		cmap.blue = blue;
+		if (ioctl(fd, FBIOPUTCMAP, &cmap) != 0)
+			fprintf(stderr, "WD24X-SCANPAT palette refused\n");
+	}
 	wd24_scanpat_fill(win);
 	memset(win + WD24_SCAN_FRAME, 0, WIN - WD24_SCAN_FRAME);
-	printf("WD24X-SCANPAT red row 0 cols 8-23\n");
-	printf("WD24X-SCANPAT green row 0 cols 304-319\n");
-	printf("WD24X-SCANPAT blue rows 192-199 cols 8-23\n");
-	printf("WD24X-SCANPAT yellow rows 192-199 cols 304-319\n");
-	printf("WD24X-SCANPAT white every 10 rows, bits in cols 0-7\n");
+	printf("WD24X-SCANPAT red rows 0-15 cols 40-79\n");
+	printf("WD24X-SCANPAT green rows 0-15 cols 240-279\n");
+	printf("WD24X-SCANPAT blue rows 184-199 cols 40-79\n");
+	printf("WD24X-SCANPAT yellow rows 184-199 cols 240-279\n");
+	printf("WD24X-SCANPAT white every 10 rows, bits in cols 0-31\n");
 	for (y = 0; y < 20; y++)
 		printf("WD24X-SCANPAT row %d colour %u\n", y * 10,
 		       (unsigned)wd24_scanpat_at(8, (unsigned)y * 10));
