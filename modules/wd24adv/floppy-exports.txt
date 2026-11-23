@@ -9,9 +9,12 @@ _copy_to_user
 default_llseek
 device_create
 device_destroy
+do_blank_screen
+do_unblank_screen
 fb_alloc_cmap
 framebuffer_alloc
 framebuffer_release
+fg_console
 ioport_resource
 ioremap
 iounmap
@@ -53,6 +56,7 @@ timer_delete_sync
 unmap_mapping_range
 __unregister_chrdev
 unregister_framebuffer
+vc_cons
 vfree
 vmalloc_noprof
 vmf_insert_pfn

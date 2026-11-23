@@ -676,27 +676,37 @@ static void live_append_scan(const char *when)
 
 /*
  * vgacon.c (Linux 6.18.57) write_vga(12, origin/2) is CR0C then CR0D
- * (vga_set_mem_top, line 134). vgacon_scroll (line 1142) takes that path
- * unless vga_is_gfx or vc_mode != KD_TEXT. vgacon_set_origin (line 1105)
- * takes it unless vga_is_gfx. vt_kdsetmode(KD_GRAPHICS) sets vc_mode and
- * do_blank_screen(1); vgacon_blank with mode_switch writes origin 0 and
- * then sets vga_is_gfx. Same two steps, console_lock already held.
- * s6d_bind=0 leaves this VT on vgacon. bind=1 is fbcon's blank, not this.
+ * (vga_set_mem_top). vgacon_scroll takes that path unless vga_is_gfx or
+ * vc_mode != KD_TEXT. vt_kdsetmode (drivers/tty/vt/vt_ioctl.c) is the
+ * KDSETMODE body: it is called with console_lock held (the ioctl's
+ * guard(console_lock)), sets vc_mode, and then calls do_blank_screen(1)
+ * or do_unblank_screen(1). Those two warn if the console lock is not
+ * held. hw_run already holds it across this call; do not take it again.
+ * vc_cons_allocated is not exported. vt.c defines it as
+ * i < MAX_NR_CONSOLES && vc_cons[i].d. fg_console is signed, so the
+ * lower bound is the same test. s6d_bind=0 leaves this VT on vgacon.
  */
+static struct vc_data *wd24_fg_vc(void)
+{
+	if (fg_console < 0 || fg_console >= MAX_NR_CONSOLES)
+		return NULL;
+	return vc_cons[fg_console].d;
+}
+
 static void wd24_vc_hold_graphics(void)
 {
 	struct vc_data *vc;
 
 	if (s6d_bind || vc_gfx_held)
 		return;
-	if (!vc_cons_allocated(fg_console))
-		return;
-	vc = vc_cons[fg_console].d;
+	vc = wd24_fg_vc();
 	if (!vc || vc->vc_mode == KD_GRAPHICS)
 		return;
 	vc->vc_mode = KD_GRAPHICS;
-	do_blank_screen(1);
 	vc_gfx_held = true;
+	if (vc->vc_num != fg_console)
+		return;
+	do_blank_screen(1);
 }
 
 static void wd24_vc_release_graphics(void)
@@ -706,12 +716,12 @@ static void wd24_vc_release_graphics(void)
 	if (!vc_gfx_held)
 		return;
 	vc_gfx_held = false;
-	if (!vc_cons_allocated(fg_console))
-		return;
-	vc = vc_cons[fg_console].d;
-	if (!vc)
+	vc = wd24_fg_vc();
+	if (!vc || vc->vc_mode == KD_TEXT)
 		return;
 	vc->vc_mode = KD_TEXT;
+	if (vc->vc_num != fg_console)
+		return;
 	do_unblank_screen(1);
 }
 

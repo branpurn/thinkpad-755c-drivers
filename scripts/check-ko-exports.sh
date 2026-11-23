@@ -14,9 +14,24 @@ if [ "${1:-}" = "--undef" ]; then
 else
 	SRC=${1:-}
 fi
-if [ -z "$SRC" ] || [ ! -f "$SRC" ] || [ ! -f "$LIST" ]; then
-	echo "check-ko-exports: need a .ko or --undef list, and $LIST" >&2
+if [ ! -f "$LIST" ]; then
+	echo "check-ko-exports: allowlist missing: $LIST" >&2
 	exit 2
+fi
+if [ -z "$SRC" ] || [ ! -f "$SRC" ]; then
+	echo "check-ko-exports: ko is not built${SRC:+ ($SRC)}" >&2
+	exit 1
+fi
+# A module older than its sources was not built from this tree.
+# nm of that file would pass without seeing the new undefined symbols.
+if [ "$MODE" = "ko" ]; then
+	for src in "$ROOT"/modules/wd24adv/*.c "$ROOT"/modules/wd24adv/*.h; do
+		[ -f "$src" ] || continue
+		if [ "$SRC" -ot "$src" ]; then
+			echo "check-ko-exports: ko is not built ($SRC older than $src)" >&2
+			exit 1
+		fi
+	done
 fi
 if grep -q '__kmalloc_large_noprof' "$LIST"; then
 	echo "check-ko-exports: allowlist names __kmalloc_large_noprof" >&2

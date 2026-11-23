@@ -84,6 +84,6 @@ case "$live" in
 esac
 case "$live" in
 *"cr0c=00 cr0d=00"*) echo "WD24X-SCANPAT-RUN start 0" ;;
-*) echo "WD24X-SCANPAT-RUN start nonzero" ;;
+*) echo "WD24X-SCANPAT-RUN start nonzero"; stop "start" ;;
 esac
 echo "WD24X-SCANPAT-RUN done"

@@ -19,6 +19,22 @@ if grep -q '__kmalloc_large_noprof' "$LIST"; then bad "list has large"; else ok;
 if grep -q 'kmalloc(WD24S6D_PRESENT_SRC' "$MAIN"; then bad "present kmalloc"; else ok; fi
 if grep -E 'kmalloc\((8192|64000|65536)[,)]' "$MAIN"; then bad "big kmalloc"; else ok; fi
 if grep -q 'vmalloc(WD24S6D_PRESENT_SRC)' "$MAIN"; then ok; else bad "present vmalloc"; fi
+for sym in do_blank_screen do_unblank_screen fg_console vc_cons; do
+	if grep -qx "$sym" "$LIST"; then ok; else bad "list $sym"; fi
+done
+if grep -q 'vc_cons_allocated(' "$MAIN"; then bad "unexported helper"; else ok; fi
+KO=$ROOT/modules/wd24adv/wd24adv.ko
+ko_out=$(sh "$CHECK" "$KO" 2>&1) && ko_st=0 || ko_st=$?
+case "$ko_out" in
+*"ko is not built"*)
+	echo "check-ko-exports: gate rejected an unbuilt ko"
+	[ "$ko_st" != 0 ] && ok || bad "unbuilt status"
+	;;
+*)
+	[ "$ko_st" = 0 ] && ok || bad "ko undef ($ko_out)"
+	;;
+esac
+if sh "$CHECK" "$tmp/absent.ko"; then bad "absent path passed"; else ok; fi
 if grep -q -- '-Werror=frame-larger-than=1280' "$ROOT/modules/wd24adv/Kbuild"; then ok; else bad "frame flag"; fi
 if grep -E '(^|[[:space:]])-Werror=frame-larger-than([[:space:]]|$)' "$ROOT/modules/wd24adv/Kbuild"; then
 	bad "bare frame flag"
