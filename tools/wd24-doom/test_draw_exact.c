@@ -52,29 +52,50 @@ static void span_base(unsigned pos, unsigned step, int count)
 	} while (count--);
 }
 
+static uint8_t span_pix(unsigned pos)
+{
+	unsigned ytemp = (pos >> 4) & 0x0fc0u;
+	unsigned xtemp = pos >> 26;
+
+	return cmap[flat[xtemp | ytemp]];
+}
+
+/* Four horizontal pixels in one little-endian store. Same bytes. */
 static void span_unroll(unsigned pos, unsigned step, int count)
 {
 	uint8_t *dest = span_b;
 	int left = count + 1;
 
+	while (left && ((uintptr_t)dest & 3u)) {
+		*dest++ = span_pix(pos);
+		pos += step;
+		left--;
+	}
 	while (left >= 4) {
-		unsigned ytemp, xtemp;
-		ytemp = (pos >> 4) & 0x0fc0u; xtemp = pos >> 26;
-		*dest++ = cmap[flat[xtemp | ytemp]]; pos += step;
-		ytemp = (pos >> 4) & 0x0fc0u; xtemp = pos >> 26;
-		*dest++ = cmap[flat[xtemp | ytemp]]; pos += step;
-		ytemp = (pos >> 4) & 0x0fc0u; xtemp = pos >> 26;
-		*dest++ = cmap[flat[xtemp | ytemp]]; pos += step;
-		ytemp = (pos >> 4) & 0x0fc0u; xtemp = pos >> 26;
-		*dest++ = cmap[flat[xtemp | ytemp]]; pos += step;
+		unsigned p0 = span_pix(pos); pos += step;
+		unsigned p1 = span_pix(pos); pos += step;
+		unsigned p2 = span_pix(pos); pos += step;
+		unsigned p3 = span_pix(pos); pos += step;
+
+		*(uint32_t *)dest = p0 | (p1 << 8) | (p2 << 16) | (p3 << 24);
+		dest += 4;
 		left -= 4;
 	}
 	while (left--) {
-		unsigned ytemp = (pos >> 4) & 0x0fc0u;
-		unsigned xtemp = pos >> 26;
-		*dest++ = cmap[flat[xtemp | ytemp]];
+		*dest++ = span_pix(pos);
 		pos += step;
 	}
+}
+
+static void low_bytes(uint8_t *d, uint8_t pix)
+{
+	d[0] = pix;
+	d[1] = pix;
+}
+
+static void low_word(uint8_t *d, uint8_t pix)
+{
+	*(uint16_t *)d = (uint16_t)(pix | (pix << 8));
 }
 
 int main(void)
@@ -109,6 +130,15 @@ int main(void)
 		span_unroll(pos, sstep, sc);
 		if (memcmp(span_a, span_b, (size_t)sn) != 0)
 			fails++;
+		{
+			uint8_t pair[2], word[2];
+			uint8_t pix = (uint8_t)(i * 3);
+
+			low_bytes(pair, pix);
+			low_word(word, pix);
+			if (pair[0] != word[0] || pair[1] != word[1])
+				fails++;
+		}
 	}
 	{
 		enum { FT = 50, HH = 64 };

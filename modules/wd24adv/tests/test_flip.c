@@ -21,6 +21,8 @@ int main(void)
 	  s.pr0a == 0x00, "after page 1: CR0C=40, CPU bank 0");
 	wd24_flip_step(s.cpu, &s);
 	T(s.show == 0 && s.cr0c == 0, "next step returns the start to 0");
+	T(wd24_flip_writes(1) == 3, "hot flip is CR0C, CR0D, PR0A");
+	T(wd24_flip_writes(0) == 7, "cold flip adds the four unlock writes");
 	printf("test_flip: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;
 }

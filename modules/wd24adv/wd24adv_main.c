@@ -2034,6 +2034,7 @@ static bool s6d_armed, s6d_busy, s6d_13h;
 static unsigned int flip_cpu;
 static int flip_used;
 static unsigned int flip_scans;
+static int flip_hot;
 static bool s6d_cmap_published, s6d_cmap_frozen;
 static u32 s6d_pf_frames, s6d_pf_last, s6d_pf_total;
 static u64 s6d_pf_ns, s6d_pf_copy_ns;
@@ -2248,6 +2249,7 @@ static void s6d_vma_close(struct vm_area_struct *vma)
 		flip_used = 0;
 		flip_cpu = 0;
 		flip_scans = 0;
+		flip_hot = 0;
 		if (rerr)
 			pr_err("S6d: flip relock %d\n", rerr);
 	}
@@ -3110,38 +3112,13 @@ static int s6d_present_13h(const u8 *src, u32 *nsw)
  * lock again. Drop hw before console_lock: the trial worker takes
   * console_lock, then hw_lock.
   */
-/* 3DA bit 3 is vertical retrace (WD90C24 datasheet 15.8, CGA status).
- * Wait until a retrace starts. Cap so a stuck bit cannot wedge the lock.
+/* Caller holds hw_lock. Does not take console_lock. The CRTC loads
+ * CR0C/CR0D at vertical retrace, so this does not poll 3DA.
  */
-static void wd24_wait_retrace(u32 *late)
-{
-	unsigned long deadline = jiffies + HZ / 10;
-	u8 st;
-
-	*late = 0;
-	if (!hw || !hw->io || !hw->io->inb)
-		return;
-	while ((st = hw->io->inb(hw->io->priv, 0x3da)) & 0x08) {
-		if (time_after(jiffies, deadline)) {
-			*late = 1;
-			return;
-		}
-		cpu_relax();
-	}
-	while (!((st = hw->io->inb(hw->io->priv, 0x3da)) & 0x08)) {
-		if (time_after(jiffies, deadline)) {
-			*late = 1;
-			return;
-		}
-		cpu_relax();
-	}
-}
-
-/* Caller holds hw_lock. Does not take console_lock. */
 static int s6d_flip_now(struct wd24s6d_flip *req)
 {
 	struct wd24_flip_step step;
-	int err;
+	int err = 0;
 
 	if (!s6d_13h || !s6d_armed || !hw || hw->in_text || !s6d_st ||
 	    !s6d_st->active || s6d_st->stopping)
@@ -3150,10 +3127,9 @@ static int s6d_flip_now(struct wd24s6d_flip *req)
 		return -EINVAL;
 	wd24_flip_step(flip_cpu, &step);
 	req->late = 0;
-	if (req->vsync)
-		wd24_wait_retrace(&req->late);
 	hw->be->begin(hw);
-	err = wd24_unlock(hw);
+	if (!flip_hot)
+		err = wd24_unlock(hw);
 	if (!err)
 		err = wd24_write(hw, WD24_CR, 0x0c, step.cr0c);
 	if (!err)
@@ -3165,6 +3141,7 @@ static int s6d_flip_now(struct wd24s6d_flip *req)
 		return err;
 	flip_cpu = step.cpu;
 	flip_used = 1;
+	flip_hot = 1;
 	req->show = step.show;
 	req->cpu = step.cpu;
 	req->pr0a = step.pr0a;
@@ -3477,6 +3454,7 @@ static void s6d_arm(const struct wd24_mode *m)
 	s6d_scan_unmap = false;
 	flip_cpu = 0;
 	flip_scans = 0;
+	flip_hot = 0;
 	s6d_latch_noted = 0;
 	if (!direct) {
 		S6B_HW_BEGIN();

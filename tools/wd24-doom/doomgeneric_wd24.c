@@ -40,6 +40,7 @@
 #include "wd24x-doom-keys.h"
 #include "wd24x-doom-pick.h"
 #include "wd24x-doom-present.h"
+#include "wd24x-doom-view.h"
 #include "wd24x-doom-time.h"
 #include "wd24x-tty-own.h"
 #include "../../modules/wd24adv/wd24adv_ioctl.h"
@@ -69,6 +70,8 @@ static struct wd24x_tty_own tty_own;
 static int kd_fd = -1;
 static int kd_restore;
 static int do_flip, do_vsync, flip_said;
+extern int detailLevel;
+extern int screenblocks;
 static struct wd24x_keys keys;
 static int have_up;
 static unsigned char pending_up;
@@ -493,6 +496,24 @@ void DG_Init(void)
 	present_mode = wd24x_doom_present_mode(present_s);
 	atexit(report);
 	printf("WD24X-DOOM render 320 200 index\n");
+	{
+		struct wd24x_doom_view view;
+
+		/* Applied before D_DoomMain reads these. No default.cfg
+		 * in the run, so the engine keeps the values.
+		 */
+		if (wd24x_doom_view_parse(getenv("WD24X_DOOM_LOW"),
+					 getenv("WD24X_DOOM_BLOCKS"), &view) != 0) {
+			printf("WD24X-DOOM view refused\n");
+			exit(2);
+		}
+		if (view.low)
+			detailLevel = 1;
+		if (view.blocks)
+			screenblocks = view.blocks;
+		printf("WD24X-DOOM view low %d blocks %d\n",
+		       detailLevel, screenblocks);
+	}
 	if (present_mode < 0) {
 		printf("WD24X-DOOM present refused\n");
 		exit(2);

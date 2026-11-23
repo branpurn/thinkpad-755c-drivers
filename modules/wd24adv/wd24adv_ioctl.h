@@ -62,8 +62,9 @@ struct wd24s6d_present {
  * Show the 64K page just drawn and point the A0000 window at the other
  * page. cr0c/cr0d are the CRTC start written for that page (0 or
  * 0x4000). pr0a is the CPU bank written for the page drawn next.
- * vsync 1 waits for 3DA bit 3 (vertical retrace) first, with a
- * timeout reported in late. Only valid in the 320x200-8 session.
+ * The CRTC loads cr0c/cr0d at vertical retrace, so this does not
+ * poll 3DA. late stays 0. vsync is accepted and ignored.
+ * Only valid in the 320x200-8 session.
  */
 struct wd24s6d_flip {
 	__u32 vsync;

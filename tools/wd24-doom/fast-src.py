@@ -68,35 +68,49 @@ span_old = """\
 span_new = """\
     {
 	int left = count + 1;
+	byte *cmap = ds_colormap;
+	byte *src = ds_source;
 
+	/* Head bytes until the store is 4-aligned, then one dword of
+	 * the same four pixels. A span is horizontal, so this is one
+	 * bus write instead of four on the uncached aperture.
+	 */
+	while (left && ((unsigned)dest & 3)) {
+	    ytemp = (position >> 4) & 0x0fc0;
+	    xtemp = (position >> 26);
+	    spot = xtemp | ytemp;
+	    *dest++ = cmap[src[spot]];
+	    position += step;
+	    left--;
+	}
 	while (left >= 4) {
+	    unsigned p0, p1, p2, p3;
+
 	    ytemp = (position >> 4) & 0x0fc0;
 	    xtemp = (position >> 26);
-	    spot = xtemp | ytemp;
-	    *dest++ = ds_colormap[ds_source[spot]];
+	    p0 = cmap[src[xtemp | ytemp]];
 	    position += step;
 	    ytemp = (position >> 4) & 0x0fc0;
 	    xtemp = (position >> 26);
-	    spot = xtemp | ytemp;
-	    *dest++ = ds_colormap[ds_source[spot]];
+	    p1 = cmap[src[xtemp | ytemp]];
 	    position += step;
 	    ytemp = (position >> 4) & 0x0fc0;
 	    xtemp = (position >> 26);
-	    spot = xtemp | ytemp;
-	    *dest++ = ds_colormap[ds_source[spot]];
+	    p2 = cmap[src[xtemp | ytemp]];
 	    position += step;
 	    ytemp = (position >> 4) & 0x0fc0;
 	    xtemp = (position >> 26);
-	    spot = xtemp | ytemp;
-	    *dest++ = ds_colormap[ds_source[spot]];
+	    p3 = cmap[src[xtemp | ytemp]];
 	    position += step;
+	    *(unsigned *)dest = p0 | (p1 << 8) | (p2 << 16) | (p3 << 24);
+	    dest += 4;
 	    left -= 4;
 	}
 	while (left--) {
 	    ytemp = (position >> 4) & 0x0fc0;
 	    xtemp = (position >> 26);
 	    spot = xtemp | ytemp;
-	    *dest++ = ds_colormap[ds_source[spot]];
+	    *dest++ = cmap[src[spot]];
 	    position += step;
 	}
     }

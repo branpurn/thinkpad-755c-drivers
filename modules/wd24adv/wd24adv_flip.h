@@ -22,7 +22,11 @@
  *
  * PR0A (GR09) = 0x10 is the CPU window at +64KiB (wd90c24_hw.c
  * wd_selftest_banks: 0x00, 0x08, 0x10, 0x40). The CPU draws the page
- * the CRTC is not scanning.
+ * the CRTC is not scanning. There is no framebuffer copy.
+ *
+ * The CRTC uses CR0C/CR0D for screen refresh (datasheet 10.12) and,
+ * as on VGA, loads that start at vertical retrace. The flip writes
+ * the two bytes and returns. It does not poll 3DA.
  */
 #ifndef WD24ADV_FLIP_H
 #define WD24ADV_FLIP_H
@@ -37,6 +41,8 @@ typedef uint8_t u8;
 #define WD24_FLIP_PR0A_PAGE1	0x10u
 #define WD24_FLIP_CR0C_PAGE1	0x40u
 #define WD24_FLIP_CR0D_PAGE1	0x00u
+#define WD24_FLIP_WRITES_HOT	3u	/* CR0C, CR0D, PR0A */
+#define WD24_FLIP_WRITES_COLD	7u	/* those, plus the four unlock writes */
 
 struct wd24_flip_step {
 	u8 cr0c;
@@ -45,6 +51,11 @@ struct wd24_flip_step {
 	unsigned int show;
 	unsigned int cpu;
 };
+
+static inline unsigned int wd24_flip_writes(int already_unlocked)
+{
+	return already_unlocked ? WD24_FLIP_WRITES_HOT : WD24_FLIP_WRITES_COLD;
+}
 
 /* cpu_page is the page just drawn. */
 static inline void wd24_flip_step(unsigned int cpu_page, struct wd24_flip_step *o)

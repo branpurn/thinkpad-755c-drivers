@@ -208,10 +208,11 @@ move. PR0A (GR09) = 0x10 is only the CPU window at +64KiB
 (`wd_selftest_banks`). `WD24X_DOOM_FLIP=1` now writes CR0C/CR0D for
 the page just drawn and PR0A for the other page. It does not write
 PR16 or PR3. KD_GRAPHICS stays on so vgacon does not rewrite CR0C/D.
-`WD24X_DOOM_VSYNC=1` polls 3DA bit 3 first. Vsync is off unless that
-variable is 1. A retrace wait is up to one 70 Hz field, about 7 ms
-on average, so it is not how the map rate gets faster. Flip adds the
-register writes, not another 64000-byte copy.
+The CRTC loads that start at vertical retrace, so the flip does not
+poll 3DA. `WD24X_DOOM_VSYNC` is accepted and ignored. A retrace poll
+would be up to one 70 Hz field, about 7 ms on average, and it is not
+in this path. The first flip also unlocks (four writes). Later flips
+are CR0C, CR0D, and PR0A. That is not a 64000-byte copy.
 `sh docs/s6d-doom-run.sh timedemo13hflip` is the map path with flip
 on and vsync off. `sh docs/s6d-scanpat-run.sh pages` is the short
 check: page 0 solid red, page 1 solid green, and the two register
@@ -265,3 +266,48 @@ after the existing unlock, and relocks. Printing that saved snapshot
 is the dump. It adds no register write. Do not read PR12, and do not
 write any of these to chase the 5.56 us. Mode 13h uses `WD24_EXT_BIOS`,
 so it does not apply the 640x480 PR30A/PR31 values.
+
+## Direct-mode loops, qemu -cpu 486
+
+Baseline on the 755C, module `2fe57de`: map 19.83 fps (8870 realtics),
+copy 17.07 fps (10308 realtics), same 5026-gametic demo1. The copy is
+the extra ~8 ms. The map path is the one to speed up. These loop times
+are one 320 by 168 field, `qemu-i386-static -cpu 486`, cached RAM, no
+VGA wait states. They are not a 755C fps.
+
+| loop | us | label |
+| --- | --- | --- |
+| column, one byte store | 111 | measured, qemu |
+| column, four-pixel unroll already in `FAST=all` | 70 | measured, qemu |
+| span, one byte store | 111 | measured, qemu |
+| span, four pixels packed into one dword | 90 | measured, qemu |
+| low detail, two byte stores, half the samples | 55 | measured, qemu |
+| low detail, one word store of the same two bytes | 62 | measured, qemu, slower |
+
+The dword span is the new pixel-identical change in `FAST=all`. 90/111
+is the instruction stream only. The kernel's 5.56 us/dword was an
+`ioremap` `writel`, and a 50 ms frame shows the aperture byte stores
+are not that slow, so this is not a claim of several fps. The word
+store measured slower here, so low detail keeps the engine's two byte
+stores.
+
+`WD24X_DOOM_LOW=1` sets `detailLevel` 1. That changes the picture.
+Unset stays 0. The column loop above dropped from 111 us to 55 us
+because it takes half the texture samples. That ratio is measured.
+How much of the 50 ms frame is that loop is not.
+
+`WD24X_DOOM_BLOCKS` unset stays `screenblocks` 10, 320 by 168, 53760
+view pixels. `8` is 256 by 128, 32768 pixels, 60 percent of that view.
+`11` is 320 by 200, 64000 pixels, and it is larger, not faster. The
+counts are the `R_ExecuteSetViewSize` formula. The frame-time share
+of the view versus the status bar was not measured.
+
+Direct mode already skips the 320 by 200 `memcpy` when `FAST` includes
+`direct`. The palette ioctl runs only when `palette_changed` is set.
+The flip writes CR0C, CR0D, and PR0A, and does not copy the frame.
+The first flip also does the four unlock writes. Later flips do not.
+There is no 3DA poll, so a flip does not add the ~7 ms retrace wait.
+The CRTC loads the start at vertical retrace. The next draw uses the
+other CPU bank, so it does not wait for that load. This has not been
+timed on the panel. Stripped `FAST=all` `/tmp/wd24x-doom.s` is 557944
+bytes, sha256 `3478876ee0a6e40bd3ad1bf5d58c0363ff1197ae5a14d4cf3769cf33e5bed6b4`.
