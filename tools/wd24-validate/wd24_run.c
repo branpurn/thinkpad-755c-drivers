@@ -30,6 +30,11 @@ static void val(const char *name, int ok, const char *ev)
 		g_fail++;
 }
 
+static void skip(const char *name, const char *ev)
+{
+	printf("VAL %s SKIP %s\n", name, ev);
+}
+
 static const char *DIG[10] = {
 	"111101101101111",
 	"010010010010111",
@@ -120,9 +125,33 @@ static unsigned fnv(const unsigned char *p, unsigned n)
 	return h;
 }
 
-static int over2x(unsigned med)
+static unsigned gaps[64];
+static unsigned ngaps;
+
+/* Intervals are field periods already measured. Count those above
+ * twice the median. An empty list is not a pass.
+ */
+static unsigned count_over2x(const unsigned *v, unsigned n)
 {
-	return 0 * med;
+	unsigned tmp[64];
+	unsigned i, j, med, over = 0;
+
+	if (!n || n > 64)
+		return ~0u;
+	for (i = 0; i < n; i++)
+		tmp[i] = v[i];
+	for (i = 1; i < n; i++) {
+		unsigned k = tmp[i];
+
+		for (j = i; j > 0 && tmp[j - 1] > k; j--)
+			tmp[j] = tmp[j - 1];
+		tmp[j] = k;
+	}
+	med = tmp[(n - 1) / 2];
+	for (i = 0; i < n; i++)
+		if (v[i] > med * 2u)
+			over++;
+	return over;
 }
 
 static void set_dac(struct wd24_chip *c, unsigned i, unsigned r,
@@ -172,6 +201,12 @@ static int emit(struct wd24_chip *c, FILE *raw, FILE *sf, const char *ppm_dir,
 
 	if (wd24_chip_render(c, rgb))
 		return -1;
+	if (ngaps < 64) {
+		unsigned mhz = wd24_chip_field_millihz(c);
+
+		if (mhz)
+			gaps[ngaps++] = (unsigned)(1000000000ull / mhz);
+	}
 	burn_counter(rgb, n);
 	if (raw && fwrite(rgb, 1, FRAME, raw) != FRAME)
 		return -1;
@@ -196,30 +231,58 @@ static int emit(struct wd24_chip *c, FILE *raw, FILE *sf, const char *ppm_dir,
 
 static int self_median(void)
 {
-	unsigned v[4] = { 10, 10, 10, 40 };
-	unsigned i, j, med, over = 0;
+	unsigned spike[4] = { 10, 10, 10, 40 };
+	unsigned flat[4] = { 10, 10, 10, 10 };
 
-	for (i = 1; i < 4; i++) {
-		unsigned k = v[i];
+	return count_over2x(spike, 4) == 1 && count_over2x(flat, 4) == 0 &&
+	       count_over2x(flat, 0) == ~0u;
+}
 
-		for (j = i; j > 0 && v[j - 1] > k; j--)
-			v[j] = v[j - 1];
-		v[j] = k;
+/* 1 = saw 3DA bit 3 low then high. 0 = timed out. -1 = no port. */
+static int retrace_edge(void)
+{
+	static int pfd = -2;
+	int i, saw_low = 0;
+
+	if (pfd == -2)
+		pfd = open("/dev/port", O_RDONLY);
+	if (pfd < 0)
+		return -1;
+	for (i = 0; i < 2000000; i++) {
+		unsigned char b;
+
+		if (pread(pfd, &b, 1, 0x3da) != 1)
+			return -1;
+		if (b & 0x08) {
+			if (saw_low)
+				return 1;
+		} else {
+			saw_low = 1;
+		}
 	}
-	med = v[1];
-	for (i = 0; i < 4; i++)
-		if (v[i] > med * 2u)
-			over++;
-	return over == 1 && over2x(med) == 0;
+	return 0;
+}
+
+static unsigned window_bad(const unsigned char *win, const unsigned char *src)
+{
+	unsigned i, bad = 0;
+
+	for (i = 0; i < 64000; i++)
+		if (win[i] != src[i])
+			bad++;
+	return bad;
 }
 
 static int device_run(void)
 {
-	int fd, page_i;
+	int fd, page_i, edge, cards_bad = 0, strobe_bad = 0, strobe_skip = 0;
 	unsigned char *win;
+	unsigned char src[64000];
 	struct wd24s6d_flip fr;
 	const unsigned ink[3] = { 1, 2, 4 };
-	char ev[120];
+	const unsigned cr0c[3] = { 0x00, 0x40, 0x80 };
+	unsigned shown = 0, fields = 0, card_rb = 0, strobe_rb = 0;
+	char ev[160];
 
 	fd = open("/dev/fb0", O_RDWR);
 	if (fd < 0) {
@@ -233,51 +296,96 @@ static int device_run(void)
 	win = mmap(NULL, 65536, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (win == MAP_FAILED) {
 		val("page0", 0, "mmap");
-		printf("VAL SUMMARY pass=%d fail=%d\n", g_pass, g_fail);
 		close(fd);
 		return 1;
 	}
 	for (page_i = 0; page_i < 3; page_i++) {
-		unsigned i, bad = 0;
+		unsigned bad;
 		const char *name = page_i == 0 ? "page0" : page_i == 1 ? "page1" : "page2";
 
-		memset(win, (int)ink[page_i], 64000);
-		for (i = 0; i < 64000; i++)
-			if (win[i] != ink[page_i])
-				bad++;
+		memset(src, (int)ink[page_i], 64000);
+		memcpy(win, src, 64000);
+		bad = window_bad(win, src);
 		memset(&fr, 0, sizeof(fr));
 		if (ioctl(fd, WD24S6D_IOC_FLIP, &fr) != 0) {
 			snprintf(ev, sizeof(ev), "sum=%u flip=refused", bad);
 			val(name, 0, ev);
 			continue;
 		}
+		edge = retrace_edge();
 		snprintf(ev, sizeof(ev),
-			 "cr0c=%02x cr0d=%02x pr0a=%02x latch=1 sum=%u",
-			 fr.cr0c, fr.cr0d, fr.pr0a, bad);
-		val(name, bad == 0, ev);
+			 "cr0c=%02x cr0d=%02x pr0a=%02x edges=%d sum=%u",
+			 fr.cr0c, fr.cr0d, fr.pr0a, edge, bad);
+		if (bad || fr.cr0c != cr0c[shown % 3] || fr.cr0d != 0) {
+			val(name, 0, ev);
+		} else if (edge == 1) {
+			val(name, 1, ev);
+		} else if (edge < 0) {
+			skip(name, ev);
+		} else {
+			val(name, 0, ev);
+		}
+		shown++;
 	}
 	for (page_i = 0; page_i < 5; page_i++) {
-		memset(win, page_i == 4 ? 63 : (int)ink[page_i % 3], 64000);
+		unsigned color = page_i == 4 ? 63u : ink[page_i % 3];
+		unsigned bad;
+
+		memset(src, (int)color, 64000);
+		draw_digit(src, 320, 200, 148, 80, 8, (unsigned)page_i + 1, 0);
+		memcpy(win, src, 64000);
+		bad = window_bad(win, src);
+		card_rb += bad;
+		if (bad)
+			cards_bad++;
 		memset(&fr, 0, sizeof(fr));
 		if (ioctl(fd, WD24S6D_IOC_FLIP, &fr) != 0) {
 			val("markers", 0, "flip");
+			cards_bad = -1;
 			break;
 		}
 		sleep(2);
 	}
-	if (g_fail == 0)
-		val("markers", 1, "cards=5");
-	for (page_i = 0; page_i < 6; page_i++) {
-		memset(win, (int)ink[page_i % 3], 64000);
-		memset(&fr, 0, sizeof(fr));
-		if (ioctl(fd, WD24S6D_IOC_FLIP, &fr) != 0) {
-			val("strobe", 0, "flip");
-			break;
-		}
-		sleep(1);
+	if (cards_bad >= 0) {
+		snprintf(ev, sizeof(ev), "cards=5 readback=%u", card_rb);
+		val("markers", card_rb == 0, ev);
 	}
-	if (page_i == 6)
-		val("strobe", 1, "holds=6 fields_each=1");
+	edge = retrace_edge();
+	if (edge < 0) {
+		skip("strobe", "no-3da");
+		strobe_skip = 1;
+	}
+	if (!strobe_skip) {
+		for (page_i = 0; page_i < 6; page_i++) {
+			unsigned pi = (unsigned)page_i % 3;
+			unsigned bad, n;
+
+			memset(src, (int)ink[pi], 64000);
+			draw_digit(src, 320, 200, 8, 8, 4, pi, 63);
+			memcpy(win, src, 64000);
+			bad = window_bad(win, src);
+			strobe_rb += bad;
+			if (bad)
+				strobe_bad++;
+			memset(&fr, 0, sizeof(fr));
+			if (ioctl(fd, WD24S6D_IOC_FLIP, &fr) != 0 ||
+			    fr.cr0c != cr0c[shown % 3]) {
+				strobe_bad++;
+				break;
+			}
+			shown++;
+			for (n = 0; n < 35; n++) {
+				if (retrace_edge() != 1) {
+					strobe_bad++;
+					break;
+				}
+				fields++;
+			}
+		}
+		snprintf(ev, sizeof(ev),
+			 "holds=6 fields=%u readback=%u", fields, strobe_rb);
+		val("strobe", strobe_bad == 0 && fields == 35u * 6u, ev);
+	}
 	munmap(win, 65536);
 	close(fd);
 	return g_fail ? 1 : 0;
@@ -356,22 +464,36 @@ int main(int argc, char **argv)
 		fprintf(sf, "STEP %u\n", every);
 	}
 
-	for (page_i = 0; page_i < 5; page_i++) {
-		memset(page, (int)card_ink[page_i], sizeof(page));
-		draw_digit(page, 320, 200, 148, 80, 8, page_i + 1, 0);
-		if (bank(c, 0) || wd24_chip_mem_write(c, 0, page, 64000) ||
-		    arm_start(c, 0)) {
-			val("markers", 0, "card");
-			goto done;
-		}
-		for (f = 0; f < (full ? 140u : hold); f++, field++) {
-			if (emit(c, raw, sf, ppm, field, 1, "card", every)) {
-				val("markers", 0, "emit");
+	{
+		unsigned card_rb = 0;
+
+		for (page_i = 0; page_i < 5; page_i++) {
+			unsigned char got[64000];
+
+			memset(page, (int)card_ink[page_i], sizeof(page));
+			draw_digit(page, 320, 200, 148, 80, 8, page_i + 1, 0);
+			if (bank(c, 0) || wd24_chip_mem_write(c, 0, page, 64000) ||
+			    wd24_chip_mem_read(c, 0, got, 64000)) {
+				val("markers", 0, "card");
 				goto done;
 			}
+			for (i = 0; i < 64000; i++)
+				if (got[i] != page[i])
+					card_rb++;
+			if (arm_start(c, 0)) {
+				val("markers", 0, "latch");
+				goto done;
+			}
+			for (f = 0; f < (full ? 140u : hold); f++, field++) {
+				if (emit(c, raw, sf, ppm, field, 1, "card", every)) {
+					val("markers", 0, "emit");
+					goto done;
+				}
+			}
 		}
+		snprintf(ev, sizeof(ev), "cards=5 readback=%u", card_rb);
+		val("markers", card_rb == 0, ev);
 	}
-	val("markers", 1, "cards=5");
 
 	for (page_i = 0; page_i < 3; page_i++) {
 		unsigned mismatch = 0;
@@ -391,22 +513,22 @@ int main(int argc, char **argv)
 		for (i = 0; i < 64000; i++)
 			if (got[i] != page[i])
 				mismatch++;
-		before = wd24_chip_latch_to(c);
+		before = wd24_chip_latches(c);
 		if (arm_start(c, cr0c[page_i])) {
 			val(page_i == 0 ? "page0" : page_i == 1 ? "page1" : "page2",
 			    0, "latch");
 			continue;
 		}
 		snprintf(ev, sizeof(ev),
-			 "cr0c=%02x cr0d=%02x pr0a=%02x latch=%u sum=%u",
+			 "cr0c=%02x cr0d=%02x pr0a=%02x edges=%u sum=%u",
 			 wd24_chip_lat_cr0c(c), wd24_chip_lat_cr0d(c),
 			 wd24_chip_pr0a(c),
-			 wd24_chip_latch_to(c) == before ? 1u : 0u, mismatch);
+			 wd24_chip_latches(c) - (unsigned)before, mismatch);
 		val(page_i == 0 ? "page0" : page_i == 1 ? "page1" : "page2",
 		    mismatch == 0 && wd24_chip_lat_cr0c(c) == cr0c[page_i] &&
 		    wd24_chip_lat_cr0d(c) == 0 &&
 		    wd24_chip_pr0a(c) == pr[page_i] &&
-		    wd24_chip_latch_to(c) == before,
+		    wd24_chip_latches(c) > (unsigned)before,
 		    ev);
 		for (f = 0; f < hold; f++, field++) {
 			if (emit(c, raw, sf, ppm, field, 1, "page", every)) {
@@ -449,20 +571,12 @@ int main(int argc, char **argv)
 
 	{
 		unsigned mhz = wd24_chip_field_millihz(c);
-		unsigned over = 0;
-		unsigned med = mhz ? (unsigned)(1000000000ull / mhz) : 0;
-		unsigned samples[8];
+		unsigned over = count_over2x(gaps, ngaps);
 
-		for (i = 0; i < 8; i++)
-			samples[i] = med;
-		for (i = 0; i < 8; i++)
-			if (med && samples[i] > med * 2u)
-				over++;
 		snprintf(ev, sizeof(ev),
-			 "fps=%u.%03u latch_to=%u over2x=%u source=model_field",
-			 mhz / 1000u, mhz % 1000u, wd24_chip_latch_to(c), over);
+			 "fps=%u.%03u latch_to=%u intervals=%u over2x=%u source=model_field",
+			 mhz / 1000u, mhz % 1000u, wd24_chip_latch_to(c), ngaps, over);
 		val("perf", mhz != 0 && wd24_chip_latch_to(c) == 0 && over == 0, ev);
-		(void)samples;
 	}
 
 	before = wd24_chip_latch_to(c);
@@ -477,23 +591,40 @@ int main(int argc, char **argv)
 
 	before = wd24_chip_latch_to(c);
 	bad = 0;
-	for (cyc = 0; cyc < strobe_cycles; cyc++) {
-		for (page_i = 0; page_i < 3; page_i++) {
-			memset(page, (int)ink[page_i], sizeof(page));
-			draw_digit(page, 320, 200, 8, 8, 4, page_i, 63);
-			if (bank(c, pr[page_i]) ||
-			    wd24_chip_mem_write(c, 0, page, 64000) ||
-			    arm_start(c, cr0c[page_i]))
-				bad++;
-			for (f = 0; f < hold; f++, field++) {
-				if (emit(c, raw, sf, ppm, field, 1, "strobe", every))
+	{
+		unsigned rb = 0, shown = 0;
+
+		for (cyc = 0; cyc < strobe_cycles; cyc++) {
+			for (page_i = 0; page_i < 3; page_i++) {
+				unsigned char got[64000];
+
+				memset(page, (int)ink[page_i], sizeof(page));
+				draw_digit(page, 320, 200, 8, 8, 4, page_i, 63);
+				if (bank(c, pr[page_i]) ||
+				    wd24_chip_mem_write(c, 0, page, 64000) ||
+				    wd24_chip_mem_read(c, 0, got, 64000) ||
+				    arm_start(c, cr0c[page_i]) ||
+				    wd24_chip_lat_cr0c(c) != cr0c[page_i])
 					bad++;
+				else {
+					for (i = 0; i < 64000; i++)
+						if (got[i] != page[i])
+							rb++;
+				}
+				for (f = 0; f < hold; f++, field++) {
+					if (emit(c, raw, sf, ppm, field, 1, "strobe", every))
+						bad++;
+					else
+						shown++;
+				}
 			}
 		}
+		snprintf(ev, sizeof(ev),
+			 "holds=%u fields=%u fields_each=%u readback=%u",
+			 strobe_cycles * 3u, shown, hold, rb);
+		val("strobe", bad == 0 && rb == 0 && shown == strobe_cycles * 3u * hold &&
+		    wd24_chip_latch_to(c) == before, ev);
 	}
-	snprintf(ev, sizeof(ev), "holds=%u fields_each=%u torn=0 dropped=0",
-		 strobe_cycles * 3u, hold);
-	val("strobe", bad == 0 && wd24_chip_latch_to(c) == before, ev);
 
 done:
 	printf("VAL SUMMARY pass=%d fail=%d\n", g_pass, g_fail);

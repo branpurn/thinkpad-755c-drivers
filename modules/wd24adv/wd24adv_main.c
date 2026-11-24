@@ -758,6 +758,12 @@ static int hw_run(enum hw_op op, const struct wd24_mode *m)
 	}
 	wd24_log_reset(hw);
 	console_lock();
+	/* Hold the VT before a 13h set. do_blank_screen saves B8000.
+	 * After the set only A0000-AFFFF is mapped, so a later save
+	 * reads FF FF and the text restore paints white cells.
+	 */
+	if (op == OP_MODE && m && !strcmp(m->name, "320x200-8"))
+		wd24_vc_hold_graphics();
 	hw->be->begin(hw);
 	switch (op) {
 	case OP_LOAD:
@@ -776,11 +782,12 @@ static int hw_run(enum hw_op op, const struct wd24_mode *m)
 		break;
 	}
 	hw->be->end(hw);
+	if (err && op == OP_MODE && m && !strcmp(m->name, "320x200-8"))
+		wd24_vc_release_graphics();
 	if (!err && op == OP_MODE && m && !strcmp(m->name, "320x200-8")) {
 		struct wd24_scan sc;
 		unsigned long d = hw->hw_data, ix = hw->hw_index;
 
-		wd24_vc_hold_graphics();
 		wd24_scan_read(hw, &sc);
 		hw->hw_data = d;
 		hw->hw_index = ix;

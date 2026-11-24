@@ -22,6 +22,10 @@ else
 fi
 if grep -q 'VAL SUMMARY pass=9 fail=0' "$log"; then ok; else bad "summary"; fi
 if grep -q 'fps=70.086' "$log"; then ok; else bad "field rate"; fi
+if grep -q 'edges=1' "$log"; then ok; else bad "latch edge"; fi
+if grep -q 'cards=5 readback=0' "$log"; then ok; else bad "marker readback"; fi
+if grep -q 'fields_each=2 readback=0' "$log"; then ok; else bad "strobe readback"; fi
+if grep -q 'intervals=' "$log"; then ok; else bad "intervals"; fi
 if python3 "$VAL/check_log.py" "$log" > "$work/table.txt"; then ok; else bad "check_log"; fi
 if grep -q 'page2' "$work/table.txt"; then ok; else bad "table row"; fi
 if python3 "$VAL/check_footage.py" "$work/samples.txt" "$work/ppm" > "$work/foot.txt"; then

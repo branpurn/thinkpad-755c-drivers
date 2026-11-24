@@ -8,6 +8,9 @@
 # WD24X_MOCK prefixes paths for the host dry-run.
 # WD24X_GO7_PLAY_SEC defaults to 60. 0 runs the hand-play in the
 # foreground and lets that process exit itself.
+# Page, card, and strobe checks need their own insmod. A second
+# open of /dev/fb0 after Doom returns -ENODEV (-19). Run
+# tools/wd24-validate/validate.sh, rmmod, then this script.
 P=${WD24X_MOCK:-}
 rc=1
 owned=0

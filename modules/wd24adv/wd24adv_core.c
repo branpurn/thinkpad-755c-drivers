@@ -1102,6 +1102,32 @@ static int mode_steps(struct wd24_ctx *c, const struct wd24_mode *m)
 	TRY(wd24_screen_on(c, false));
 	TRY(wd24_restore_ext(c, &ext));
 	TRY(wd24_write_std(c, m->std));
+	/* write_std leaves SR01 bit 5 set (seq[1] | 0x20), the same
+	 * screen-off bit as wd24_screen_on(false) / hw.c 354. The
+	 * visible page is byte 0: std CR0C/CR0D are 0 and a BIOS
+	 * PR0A of 0 is that bank (wd24adv_flip.h). Clearing it here
+	 * is memory only. A non-zero BIOS bank is not rewritten.
+	 */
+	if (m->ext == WD24_EXT_BIOS && (m->flags & WD24M_DIRECT) &&
+	    m->std && !m->std->crtc[0x0c] && !m->std->crtc[0x0d] &&
+	    m->frame_bytes <= WD24_PLANE && c->bios.pr0a == 0x00 &&
+	    c->be->mem_write) {
+		static u8 z[256];
+		u32 off;
+
+		for (off = 0; off < m->frame_bytes; ) {
+			u32 n = m->frame_bytes - off;
+
+			if (n > sizeof(z))
+				n = sizeof(z);
+			c->be->mem_write(c, off, z, n);
+			off += n;
+		}
+		ev_bulk(c, 0, "13h: clear visible page while SR01 bit 5 is set");
+	} else if (m->ext == WD24_EXT_BIOS && (m->flags & WD24M_DIRECT) &&
+		   c->bios.pr0a != 0x00) {
+		wd24_note(c, "13h clear skipped: BIOS PR0A is not bank 0");
+	}
 	if (m->ext == WD24_EXT_PACKED8) {
 		c->tag = "bank 0, hw.c 389-390/397";
 		TRY(wd24_write(c, WD24_GR, WD24_GR_PR0A, 0x00));

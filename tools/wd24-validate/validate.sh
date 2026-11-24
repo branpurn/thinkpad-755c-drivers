@@ -5,6 +5,8 @@
 # WD24X_VALIDATE_MODEL=1 runs the CRTC model (no /dev/fb0).
 # WD24X_VALIDATE_BIN is that program. WD24X_VALIDATE_FULL=1 records
 # every latched field instead of the short hold.
+# On the device, run this script in its own insmod and rmmod before
+# Doom. A second /dev/fb0 open after Doom returns -ENODEV (-19).
 # Busybox ash standalone applets are not used; this file only calls
 # the program named above, cat, and grep.
 set -u

@@ -73,9 +73,12 @@ Do not treat the VM as the panel. On the 755C, with the module loaded:
 sh tools/wd24-validate/validate.sh
 ```
 
-That path needs `/dev/fb0`. Page patterns, the five cards (2 seconds
-each) and the strobe use `WD24S6D_IOC_FLIP` and then read the window
-back. HUD, ghost, and perf need a Doom log produced with
+That path needs `/dev/fb0`, and it needs its own `insmod`. A second
+open after Doom returns `-ENODEV` (`-19`). rmmod, then run Doom.
+Page patterns, the five cards (drawn, read back, held 2 seconds) and
+the strobe (three pages, 35 retraces each, read back) use
+`WD24S6D_IOC_FLIP` and a `3DA` bit 3 low-to-high sample. No sample
+is a `SKIP`, not a pass. HUD, ghost, and perf need a Doom log produced with
 `WD24X_DOOM_VALIDATE=1` and `WD24X_DOOM_FRAMESTATS=1`. Point
 `WD24X_DOOM_LOG` at that capture. Restore reads `mismatches` from
 `/proc/wd24adv/live`. rmmod and the text console are still a person
