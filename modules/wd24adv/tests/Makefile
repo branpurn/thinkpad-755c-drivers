@@ -57,6 +57,10 @@ test: test_core xcheck test_vga test_engine test_s1 test_s2 test_s3 test_s4 test
 	$(CC) $(CFLAGS) -o /tmp/wd24-test-framestats test_framestats.c
 	/tmp/wd24-test-framestats
 	dash ./test_go7_run.sh
+	$(CC) $(CFLAGS) -o /tmp/wd24-test-chip ../../../tools/wd24-validate/wd24_chip.c test_wd24_chip.c
+	/tmp/wd24-test-chip
+	$(CC) $(CFLAGS) -o /tmp/wd24-run ../../../tools/wd24-validate/wd24_run.c ../../../tools/wd24-validate/wd24_chip.c
+	dash ./test_validate.sh
 	$(CC) $(CFLAGS) -o /tmp/wd24-test-latch test_latch.c
 	/tmp/wd24-test-latch
 	$(CC) $(CFLAGS) -o /tmp/wd24-test-fbops test_fbops.c

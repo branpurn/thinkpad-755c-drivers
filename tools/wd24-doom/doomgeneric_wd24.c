@@ -70,7 +70,7 @@ static unsigned present_switches;
 static struct wd24x_tty_own tty_own;
 static int kd_fd = -1;
 static int kd_restore;
-static int do_flip, do_vsync, flip_said;
+static int do_flip, do_vsync, flip_said, validate_on;
 extern int detailLevel;
 extern int screenblocks;
 static struct wd24x_keys keys;
@@ -761,6 +761,11 @@ fake_ready:
 		do_flip = fl && fl[0] == '1' && !fl[1];
 		do_vsync = vs && vs[0] == '1' && !vs[1];
 	}
+	{
+		const char *vv = getenv("WD24X_DOOM_VALIDATE");
+
+		validate_on = vv && vv[0] == '1' && !vv[1];
+	}
 	if (fb_aperture || fb_apcopy || use_13h)
 		printf("WD24X-DOOM flip env %d\n", do_flip ? 1 : 0);
 	/* The mmap starts on the page the CRTC is scanning. One flip
@@ -787,6 +792,36 @@ fake_ready:
 	}
 	arm_signals();
 	printf("WD24X-DOOM input tty\n");
+}
+
+/* Read the bytes just stored in the CPU window. No register write.
+ * Rows 168..199 are the status bar at screenblocks 10. A mismatch
+ * against the engine buffer is noise the copy introduced. The glass
+ * can still disagree if the latched start is a different bank.
+ */
+static void vram_note(const uint8_t *win, const uint8_t *src, unsigned frame)
+{
+	unsigned i, row_bad = 0, all_bad = 0;
+	unsigned rh = 2166136261u, wh = 2166136261u;
+
+	if (!win || !src)
+		return;
+	for (i = 168u * 320u; i < 200u * 320u; i++) {
+		rh ^= src[i];
+		rh *= 16777619u;
+		wh ^= win[i];
+		wh *= 16777619u;
+		if (win[i] != src[i])
+			row_bad++;
+	}
+	for (i = 0; i < 64000u; i++) {
+		if (win[i] != src[i])
+			all_bad++;
+	}
+	fprintf(stderr,
+		"WD24X-DOOM vram cmp frame %u rows_hash 0x%08x win_hash 0x%08x rows_bad %u frame_bad %u\n",
+		frame, rh, wh, row_bad, all_bad);
+	fflush(stderr);
 }
 
 void DG_DrawFrame(void)
@@ -883,6 +918,8 @@ void DG_DrawFrame(void)
 		if (fb)
 			wd24x_doom_emit(fb, 0, present, WD24X_DOOM_FRAME, NULL);
 	}
+	if (validate_on && fb && (fb_apcopy || fb_aperture))
+		vram_note(fb, idx, frames);
 	if (fs_on)
 		fs_flip = mono_ns();
 	if (do_flip && !fb_fake && fb_fd >= 0 &&
