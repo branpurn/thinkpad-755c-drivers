@@ -1,6 +1,7 @@
 #!/bin/sh
-# The 64000-byte aperture copy must be one movl per dword. rep movsl
-# into the chain-4 window is what rotated the frame on the 755C.
+# The 64000-byte aperture copy stores with movl, four dwords a trip.
+# 64000 is 0xfa00. The unrolled trip stops at 64000-16 (0xf9f0).
+# rep movs is not used. The rotated frame was CR0C, not this loop.
 set -u
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
 SRC=/tmp/doom-src/doomgeneric/doomgeneric
@@ -28,22 +29,29 @@ if ! $CC -O2 $ARCH -fomit-frame-pointer -DNDEBUG -std=gnu11 \
 	exit 1
 fi
 dump=$($OBJDUMP -d --no-show-raw-insn "$OBJ")
-loops=$(printf '%s\n' "$dump" | awk '
+# 64000 is the lea 0xfa00 that bounds the trip. The trip is four movl
+# and add $0x10. A rep in that window means the stores were joined.
+set -- $(printf '%s\n' "$dump" | awk '
 /^[[:xdigit:]]+ <DG_DrawFrame>/ {p=1}
 /^[[:xdigit:]]+ </ && !/DG_DrawFrame/ {if (p) exit}
-p && /cmp[[:space:]]+\$0xfa00/ {
-	for (i = NR - 6; i <= NR; i++) if (i > 0) want[i] = 1
+p && /lea[[:space:]]+0xfa00\(/ { cap=18; bad=0; adds=0; movs=0; on=1 }
+on && cap > 0 {
+	if (/rep[[:space:]]+mov/) bad=1
+	if (/add[[:space:]]+\$0x10,/) adds++
+	if (/mov[[:space:]]+%e/) movs++
+	cap--
+	if (cap == 0) {
+		if (adds && movs >= 4 && !bad) ok++
+		else if (adds) fail++
+		on=0
+	}
 }
-{ line[NR] = $0 }
-END {
-	for (i = 1; i <= NR; i++) if (want[i]) print line[i]
-}
+END { print ok+0, fail+0 }
 ')
-n=$(printf '%s\n' "$loops" | grep -c 'cmp[[:space:]]\+\$0xfa00' || true)
-rep=$(printf '%s\n' "$loops" | grep -c 'rep movs' || true)
-if [ "$n" -lt 1 ] || [ "$rep" -ne 0 ]; then
-	echo "test_doom_copy_asm: FAIL loops=$n rep=$rep"
-	printf '%s\n' "$loops"
+ok=$1
+fail=$2
+if [ "$ok" -lt 2 ] || [ "$fail" -ne 0 ]; then
+	echo "test_doom_copy_asm: FAIL trips=$ok bad=$fail"
 	exit 1
 fi
-echo "test_doom_copy_asm: $n dword loops, no rep movs"
+echo "test_doom_copy_asm: $ok dword trips, no rep movs"

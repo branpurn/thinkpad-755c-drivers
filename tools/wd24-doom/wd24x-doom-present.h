@@ -278,26 +278,45 @@ static inline void wd24x_doom_present(int mode, const uint8_t *src,
 }
 
 /*
- * 64000 index bytes, one movl at a time. The tail past n is not written.
- * A plain store loop becomes rep movsl at -O2 -march=i486 once this is
- * inlined. A string move into the chain-4 window does not wait the way
- * one movl does, and the CRTC then shows the frame rotated: the status
- * bar at the top and the weapon wrapped onto the side. The kernel
- * present path uses writel, which is also one movl. The asm keeps that.
+ * 64000 index bytes. The tail past a multiple of 4 is not written.
+ * Each store is one movl, the same instruction as the kernel present
+ * path's writel. Four stores per trip cut the loop overhead. An empty
+ * barrier between them stops -O2 from joining the trip into rep movsl.
+ * The bytes match a byte copy.
  */
 static inline void wd24x_doom_copy_dwords(uint8_t *dst, const uint8_t *src,
 					  unsigned int n)
 {
-	unsigned int i;
+	unsigned int i = 0;
 
-	for (i = 0; i + 3u < n; i += 4u) {
+	while (i + 15u < n) {
+		uint32_t w0, w1, w2, w3;
+
+		memcpy(&w0, src + i, 4);
+		memcpy(&w1, src + i + 4, 4);
+		memcpy(&w2, src + i + 8, 4);
+		memcpy(&w3, src + i + 12, 4);
+		asm volatile("movl %1, %0" : "=m"(*(uint32_t *)(dst + i))
+			     : "r"(w0) : "memory");
+		asm volatile("" ::: "memory");
+		asm volatile("movl %1, %0" : "=m"(*(uint32_t *)(dst + i + 4))
+			     : "r"(w1) : "memory");
+		asm volatile("" ::: "memory");
+		asm volatile("movl %1, %0" : "=m"(*(uint32_t *)(dst + i + 8))
+			     : "r"(w2) : "memory");
+		asm volatile("" ::: "memory");
+		asm volatile("movl %1, %0" : "=m"(*(uint32_t *)(dst + i + 12))
+			     : "r"(w3) : "memory");
+		asm volatile("" ::: "memory");
+		i += 16u;
+	}
+	while (i + 3u < n) {
 		uint32_t w;
 
 		memcpy(&w, src + i, 4);
-		asm volatile("movl %1, %0"
-			     : "=m"(*(uint32_t *)(dst + i))
-			     : "r"(w)
-			     : "memory");
+		asm volatile("movl %1, %0" : "=m"(*(uint32_t *)(dst + i))
+			     : "r"(w) : "memory");
+		i += 4u;
 	}
 }
 
