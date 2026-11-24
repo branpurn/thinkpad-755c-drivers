@@ -23,6 +23,28 @@ for sym in do_blank_screen do_unblank_screen fg_console vc_cons; do
 	if grep -qx "$sym" "$LIST"; then ok; else bad "list $sym"; fi
 done
 if grep -q 'vc_cons_allocated(' "$MAIN"; then bad "unexported helper"; else ok; fi
+# i386 string_32.h leaves memmove out of line. memcpy is __builtin_memcpy,
+# so a call does not reference that symbol. Neither name is exported.
+# (memcpy)( would, because the macro does not apply.
+for sym in memmove memcpy; do
+	if grep -qx "$sym" "$LIST"; then bad "list has $sym"; else ok; fi
+done
+hit=0
+for f in "$ROOT"/modules/wd24adv/wd24adv_*.c "$ROOT"/modules/wd24adv/wd24adv_*.h; do
+	[ -f "$f" ] || continue
+	if grep -nE '(^|[^A-Za-z0-9_])memmove[[:space:]]*\(' "$f"; then
+		hit=1
+	fi
+done
+if [ "$hit" = 1 ]; then bad "memmove call"; else ok; fi
+hit=0
+for f in "$ROOT"/modules/wd24adv/wd24adv_*.c "$ROOT"/modules/wd24adv/wd24adv_*.h; do
+	[ -f "$f" ] || continue
+	if grep -nE '\(memcpy\)[[:space:]]*\(' "$f"; then
+		hit=1
+	fi
+done
+if [ "$hit" = 1 ]; then bad "memcpy symbol"; else ok; fi
 KO=$ROOT/modules/wd24adv/wd24adv.ko
 ko_out=$(sh "$CHECK" "$KO" 2>&1) && ko_st=0 || ko_st=$?
 case "$ko_out" in

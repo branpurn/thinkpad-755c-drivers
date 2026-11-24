@@ -2217,6 +2217,8 @@ out:
 	return VM_FAULT_NOPAGE;
 }
 
+static int wd24_retrace_bit(void);
+
 static void s6d_vma_close(struct vm_area_struct *vma)
 {
 	int scan = 0;
@@ -3209,7 +3211,13 @@ static void live_note_flip_counts(void)
 		if (j < live_len)
 			j++;
 		if (j - i >= 10 && !memcmp(live_txt + i, "flip skip ", 10)) {
-			memmove(live_txt + i, live_txt + j, live_len - j);
+			char *dst = live_txt + i;
+			char *src = live_txt + j;
+			size_t ncopy = live_len - j;
+
+			/* i < j, so dest is below src. A forward copy is enough. */
+			while (ncopy--)
+				*dst++ = *src++;
 			live_len -= j - i;
 			continue;
 		}
