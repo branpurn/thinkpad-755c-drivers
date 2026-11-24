@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../wd24adv_s3.h"
+#include "../wd24adv_s4fb.h"
 
 static int fails, passes;
 #define CHECK(c, ...) do { if (c) passes++; else { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); \
@@ -393,6 +394,102 @@ int main(void)
 	CHECK(s.prog == &wd24s3_prog4, "prog set");
 	wd24s3_init(&s, &io, &mem, pre, model, buf);
 	CHECK(s.prog == &wd24s3_prog3, "init: S3 default");
+
+	/* 9. one rectangle, the same words as the S4 table */
+	{
+		struct wd24s3_op op;
+		u32 nbad;
+
+		CHECK(wd24s4_make_fill(&op, 16, 112, 64, 16, 0x3c) == 0, "make fill");
+		CHECK(op.npar == wd24s4_ops[0].npar && op.cntrl1 == wd24s4_ops[0].cntrl1 &&
+		      op.src == wd24s4_ops[0].src && op.dst == wd24s4_ops[0].dst, "fill fields");
+		for (p = 0; p < op.npar; p++)
+			CHECK(op.par[p].idx == wd24s4_ops[0].par[p].idx &&
+			      op.par[p].val == wd24s4_ops[0].par[p].val, "fill par %u", p);
+		CHECK(wd24s4_make_copy(&op, 48, 150, 40, 146, 128, 24) == 0, "make fwd");
+		CHECK(op.back == 0 && op.cntrl1 == wd24s4_ops[7].cntrl1 &&
+		      op.src == wd24s4_ops[7].src && op.dst == wd24s4_ops[7].dst, "fwd fields");
+		for (p = 0; p < op.npar; p++)
+			CHECK(op.par[p].idx == wd24s4_ops[7].par[p].idx &&
+			      op.par[p].val == wd24s4_ops[7].par[p].val, "fwd par %u", p);
+		CHECK(wd24s4_make_copy(&op, 300, 150, 308, 154, 128, 24) == 0, "make back");
+		CHECK(op.back == 1 && op.cntrl1 == wd24s4_ops[8].cntrl1, "back cntrl");
+		for (p = 0; p < op.npar; p++)
+			CHECK(op.par[p].idx == wd24s4_ops[8].par[p].idx &&
+			      op.par[p].val == wd24s4_ops[8].par[p].val, "back par %u", p);
+		CHECK(wd24s4_make_fill(&op, 600, 112, 64, 16, 1) == -22, "fill off screen");
+
+		reset();
+		pattern();
+		CHECK(wd24s4_make_fill(&op, 16, 112, 64, 16, 0x3c) == 0, "kick fill build");
+		r = wd24s4_kick(&s, &op);
+		CHECK(r == 0 && s.res == WD24S3_OK, "kick fill rc %d res %d why %s",
+		      r, s.res, s.why ? s.why : "-");
+		for (i = nbad = 0; i < 640 * 480; i++) {
+			u32 x = i % 640, y = i / 640;
+			u8 want = vram0[i];
+
+			if (y >= 112 && y < 128 && x >= 16 && x < 80)
+				want = 0x3c;
+			nbad += m.vram[i] != want;
+		}
+		CHECK(nbad == 0, "kick fill pixels %u", nbad);
+		restored("kick fill");
+
+		reset();
+		pattern();
+		CHECK(wd24s4_make_copy(&op, 300, 150, 308, 154, 128, 24) == 0, "kick copy build");
+		r = wd24s4_kick(&s, &op);
+		CHECK(r == 0 && s.res == WD24S3_OK, "kick copy rc %d why %s",
+		      r, s.why ? s.why : "-");
+		expect(e, 0);
+		{
+			const struct wd24s3_op *o = &wd24s4_ops[8];
+			static u8 tmp[640 * 32];
+			u32 rr, ii;
+
+			for (rr = 0; rr < o->h; rr++)
+				for (ii = 0; ii < o->w; ii++)
+					tmp[rr * 640 + ii] = e[o->src + rr * 640 + ii];
+			for (rr = 0; rr < o->h; rr++)
+				for (ii = 0; ii < o->w; ii++) {
+					u8 *d = &e[o->dst + rr * 640 + ii];
+
+					*d = rop2(o->rop, tmp[rr * 640 + ii], *d);
+				}
+		}
+		for (i = nbad = 0; i < VSZ; i++)
+			nbad += e[i] != m.vram[i];
+		CHECK(nbad == 0, "kick copy pixels %u", nbad);
+		restored("kick copy");
+
+		reset();
+		pattern();
+		m.hang_op = 1;
+		CHECK(wd24s4_make_fill(&op, 16, 112, 64, 16, 0x3c) == 0, "kick hang build");
+		r = wd24s4_kick(&s, &op);
+		CHECK(r == 2 && s.dead && s.res == WD24S3_TIMEOUT, "kick timeout %d %d", r, s.res);
+		CHECK(m.ix == 0x1001, "kick timeout left select %04x", m.ix);
+		CHECK(!s.restored, "kick timeout did not restore");
+
+		reset();
+		pattern();
+		m.ix = 0x1001;
+		CHECK(wd24s4_make_fill(&op, 16, 112, 64, 16, 0x3c) == 0, "kick select build");
+		r = wd24s4_kick(&s, &op);
+		CHECK(r == 0 && s.res == WD24S3_OK, "kick selects 1002h then fills (%d %d %s)",
+		      r, s.res, s.why ? s.why : "-");
+		CHECK(m.ix == WD24S2_S, "kick select left %04x", m.ix);
+		for (i = nbad = 0; i < 640 * 480; i++) {
+			u32 x = i % 640, y = i / 640;
+			u8 want = vram0[i];
+
+			if (y >= 112 && y < 128 && x >= 16 && x < 80)
+				want = 0x3c;
+			nbad += m.vram[i] != want;
+		}
+		CHECK(nbad == 0, "kick select pixels %u", nbad);
+	}
 
 	printf("test_s4: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;

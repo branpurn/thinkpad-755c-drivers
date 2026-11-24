@@ -28,7 +28,8 @@
 #include "wd24adv_core.h"
 
 /* PR0A/PR0B hold bits 6:0 (DS 13.1): the window reaches 0-7FFFFh.  The
- * 640x480-8 frame ends at 4B000h; both banks are off screen. */
+  * 640x480-8 frame ends at 4B000h; both banks are off screen.
+  */
 #define WD24S6_X	0x50	/* PR0A value: bank X = 50000h (4 KiB units) */
 #define WD24S6_Y	0x70	/* PR0B value: bank Y = 70000h */
 #define WD24S6_N	0x1000	/* bytes per test region */
@@ -91,10 +92,12 @@ struct wd24s6_model {
 	int ignore_pr1b3, ignore_pr31b7, pr1_stuck, refuse;	/* fault injection */
 	/* lock faults: unlock only on exactly 48h (86Box), SR06 writes
 	 * ignored, relock ignored (stays unlocked), locked SR07+ reads FFh
-	 * (86Box) instead of 00h (755C live) */
+	 * (86Box) instead of 00h (755C live)
+	 */
 	int lock_exact48, lock_ignore, relock_stuck, locked_ff;
 	/* S6c faults: relock clears PR31 b7 (lock-clear); b7 kept but no
-	 * effect while locked (lock-noeffect); re-unlock refused */
+	 * effect while locked (lock-noeffect); re-unlock refused
+	 */
 	int relock_clears_b7, locked_noeffect, reunlock_fail;
 	u32 nunl;
 	bool lock_open;

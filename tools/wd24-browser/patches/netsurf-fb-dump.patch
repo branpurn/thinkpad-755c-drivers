@@ -1,0 +1,97 @@
+diff --git a/frontends/framebuffer/framebuffer.c b/frontends/framebuffer/framebuffer.c
+index 52afdbf..7e53909 100644
+--- a/frontends/framebuffer/framebuffer.c
++++ b/frontends/framebuffer/framebuffer.c
+@@ -573,6 +573,34 @@ static bool framebuffer_format_from_bpp(int bpp, enum nsfb_format_e *fmt)
+ 
+ 
+ 
++void
++framebuffer_dump(const char *path)
++{
++	uint8_t *ptr;
++	int stride;
++	int width;
++	int height;
++	FILE *fp;
++	size_t nbytes;
++
++	if (nsfb == NULL || path == NULL || path[0] == '\0')
++		return;
++	nsfb_get_buffer(nsfb, &ptr, &stride);
++	nsfb_get_geometry(nsfb, &width, &height, NULL);
++	if (ptr == NULL || stride <= 0 || height <= 0)
++		return;
++	fp = fopen(path, "wb");
++	if (fp == NULL)
++		return;
++	nbytes = (size_t)stride * (size_t)height;
++	if (fwrite(ptr, 1, nbytes, fp) != nbytes)
++		fprintf(stderr, "WD24X-BROWSER dump short\n");
++	else
++		fprintf(stderr, "WD24X-BROWSER dump %s %d %d %d\n",
++			path, width, height, stride);
++	fclose(fp);
++}
++
+ nsfb_t *
+ framebuffer_initialise(const char *fename, int width, int height, int bpp)
+ {
+diff --git a/frontends/framebuffer/framebuffer.h b/frontends/framebuffer/framebuffer.h
+index d99049f..5612020 100644
+--- a/frontends/framebuffer/framebuffer.h
++++ b/frontends/framebuffer/framebuffer.h
+@@ -27,6 +27,7 @@
+ extern const struct plotter_table fb_plotters;
+ 
+ nsfb_t *framebuffer_initialise(const char *fename, int width, int height, int bpp);
++void framebuffer_dump(const char *path);
+ bool framebuffer_resize(nsfb_t *nsfb, int width, int height, int bpp);
+ void framebuffer_finalise(void);
+ bool framebuffer_set_cursor(struct fbtk_bitmap *bm);
+diff --git a/frontends/framebuffer/gui.c b/frontends/framebuffer/gui.c
+index 5bfc822..948c80c 100644
+--- a/frontends/framebuffer/gui.c
++++ b/frontends/framebuffer/gui.c
+@@ -23,6 +23,8 @@
+ #include <string.h>
+ #include <stdbool.h>
+ #include <stdlib.h>
++#include <stdio.h>
++#include <time.h>
+ #include <nsutils/time.h>
+ 
+ #include <libnsfb.h>
+@@ -617,6 +619,15 @@ static void framebuffer_run(void)
+ {
+ 	nsfb_event_t event;
+ 	int timeout; /* timeout in miliseconds */
++	const char *dump = getenv("WD24X_FB_DUMP");
++	struct timespec dump_t0;
++	int dumped = 0;
++
++	/* Smoke-test exit. The ram surface does not block in input, so
++	 * this loop otherwise never ends. Three seconds is long enough
++	 * for the local page fixtures to decode. */
++	if (dump != NULL)
++		clock_gettime(CLOCK_MONOTONIC, &dump_t0);
+ 
+ 	while (fb_complete != true) {
+ 		/* run the scheduler and discover how long to wait for
+@@ -637,6 +648,16 @@ static void framebuffer_run(void)
+ 		}
+ 
+ 		fbtk_redraw(fbtk);
++		if (dump != NULL && dumped == 0) {
++			struct timespec dump_now;
++
++			clock_gettime(CLOCK_MONOTONIC, &dump_now);
++			if (dump_now.tv_sec - dump_t0.tv_sec >= 3) {
++				framebuffer_dump(dump);
++				dumped = 1;
++				fb_complete = true;
++			}
++		}
+ 	}
+ }
+ 

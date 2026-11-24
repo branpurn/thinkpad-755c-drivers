@@ -10,6 +10,9 @@ for d in "$TOP"/modules/*/; do
     [ -f "$d/Kbuild" ] || continue
     n=$(basename "$d"); log "out-of-tree module: $n"
     make -s -C "$KDIR" ARCH=i386 M="$d" -j"$JOBS" modules
+    if [ "$n" = wd24adv ]; then
+        sh "$TOP/scripts/check-ko-exports.sh" "$d/wd24adv.ko"
+    fi
     for k in "$d"/*.ko; do strip --strip-debug -o "$dst/$(basename "$k")" "$k"; done
 done
 ls -l "$dst" >&2

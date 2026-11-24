@@ -1,0 +1,50 @@
+Extractor for the Xfbdev payload. Not run on the 755C.
+X and the module were not rebuilt.
+
+Target limit: no gzip, tar, gunzip, or zcat, including BusyBox applets.
+The archive on the target is the same file that is here:
+/opt/cursor/artifacts/wd24-xfbdev-i486.tgz
+sha256 af429004d7d279f84d6ebdf2b62f589b81471dd791f6d0949d3d6c67a106c224
+size 1055373 bytes.
+
+Tool, raw executable, not wrapped in another archive:
+/opt/cursor/artifacts/busybox-wd24
+sha256 52b264655f25e902098eb797ba72f424cbe3ec0c37caceeaf5f0984835682236
+size 140756 bytes.
+XMODEM that file to /tmp/busybox-wd24. Do not rename it. Do not copy
+it onto /bin. At the byte rate of the 529.5 s archive transfer, this
+file is about 71 s, not another copy of the uncompressed server.
+
+Source: BusyBox 1.36.1
+sha256 b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314
+from busybox.net, matched the published checksum.
+Compiler: i486-linux-musl-gcc 11.2.1
+flags: -march=i486 -mtune=i486 -Os -ffunction-sections -fdata-sections
+link: -static -static-libgcc -Wl,--gc-sections
+Enabled applets: tar only.
+CONFIG_FEATURE_SEAMLESS_GZ=y so tar -z reads gzip. No gzip compressor
+applet and no gunzip applet.
+CONFIG_LFS=y because this musl's off_t is 64 bits.
+The archive magic is ustar with the GNU spacing. BusyBox accepts that
+prefix without the old-GNU option. Names in this archive are short.
+ELF: 32-bit LSB pie, Intel 80386 (the ELF machine field for IA-32),
+static-pie, interpreter count 0, objdump cmov count 0.
+Two f3 90 pause encodings are present. The extract below ran to
+completion under qemu-i386 8.2.2 -cpu 486, so that path did not SIGILL.
+
+The binary reads argv[1] as the applet only when its own file name
+starts with busybox. That is upstream BusyBox, not a new parser.
+
+Smoke, as uid 0, because this tar restores modes for uid 0:
+  qemu-i386-static -cpu 486 /tmp/busybox-wd24 tar -C /tmp/bb-out2 -xzof wd24-xfbdev-i486.tgz
+  RC 0
+  Xfbdev mode 755 owner 0:0
+  the other seven manifest files mode 644 owner 0:0
+  all eight hashes matched the manifest, including
+  Xfbdev 6450171476a8e6aa91883744947423db123c74a042d697f9263b686dcb2f9f13
+-o is why the owner is 0 and not the archive uid 1000.
+-z is the built-in gzip reader. -x extracts. -f is the archive. -C is
+the directory.
+
+sha256sum on the target is one pathname and no -c. Compare the first
+field to the hash in docs/s6d-xfbdev-runbook.txt.

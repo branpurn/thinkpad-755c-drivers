@@ -3,45 +3,48 @@
 #include <linux/mm.h>
 #include <linux/string.h>
 #include "wd24adv_s6d.h"
+#include "wd24adv_s6d_fault.h"
 
 /*
- * Map the 64 KiB aperture covering `off` into `vma` at the matching
- * virtual offsets. Zaps the previously mapped window first. Caller holds
- * the hardware lock and has already run wait_idle / SETWIN for (w0,w1).
- * Returns 0 or a vm_fault_t-style negative errno.
+ * Map the 64 KiB aperture covering `off` into `vma`. Zaps only the
+ * previously mapped window, and only when that range sits inside the VMA.
+ * Caller holds the hardware lock and, on the live fault path, the console
+ * lock. Returns 0 or a negative errno. A non-zero return does not move
+ * the hardware window.
+ *
+ * zap_vma_ptes (Linux 6.18 mm/memory.c) does not take mmap_lock; the fault
+ * path holds it for read. Teardown of every VMA uses unmap_mapping_range
+ * from s6d_stop, not from here.
  */
 int wd24s6d_map_win(struct wd24s6d *s, struct vm_area_struct *vma, u32 off)
 {
-	u32 w0, w1, base, i;
+	struct wd24s6d_mapreq q;
+	struct wd24s6d_mapact a;
 	unsigned long vbase;
+	u32 i;
 	int err;
 
-	if (!s || !vma || off >= WD24S6D_MMAP_LEN)
+	if (!s || !vma)
 		return -EINVAL;
-	if (s->thrash.latched)
-		return -EIO;
 
-	wd24s6d_win_for_off(off, &w0, &w1);
-	base = wd24s6d_win_base_pg(off);
-	if (wd24s6d_thrash_note(&s->thrash, base)) {
-		s->nthrash++;
-		s->why = "thrash latch";
-		return -EIO;
+	q.off = off;
+	q.mapped_base = s->mapped_base;
+	q.mmap_len = WD24S6D_MMAP_LEN;
+	q.vma_len = vma->vm_end - vma->vm_start;
+	wd24s6d_plan_fault(&s->thrash, &q, &s->nfault, &s->nthrash, &a);
+	if (a.err) {
+		s->why = a.why;
+		return a.err;
 	}
 
-	s->nfault++;
+	if (a.zap && a.zap_pages) {
+		unsigned long old = vma->vm_start +
+			((unsigned long)a.zap_base << 12);
 
-	/* bank switch: zap previous window, SETWIN new halves */
-	if (s->mapped_base != base) {
-		if (s->mapped_base != ~0u) {
-			unsigned long old = vma->vm_start +
-				((unsigned long)s->mapped_base << 12);
-			unsigned long len = WD24S6D_WIN;
-
-			if (old >= vma->vm_start && old + len <= vma->vm_end)
-				zap_vma_ptes(vma, old, len);
-		}
-		err = wd24s6b_setwin(s->b, w0, w1);
+		zap_vma_ptes(vma, old, (unsigned long)a.zap_pages << 12);
+	}
+	if (a.setwin) {
+		err = wd24s6b_setwin(s->b, a.w0, a.w1);
 		if (err) {
 			s->why = "SETWIN";
 			s->mapped_base = ~0u;
@@ -50,12 +53,10 @@ int wd24s6d_map_win(struct wd24s6d *s, struct vm_area_struct *vma, u32 off)
 		s->nswitch++;
 	}
 
-	vbase = vma->vm_start + ((unsigned long)base << 12);
-	if (vbase < vma->vm_start || vbase + WD24S6D_WIN > vma->vm_end) {
-		s->why = "VMA range";
-		return -EINVAL;
-	}
-	for (i = 0; i < (WD24S6D_WIN / WD24S6D_PAGE); i++) {
+	if (!a.insert || !a.npages)
+		return 0;
+	vbase = vma->vm_start + ((unsigned long)a.base << 12);
+	for (i = 0; i < a.npages; i++) {
 		unsigned long addr = vbase + ((unsigned long)i << 12);
 		vm_fault_t vt = vmf_insert_pfn(vma, addr,
 					      WD24S6D_APERTURE_PFN + i);
@@ -66,6 +67,6 @@ int wd24s6d_map_win(struct wd24s6d *s, struct vm_area_struct *vma, u32 off)
 			return -EIO;
 		}
 	}
-	s->mapped_base = base;
+	s->mapped_base = a.base;
 	return 0;
 }

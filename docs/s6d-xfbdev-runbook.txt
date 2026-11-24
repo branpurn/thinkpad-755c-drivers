@@ -1,0 +1,358 @@
+S6d Xfbdev runbook. Not started. Not an insmod approval. Not an X approval.
+Module: /tmp/wd24adv-pr14.ko
+sha256 7da0fffe75883c1c28e876e0dc660f946a2e8f4d9dc9443ebc0810ac71bb7e36
+Do not insmod /tmp/wd24adv.ko. That older file stays.
+Payload: /opt/cursor/artifacts/wd24-xfbdev-i486.tgz
+sha256 af429004d7d279f84d6ebdf2b62f589b81471dd791f6d0949d3d6c67a106c224
+size 1055373 bytes. That file was checked on the target.
+Extractor: /opt/cursor/artifacts/busybox-wd24
+sha256 52b264655f25e902098eb797ba72f424cbe3ec0c37caceeaf5f0984835682236
+size 140756 bytes. Raw executable. Not an archive. XMODEM it to
+/tmp/busybox-wd24 and do not rename it. Do not copy it to /bin.
+This userland has no gzip, tar, gunzip, or zcat, including BusyBox
+applets. The extractor is the only tar. It is static. It does not
+replace a system library. After the X child has been reaped, remove
+that tree, /tmp/.X1-lock, and /tmp/.X11-unix/X1. Leave
+/tmp/.X11-unix itself and any other socket. No CF write, no reboot,
+no new kernel.
+
+What was checked offline, against this driver and linux-6.18.57
+fb_chrdev.c / fbcmap.c / fbmem.c, and against xorg-server 1.14.7
+hw/kdrive/fbdev/fbdev.c.
+
+The fb is PSEUDOCOLOR, packed 8 bpp, 640x480, line length 640, id
+wd24s6d. smem_len is the visible frame, 75 pages. There is one mmap.
+A second mmap returns -EBUSY. screen_base is NULL. Xfbdev mmaps
+fix.smem_len once and keeps a RAM shadow (shadowUpdatePacked memcpy
+from that shadow into the mapping). It does not call the kernel
+copyarea. The noop copyarea does not block this process.
+
+FBIOPUT_VSCREENINFO with no fb_check_var returns success and leaves the
+current mode (fbmem.c). fbdevEnable requires that ioctl to succeed. It
+does, and the mode stays 640x480x8.
+
+FBIOPUTCMAP returns -EINVAL. fb_setcolreg and fb_setcmap are absent
+(fbcmap.c). fbdevPutColors calls FBIOPUTCMAP and ignores the return.
+fbdevEnable programs a colormap only for DIRECTCOLOR. Missing
+fb_setcolreg does not stop this binary from starting. The DAC is left
+as it already is. Colors are not a pass criterion. The baseline module
+7da0fffe has neither hook. A later gated candidate uses fb_setcmap, not
+fb_setcolreg, and is specified in docs/s6d-cmap.txt. This runbook does
+not load it.
+
+The thrash latch counts consecutive window switches and resets when a
+fault stays in the current window. The default bound is 32. A forward
+memcpy faults into the next window and then stays there. A single
+instruction that touches two windows alternates, and the latch stops
+that at 32 and the fault returns SIGBUS. The stamp test wrote single
+bytes. It does not show that an X shadow paint will stay under the
+bound. Do not raise s6d_thrash_bound. A thrash line is a fail and a
+stop. Do not retry.
+
+s6d_bind=0. fbcon does not bind. X is the user open. The bind=1 pass
+already returned to VGA text. This run does not bind fbcon at the same
+time as X. The trial cannot be turned off. It starts at insmod and
+ends the session even if X is still mapped. Kill X before that. kill
+does not interrupt mutex_lock, console_lock, or a fault that has not
+returned. The latch makes an alternating fault finite, then SIGBUS.
+That is not the same as kill breaking the wait.
+
+Xfbdev also opens a free VT and issues KDSETMODE KD_GRAPHICS. That
+ioctl is fatal to X if it fails. On the way out it sets KD_TEXT. The
+mmap tool did not do this. If the expiry line is not 0, stop. The
+picture on the panel is not the pass.
+
+Offline smoke, not the 755C, not the draw path. Record:
+docs/s6d-xfbdev-smoke.txt. Hashes were unchanged.
+qemu-i386 8.2.2, `-cpu 486`, `Xfbdev -help`: RC 0, stdout empty, usage
+on stderr. The same file run as a host IA32 process on x86_64 also
+returned RC 0 with the same stderr. That host run is not a 486 result.
+The 486 model is the qemu run. Under that same `-cpu 486`, a stub whose
+only extra instruction is `cmovne %eax,%eax` gets signal 4 and the
+shell reports RC 132. A stub that returns 42 under `-cpu 486` reports
+RC 42. So the help path started the static PIE and parsed `-help`
+without SIGILL on a CPU model that rejects cmov. `-version` is not a
+flag of this binary: RC 1, "Unrecognized option: -version", then
+"Fatal server error". The help path does not open /dev/fb0 and does not
+draw. The three `pause` (`f3 90`) encodings in musl pthread_rwlock are
+not on it. The mmap tool that already ran does not contain them. If a
+later live X dies with SIGILL, that is a fail. The shell can record it,
+because X is backgrounded, and the trial expiry is still the text
+restore.
+
+This binary's usage lists `-mouse driver [,n,,options]` and
+`-keybd driver [,,options]`. It has no flag whose meaning is "no mouse"
+or "no keyboard". `-2button` and `-3button` only change button
+emulation. This run passes neither `-mouse` nor `-keybd`. An older
+root image used `Xfbdev :0 -mouse /dev/input/mice -2button`. That is
+not this command. Mouse and keyboard stay unproven.
+
+LogMessage uses verbosity 1. The default stderr verbosity is 0, so
+the framebuffer id line is not written to the redirected stderr.
+Do not require it. The first live start opened the fb anyway:
+dmesg said "S6d: session ON (fb open)", FBIOGETCMAP returned
+"can't get colormap: Invalid argument", and the end line was
+faults 5 switches 5 thrash 0. That colormap line is not fatal.
+The process then died in XKB, before a client and before a
+protocol check.
+
+Core devices are not optional. InitKeyboardDeviceStruct calls
+XkbCompileKeymap. That forks /tmp/xfb-prefix/bin/xkbcomp and reads
+/tmp/xfb-prefix/share/X11/xkb/rules/evdev. If the compile does not
+exit 0, xkbInit prints "XKB: Failed to compile keymap" and
+devices.c calls FatalError("Failed to activate core devices.").
+The string "Errors from xkbcomp are not fatal to the X server" is
+an argument this server passes to xkbcomp. xkbcomp prints it after
+warnings. It is not a server policy. The first live start had no
+xkbcomp, exited 1 by itself, and did not receive a signal.
+
+Readiness for the next start is all of: /proc/<PID>/stat exists,
+the state letter is not Z, the log has no "Failed to compile keymap",
+no "Failed to activate core devices", and no "Fatal server error",
+and dmesg has "S6d: session ON (fb open)". Alive with no fatal still
+does not prove a pixel or the keyboard. "can't get colormap" may
+appear and is not a stop by itself.
+
+SIGTERM is caught. GiveUp sets DE_TERMINATE and returns. The server
+then leaves its loop and AbortDDX runs. AbortDDX calls LinuxDisable
+only if the VT enable path already set kdEnabled. LinuxDisable issues
+KDSETMODE KD_TEXT. There is no printk for that ioctl. SIGKILL does not
+run it. `kill` returning 0 means the signal was delivered to a pid that
+existed, not that the task has exited. A zombie still has a /proc line
+and state Z until `wait` reaps it. `wait` is run only when the state is
+Z or /proc is already gone, so it returns. Do not `wait` on a live
+state. That call blocks, and this shell has nothing else to type.
+
+After the child is dead, the module trial is still a separate restore
+of the saved text registers. The headless restore evidence is expiry 0,
+mismatches 0, in_text 1. The panel is not that evidence.
+
+Headless pass, all of them:
+  insmod RC=0
+  the dmesg line "registered fb0 WITHOUT fbcon bind"
+  /proc/fb shows one node before X
+  no frame-buffer vtcon
+  after the readiness wait, /proc/<PID>/stat exists and the state is not Z
+  dmesg has "S6d: session ON (fb open)"
+  x.log has no "Failed to compile keymap"
+  x.log has no "Failed to activate core devices"
+  x.log has no "Fatal server error"
+  no thrash line, latched stays 0
+  `wait` has reaped the child before any socket is removed
+  after that: S6d end (fb release)
+  live trial expiry 0, mismatches 0, in_text 1
+  armed 0, fb_reg 0, /proc/fb empty
+  only vtcon0 (S) VGA+ bind 1
+  RM=0 and the shell answers
+
+Not a pass: panel colors, readable glyphs, the keyboard, the mouse,
+or a root-window photo. The keymap compile under qemu is not a
+framebuffer proof. Alive with no fatal is not a pixel.
+
+Headless fail, stop. Do not raise the thrash bound. Do not retry
+the same missing-xkbcomp command.
+  RC does not return, or is not 0
+  no WITHOUT fbcon bind line
+  x.log contains "Failed to compile keymap"
+  x.log contains "Failed to activate core devices"
+  x.log contains "Fatal server error"
+  any thrash line, or latched is not 0
+  the child is still alive after SIGKILL and the 5 s sleep
+  expiry is not 0, or in_text is not 1
+  /proc/fb still occupied after expiry
+  the shell stops answering
+  X dies with SIGILL
+
+Sequence. One line at a time. The trial clock starts at insmod.
+The waits below are 15 s, and at most one more 15 s, then 10 s, then
+at most 5 s. That is 45 s after X is started. Do not add another
+sleep. Start X as soon as RC=0. bind=0 does not do the fbcon redraw,
+so RC should return while most of the 180 s remains. If RC itself
+used more than about 120 s, skip the second 15 s sleep and go to
+SIGTERM. Do not let the trial unmap the framebuffer while the child
+is still the process you are trying to stop cleanly.
+
+  cat /proc/fb
+  cat /sys/class/vtconsole/vtcon0/name
+  cat /sys/class/vtconsole/vtcon0/bind
+
+Empty /proc/fb. Name (S) VGA+. Bind 1. If another vtcon exists, stop.
+
+  sha256sum /tmp/busybox-wd24
+  sha256sum /tmp/wd24-xfbdev-i486.tgz
+
+One pathname per command. Do not use sha256sum -c. The checker that
+already printed hashes is this form. -c is a different program and is
+not the check. The first field must be
+52b264655f25e902098eb797ba72f424cbe3ec0c37caceeaf5f0984835682236
+for the extractor and
+af429004d7d279f84d6ebdf2b62f589b81471dd791f6d0949d3d6c67a106c224
+for the archive. If either differs, stop.
+
+  chmod 755 /tmp/busybox-wd24
+  /tmp/busybox-wd24 tar -C /tmp -xzof /tmp/wd24-xfbdev-i486.tgz
+  echo EX=$?
+
+The file name must stay busybox-wd24. This binary takes the applet
+from the next argument only when its own name starts with busybox.
+-x extracts. -z is the gzip reader built into this tar. -o leaves
+the files owned by root instead of uid 1000 from the archive. -f is
+the archive. -C /tmp writes /tmp/wd24-xfbdev/. Run this as root.
+EX must be 0. There is no gzip or tar command on PATH to use instead.
+
+Then one sha256sum per file. The first field must match. Stop on the
+first mismatch. Do not use sha256sum -c.
+
+  sha256sum /tmp/wd24-xfbdev/Xfbdev
+  sha256sum /tmp/wd24-xfbdev/fonts/misc/6x13.pcf.gz
+  sha256sum /tmp/wd24-xfbdev/fonts/misc/fonts.dir
+  sha256sum /tmp/wd24-xfbdev/fonts/misc/fonts.alias
+  sha256sum /tmp/wd24-xfbdev/fonts/cursor/cursor.pcf.gz
+  sha256sum /tmp/wd24-xfbdev/fonts/cursor/fonts.dir
+  sha256sum /tmp/wd24-xfbdev/FONT-COPYRIGHT
+  sha256sum /tmp/wd24-xfbdev/BUILD.txt
+
+Xfbdev
+6450171476a8e6aa91883744947423db123c74a042d697f9263b686dcb2f9f13
+fonts/misc/6x13.pcf.gz
+08a0eb134120be2afb31580a7daf70e0c8001f1b21fce5ed5ff5db9bd6a190bf
+fonts/misc/fonts.dir
+801479c9b892cf0dea1eb5510e96ca99d050dbb91cc019f5450ce79c34d3d8d3
+fonts/misc/fonts.alias
+87ce32d33e945005652c708abe8bf6fd49bf08e3f3e06ad2e664fcdef941e45d
+fonts/cursor/cursor.pcf.gz
+b6e69b0d11ace7213f2dd04384bfa09bc44cbc3433cc51b9a68b3312c738b82d
+fonts/cursor/fonts.dir
+d5a73b01a7855dbd8af46309c102e16dc534ab1d89c486bd475f7928e6a88609
+FONT-COPYRIGHT
+b693c9b9b08cccd233559920d6b7d71af50608538d562f0cd8a4ebfb55c168c8
+BUILD.txt
+b71ab767a3b4d623c76ddf8406a6de22a70fa7e878fa3f11c758e87a005a387c
+
+Xfbdev must be mode 755. The other seven files must be mode 644.
+Do not chmod a system directory.
+
+The X server looks for xkbcomp and the rules at the paths compiled
+into it. Extract this second archive before insmod. If
+/tmp/busybox-wd24 is missing, put the same extractor back first.
+Its hash is unchanged.
+
+  sha256sum /tmp/wd24-xkb.tgz
+
+The first field must be
+5d2203659fffd031f85715e3ce29a7be987c04bc231e36574e6fb748147e9cb2
+If it differs, stop.
+
+  /tmp/busybox-wd24 tar -C /tmp -xzof /tmp/wd24-xkb.tgz
+  echo XK=$?
+  sha256sum /tmp/xfb-prefix/bin/xkbcomp
+  sha256sum /tmp/xfb-prefix/share/X11/xkb/rules/evdev
+
+XK must be 0. xkbcomp must be mode 755 and
+5ebf28e8823a5165efb0a2a0b997d2218ebbaa24ddb5abd76160643a939a5f62
+rules/evdev must be
+43a2ee6f57dd6a3217b4bba6dc2126bd8b27ea3ac5532e880b0be5d6ea30c668
+One pathname each. No sha256sum -c. Do not move these files.
+
+  dmesg -c >/dev/null
+  insmod /tmp/wd24adv-pr14.ko dryrun=0 live=1 mode=640x480-8 trial=180 s6d=1 pattern=0 fix_sr06=1 s6d_fbcon=1 s6d_bind=0
+  echo RC=$?
+
+Wait for RC. pattern=0 was requested. Do not expect a particular picture.
+If RC is not 0, stop. Do not start X.
+
+  cat /proc/fb
+
+One node. Then:
+
+  /tmp/wd24-xfbdev/Xfbdev :1 -nolisten tcp -fb /dev/fb0 >/tmp/wd24-xfbdev/x.log 2>&1 &
+  echo PID=$!
+
+The PID echo is not readiness. Use those digits below. Do not use $!.
+No -mouse and no -keybd. Do not start a client.
+
+  sleep 15
+  cat /tmp/wd24-xfbdev/x.log
+  cat /proc/<PID>/stat
+
+The state letter is the field after the closing parenthesis.
+Ready means the file exists, that letter is not Z, dmesg has
+"S6d: session ON (fb open)", and the log has none of
+"Failed to compile keymap", "Failed to activate core devices",
+or "Fatal server error". A line "can't get colormap" is not a
+stop. A line "Errors from xkbcomp are not fatal to the X server"
+is the compiler trailer. It is not the pass and it is not the fail.
+
+If the fatal strings are absent, the state is not Z, and the
+session-ON line is absent, do this once and not again:
+
+  sleep 15
+  cat /tmp/wd24-xfbdev/x.log
+  cat /proc/<PID>/stat
+
+If it is ready, continue to the same SIGTERM. A ready child is the
+only one that can still be a headless pass. If it is still not ready,
+or the log has "Fatal server error", also go to SIGTERM now. Do not
+loop. A fatal line is a fail. Record it, reap, then the module
+cleanup below, and stop.
+
+SIGTERM uses the decimal PID. echo TERM=$? afterwards. 0 means the
+signal was sent. It does not mean the task exited.
+
+  kill -TERM <PID>
+  echo TERM=$?
+  sleep 10
+  cat /proc/<PID>/stat
+
+If cat says there is no such file, or the state letter is Z, the task
+has exited. Reap it. `wait` returns immediately in those two cases.
+
+  wait <PID>
+  echo WAIT=$?
+
+Record WAIT as printed. A clean SIGTERM shutdown can be 0. 143 is
+128+15. Do not require one of those for the reap itself. Then, and
+only then:
+
+  rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
+
+That removes this display's lock and this display's socket. It leaves
+/tmp/.X11-unix and every other socket.
+
+If the state letter is anything else, the task has not exited. Do not
+wait. Send SIGKILL to the same digits, then look again.
+
+  kill -9 <PID>
+  echo KILL9=$?
+  sleep 5
+  cat /proc/<PID>/stat
+
+KILL9=0 still does not mean the task exited. SIGKILL does not run
+KD_TEXT. It does not interrupt mutex_lock, console_lock, or a fault
+that has not returned. If the file is now gone or the state is Z, run
+the same `wait` and the same `rm -f` of those two paths. If the state
+is still a live letter, stop. Do not wait. Do not delete the lock, the
+socket, or /tmp/wd24-xfbdev. Do not send another signal.
+
+After a reap, one s6d read. If it says hw busy, do not loop. Wait for
+the trial printk. The 180 s started at insmod.
+
+  cat /proc/wd24adv/s6d
+
+Then:
+
+  cat /proc/wd24adv/live
+  cat /proc/wd24adv/s6d
+  cat /proc/fb
+  cat /sys/class/vtconsole/vtcon0/name
+  cat /sys/class/vtconsole/vtcon0/bind
+  rmmod wd24adv
+  echo RM=$?
+  rm -rf /tmp/wd24-xfbdev /tmp/xfb-prefix
+  rm -f /tmp/busybox-wd24
+
+If expiry is not 0, still one rmmod. Remove the lock and the X1 socket
+only if `wait` already reaped the child. Remove the payload tree only
+in that same case. Then stop. Do not call that a pass. Leave
+/tmp/wd24adv-pr14.ko and /tmp/wd24adv.ko in place. Leave
+/tmp/.X11-unix in place.

@@ -1,0 +1,22 @@
+Startup flashes. Offline reading of the mode-set order. No new
+register. Nothing here was watched on the panel.
+
+`wd24_plan_load` follows `wd90c24fb` load (`main.c` 1444-1448):
+entry check, panel read, save extended registers, save DAC, save
+standard registers, save planes, relock. The plane save uses the
+vgastate blank and plane-select around the reads, then puts those
+registers back. That is a short blank at insmod, before any mode.
+
+`mode_steps` blanks first (`wd24_screen_on(false)`, SR01 bit 5, the
+same bit `hw.c` 354 uses), then writes the extended block and the
+standard VGA set. Packed 8 bpp (640x480 and 640x400) then programs
+PR0A to 0, unblanks, and only then writes SR06 back to the BIOS value
+(`hw.c` 640, which `wd90c24fb` does as part of unblank). The panel can
+paint one frame with the mode-set SR06 before that last write. Mode
+13h relocks and then unblanks, so that gap is not in the 320x200 path.
+
+`settle_blank=1` swaps only those two packed-8 writes: BIOS SR06,
+then unblank. Both already read back through `wd24_write`. Restore is
+still `wd24_restore_all`. The default is 0, which keeps the order the
+current module uses. Do not set it on a batch whose pass lines were
+taken with the default.

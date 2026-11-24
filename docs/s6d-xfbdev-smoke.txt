@@ -1,0 +1,143 @@
+Offline smoke of the staged Xfbdev. Not a 755C run. Not a draw-path run.
+Binary sha256 6450171476a8e6aa91883744947423db123c74a042d697f9263b686dcb2f9f13
+Tarball sha256 af429004d7d279f84d6ebdf2b62f589b81471dd791f6d0949d3d6c67a106c224
+Both hashes matched before and after these runs. The binary was not rebuilt.
+
+Host uname -m: x86_64. That CPU is not a 486.
+qemu-i386 version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18).
+
+The -help flag is handled in ProcessCommandLine and calls exit(0) after
+printing usage. This binary has no -version flag. -version is an
+unrecognized option and FatalError. stdout was empty in every run.
+Usage is stderr.
+
+Host IA32 execution of the same static-pie file, not a 486:
+  command: Xfbdev -help
+  RC 0
+  stderr identical to the qemu -cpu 486 -help stderr below.
+
+qemu-i386-static -cpu max of a static-pie stub whose main is the bytes
+0f 45 c0 (cmovne %eax,%eax) then return 42:
+  RC 42
+Host IA32 execution of that same stub:
+  RC 42
+qemu-i386-static -cpu 486 of a static-pie stub that only returns 42:
+  RC 42
+qemu-i386-static -cpu 486 of the cmov stub:
+  qemu: uncaught target signal 4 (Illegal instruction) - core dumped
+  shell RC 132
+
+So -cpu 486 on this qemu rejects cmov and still runs an i486 static-pie
+that does not use cmov. The Xfbdev -help result under that CPU is:
+
+  command: qemu-i386-static -cpu 486 Xfbdev -help
+  RC 0
+  stdout empty
+  stderr:
+
+use: X [:<display>] [option]
+-a #                   default pointer acceleration (factor)
+-ac                    disable access control restrictions
+-audit int             set audit trail level
+-auth file             select authorization file
+-br                    create root window with black background
++bs                    enable any backing store support
+-bs                    disable any backing store support
+-c                     turns off key-click
+c #                    key-click volume (0-100)
+-cc int                default color visual class
+-nocursor              disable the cursor
+-core                  generate core dump on fatal error
+-dpi int               screen resolution in dots per inch
+-dpms                  disables VESA DPMS monitor control
+-deferglyphs [none|all|16] defer loading of [no|all|16-bit] glyphs
+-f #                   bell base (0-100)
+-fc string             cursor font
+-fn string             default font name
+-fp string             default font path
+-help                  prints message with these options
+-I                     ignore all remaining arguments
+-ld int                limit data space to N Kb
+-lf int                limit number of open files to N
+-ls int                limit stack space to N Kb
+-nolock                disable the locking mechanism
+-nolisten string       don't listen on protocol
+-noreset               don't reset after last client exists
+-background [none]     create root window with no background
+-reset                 reset after last client exists
+-p #                   screen-saver pattern duration (minutes)
+-pn                    accept failure to listen on all ports
+-nopn                  reject failure to listen on all ports
+-r                     turns off auto-repeat
+r                      turns on auto-repeat 
+-render [default|mono|gray|color] set render color alloc policy
+-retro                 start with classic stipple and cursor
+-s #                   screen-saver timeout (minutes)
+-seat string           seat to run on
+-t #                   default pointer threshold (pixels/t)
+-terminate             terminate at server reset
+-to #                  connection time out
+-tst                   disable testing extensions
+ttyxx                  server started from init on /dev/ttyxx
+v                      video blanking for screen-saver
+-v                     screen-saver without video blanking
+-wm                    WhenMapped default backing-store
+-wr                    create root window with white background
+-maxbigreqsize         set maximal bigrequest size 
++xinerama              Enable XINERAMA extension
+-xinerama              Disable XINERAMA extension
+-dumbSched             Disable smart scheduling, enable old behavior
+-schedInterval int     Set scheduler interval in msec
+-sigstop               Enable SIGSTOP based startup
++extension name        Enable extension
+-extension name        Disable extension
+-query host-name       contact named host for XDMCP
+-broadcast             broadcast for XDMCP
+-multicast [addr [hops]] IPv6 multicast for XDMCP
+-indirect host-name    contact named host for indirect XDMCP
+-port port-num         UDP port number to send messages to
+-from local-address    specify the local address to connect from
+-once                  Terminate server after one session
+-class display-class   specify display class to send in manage
+-cookie xdm-auth-bits  specify the magic cookie for XDMCP
+-displayID display-id  manufacturer display ID for request
+[+-]accessx [ timeout [ timeout_mask [ feedback [ options_mask] ] ] ]
+                       enable/disable accessx key sequences
+-ardelay               set XKB autorepeat delay
+-arinterval            set XKB autorepeat interval
+
+TinyX Device Dependent Usage:
+-screen WIDTH[/WIDTHMM]xHEIGHT[/HEIGHTMM][@ROTATION][X][Y][xDEPTH/BPP[xFREQ]]  Specify screen characteristics
+-rgba rgb/bgr/vrgb/vbgr/none   Specify subpixel ordering for LCD panels
+-mouse driver [,n,,options]    Specify the pointer driver and its options (n is the number of buttons)
+-keybd driver [,,options]      Specify the keyboard driver and its options
+-zaphod          Disable cursor screen switching
+-2button         Emulate 3 button mouse
+-3button         Disable 3 button mouse emulation
+-rawcoord        Don't transform pointer coordinates on rotation
+-dumb            Disable hardware acceleration
+-softCursor      Force software cursor
+-videoTest       Start the server, pause momentarily and exit
+-origin X,Y      Locates the next screen in the the virtual screen (Xinerama)
+-switchCmd       Command to execute on vt switch
+-zap             Terminate server on Ctrl+Alt+Backspace
+vtxx             Use virtual terminal xx instead of the next available
+
+Xfbdev Device Usage:
+-fb path         Framebuffer device to use. Defaults to /dev/fb0
+
+  command: qemu-i386-static -cpu 486 Xfbdev -version
+  RC 1
+  stdout empty
+  stderr is the same usage, preceded by "Unrecognized option: -version"
+  and followed by:
+(EE) 
+Fatal server error:
+(EE) Unrecognized option: -version
+(EE) 
+
+This path is main, early dix init, and option parsing. It does not open
+/dev/fb0, does not issue KDSETMODE, and does not draw. The three pause
+encodings in musl pthread_rwlock are not on this path. A later live
+start can still fail after the framebuffer id line, in mmap, the VT,
+the font open, or KD_GRAPHICS.

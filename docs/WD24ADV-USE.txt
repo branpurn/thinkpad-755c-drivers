@@ -1,0 +1,182 @@
+wd24adv on the 755C. Install, use, recover. This is the development
+driver. `modprobe wd24adv` with no arguments does not touch the panel.
+A working console, startx, and Doom without the trial timer are the
+product in docs/WD24ADV-PRODUCT.txt. They are not this load.
+
+Floppy kernel only (`6.18.57-tc755x`). Do not load the module into the
+CF file `vmlinuz.x`. It does not export `vmf_insert_pfn`,
+`unmap_mapping_range`, or `zap_vma_ptes`. Leave `wd90c24fb` unloaded.
+`/proc/fb` empty before insmod. One script at a time.
+
+## Install
+
+Build this commit against the floppy tree. Vermagic
+`6.18.57-tc755x mod_unload 486`. After it links, run
+`sh scripts/check-ko-exports.sh wd24adv.ko`. It must exit 0.
+The stack flag in `modules/wd24adv/Kbuild` is
+`-Werror=frame-larger-than=1280`. The bare form is not a gcc option.
+`__kmalloc_large_noprof` is not an allowed import. Put the file where
+`docs/s6d-desktop.env` names it and replace `WD24X_CANDIDATE_SHA`.
+Leave `docs/s6d-candidate.env` on `fdf30c77`. Phase 2 and 3 still use
+that file.
+
+Userspace, static i486 musl, from the repo root:
+
+```
+sh tools/wd24-doom/build.sh
+```
+
+Copy `/tmp/wd24x-doom.s` to `/tmp/wd24x-doom` and put its sha256 in
+`docs/s6d-doom.env`. The xcmp client is built from
+`modules/wd24adv/tests/wd24x-xcmp.c` with `-static -march=i486` and
+pinned in `docs/s6d-desktop.env`. Copy `s6d-desktop.env`,
+`s6d-desktop-run.sh`, `s6d-doom.env`, and `s6d-doom-run.sh` into the
+same directory. Both scripts refuse to insmod while a sha256 is
+`UNPINNED`.
+
+Shareware `doom1.wad` v1.9, 4196020 bytes, sha256
+`1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771`.
+Not in this tree. Delete `/tmp/default.cfg` and `/tmp/doom.cfg` if
+they exist.
+
+## Use
+
+`modprobe wd24adv` with no arguments loads the dry run. It does not
+program the panel and it does not register a console. The live steps
+are the scripts, one at a time, after the previous one has printed
+its done line.
+
+```
+sh /tmp/s6d-desktop-run.sh
+sh /tmp/s6d-doom-run.sh timedemo13h
+```
+
+The desktop script is the startx stand-in: Xfbdev on `/dev/fb0`, the
+palette checked against `/proc/wd24adv/cmap`, then the trial puts
+text back. Do not run a second X, and do not startx by hand on top of
+that session.
+
+After those done lines, and only then:
+
+```
+sh /tmp/s6d-fbcon-run.sh
+```
+
+That is the console: `s6d_bind=1`, one line on tty0, no X. It uses
+the desktop module pin. The in-flight desktop and Doom load is still
+that module. Do not rebuild it out from under the run.
+
+The fill, copy, and scroll gates belong to the next build, the one
+that contains `accel`. Pin it in `docs/s6d-accel.env`. Leave
+`docs/s6d-candidate.env` alone. Then:
+
+```
+sh /tmp/s6d-accel-run.sh
+sh /tmp/s6d-scroll-run.sh
+sh /tmp/s6d-cursor-run.sh
+```
+
+The accel script does not bind fbcon. Pass is
+`accel 1 gate 1 match 1024`, then the text restore. The scroll script
+is that same gate with fbcon bound, then `WD24X-SCROLL line` on tty0.
+`ypan` is not used.
+
+## Parameters
+
+| parameter | default | |
+|---|---|---|
+| dryrun | 1 | no ports. A live load needs `dryrun=0 live=1` |
+| live | 0 | with dryrun=0, executes the plan |
+| trial | 15 | seconds, then text is restored. Scripts pass 180 or 600 |
+| s6d | 0 | 640x480-8 framebuffer |
+| s6d_bind | 1 | 0 makes fbcon's open fail, so the VT stays put |
+| s6d_cmap | 0 | RAMDAC palette. The desktop script turns it on |
+| accel | 0 | CPU fills and no copy. 1 uses the S4 rectangle program |
+| accel_gate | 0 | with accel=1, the 64x16 readback at (16,112) |
+| cursor_gate | 0 | one canned cursor show, then the bytes and block 2 back |
+| present_mode | empty | Doom sets `13h`: proven 320x200-8, one 64000-byte copy |
+| settle_blank | 0 | packed-8 only: BIOS SR06, then unblank. `docs/s6d-startup.txt` |
+
+`accel=1` without a passing gate is not the load to keep. A timeout
+after the blitter has started does not fall back to CPU stores.
+
+`timedemo13h` is the Doom run. It loads `mode=320x200-8` and
+`present_mode=13h`. The present is one 64000-byte copy, no expansion
+and no window program. Pass lines include `WD24X-DOOM blit direct
+64000`, `WD24X-DOOM present switches 0`, `WD24X-DOOM kd graphics`,
+Doom's `timed N gametics in N realtics` line, and `WD24X-DOOM-RUN
+restore mismatches 0`. `scan mode` in `/proc/wd24adv/live` is the
+live CR0C/CR0D read, and `cr0c=00 cr0d=00` is the start at byte 0.
+Faults stay 0 and the thrash latch stays clear. A completed timedemo
+exits 255 because the engine reports the timing and then exits. That
+255 with the gametics line is success. There is no `default.cfg`, so
+the engine keeps `screenblocks` 10 and `detaillevel` 0. The command
+passes `-nosound -nogui`. Before that run,
+`sh /tmp/s6d-scanpat-run.sh` leaves a 320x200 row-band picture up for
+10 seconds. The red block belongs at the top.
+
+On module `2436a39a` with `wd24x-doom` `f95ae448`, 60 frames of that
+path took 1735 ms to render, 1005 ms to present, and 16 ms of
+palette: 28.92 ms, 16.75 ms, and 0.27 ms per frame, 45.93 ms together,
+about 21.8 frames/s. The letterbox path on `ead705ed` with
+`wd24x-doom` `f4470178` was 78.85 ms render, 427.18 ms present, 0.28 ms
+palette, about 1.97 frames/s. The full `timedemo13h` on the same
+`2436a39a` / `f95ae448` pair printed `timed 5026 gametics in 14978
+realtics (11.744559 fps)`. Kernel present on that run was 11.05 ms
+per frame. The render is the remaining cost.
+
+`timedemo13hmap` is the same mode with `WD24X_DOOM_FB=aperture`.
+Doom maps `0xA0000` for 65536 bytes and draws the 64000-byte frame
+there. The map writes no VGA register and does not call SETWIN. The
+last 1536 bytes are inside the window and are not the frame. Pass
+lines are `WD24X-DOOM fb mmap 320 200 aperture`, `WD24X-DOOM blit
+aperture 64000`, `faults 0 switches 0`, `mode 13h`, and the same
+gametics line and `restore mismatches 0`. This is a separate
+measurement from the ioctl copy. It is not `WD24X_DOOM_FAST=all`.
+
+`timedemo13hcopy` is `WD24X_DOOM_FB=aperturecopy`. The renderer stays
+in the cached malloc. Each frame is one 64000-byte dword copy into
+the mapped window, and there is no present ioctl. Pass lines are
+`WD24X-DOOM fb mmap 320 200 aperturecopy` and `WD24X-DOOM blit
+aperturecopy 64000`, plus `faults 0 switches 0` and the same restore
+line.
+
+`demo1` is the older letterbox gate (`present switches 5`). Run
+`demo2` and `demo3` only after a letterbox `WD24X-DOOM-RUN done`.
+
+`sh /tmp/s6d-doom-run.sh eyes` is the keyboard run. Only while someone
+is watching. It does not call `KDSETMODE`.
+
+The Win98 comparison is the same shareware `doom1.wad` v1.9, the same
+settings, and sound off:
+
+```
+doom -timedemo demo1
+```
+
+On Win98, `default.cfg` must set `screenblocks` 10 and `detaillevel`
+0, and sound must be off. Our gate passes `-nosound` and refuses a
+config file, which is those compiled defaults. `fps_x100` is
+`gametics * 3500 / realtics`. `600000` in the zone line is a hex
+print of 6 MiB. `couldn't open demo1.lmp` is the external-file probe.
+The demo in the wad still runs.
+
+Every port write, its read-back mask, and the restore that puts the
+load-time value back are in `docs/WD24ADV-REGS.txt`.
+
+Acceptance for a release candidate is `docs/WD24ADV-ACCEPT.txt`.
+
+## Recover
+
+Read the script's `stop` line. Do not insmod again while `wd24adv` is
+listed in `/proc/modules`. If the shell answers and the trial has not
+expired, wait. The timer restores text. `rmmod` after a clean script
+prints `RM=0`. Do not `kill -9` a mapped client. The shell being dead
+is the power-cycle.
+
+`WD24X-ACCEL-RUN stop timeout` or `WD24X-SCROLL-RUN stop timeout`
+means the blitter was left busy. Those scripts do not rmmod. Do not
+rmmod, and do not insmod again. Power-cycle. The same rule is the S4
+one-shot: after that timeout, video memory stays untouched.
+`WD24X-CURSOR-RUN stop restore` is the same: the cursor bytes did not
+come back, so the script does not rmmod.

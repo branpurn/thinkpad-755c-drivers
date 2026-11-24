@@ -10,7 +10,8 @@
 #include "wd24adv_s6b.h"
 
 #define LOG(b, ...) do { if ((b)->loglen < WD24S6B_LOG) (b)->loglen += \
-	snprintf((b)->log + (b)->loglen, WD24S6B_LOG - (b)->loglen, __VA_ARGS__); } while (0)
+	snprintf((b)->log + (b)->loglen, WD24S6B_LOG - (b)->loglen, __VA_ARGS__); \
+} while (0)
 
 #define E_INVAL	(-22)
 #define E_IO	(-5)
@@ -39,7 +40,8 @@ static int wrv(struct wd24s6b *b, enum wd24_rf rf, u8 idx, u8 v, u8 mask)
 }
 
 /* SR06 lock step, as S6: unlock to (BIOS & EFh) | 48h, relock to BIOS;
- * verified by bits 3:0 and the 3C4 index width */
+  * verified by bits 3:0 and the 3C4 index width
+  */
 static int lockstep(struct wd24s6b *b, bool on)
 {
 	const struct wd24s6_io *io = b->io;
@@ -165,10 +167,12 @@ int wd24s6b_begin(struct wd24s6b *b, const struct wd24s6_io *io)
 	io->open(io->priv, true);
 	b->w0 = 0;
 	b->w1 = WD24S6B_HPG;
-	if ((err = setbanks(b, 0, 0)))
+	err = setbanks(b, 0, 0);
+	if (err)
 		return die(b, "PR0A/PR0B readback", err);
 	b->pr1set = true;
-	if ((err = wrv(b, WD24_GR, WD24_GR_PR1, b->pr1 | WD24_PR1_PR0B, 0xff)))
+	err = wrv(b, WD24_GR, WD24_GR_PR1, b->pr1 | WD24_PR1_PR0B, 0xff);
+	if (err)
 		return die(b, "PR1 b3 readback", err);
 	b->state = WD24S6B_ON;
 	LOG(b, "ON: PR1 %02x, A0000 -> %05x, A8000 -> %05x, SR06 locked\n",
@@ -192,7 +196,8 @@ int wd24s6b_setwin(struct wd24s6b *b, u32 w0, u32 w1)
 		return E_NODEV;
 	if (!win_ok(w0, w1))
 		return E_INVAL;
-	if ((err = setbanks(b, (u8)(w1 - WD24S6B_HPG), (u8)w0)))
+	err = setbanks(b, (u8)(w1 - WD24S6B_HPG), (u8)w0);
+	if (err)
 		return die(b, "SETWIN PR0A/PR0B readback", err);
 	b->w0 = (u8)w0;
 	b->w1 = (u8)w1;
@@ -215,11 +220,13 @@ int wd24s6b_copy(struct wd24s6b *b, u32 dst, u32 src, u32 len)
 	if (dst == src)
 		return 0;
 	/* 1: PR1 b3 off: b7 runs only in the S6c-proven PR1 state */
-	if ((err = wrv(b, WD24_GR, WD24_GR_PR1, b->pr1, 0xff)))
+	err = wrv(b, WD24_GR, WD24_GR_PR1, b->pr1, 0xff);
+	if (err)
 		return die(b, "COPY PR1 b3 off readback", err);
 	b->pr1set = false;
 	/* 2-4: unlock, PR31 b7 on, relock */
-	if ((err = lockstep(b, true)))
+	err = lockstep(b, true);
+	if (err)
 		return die(b, "COPY SR06 unlock", err);
 	v = io->rd(io->priv, WD24_SR, WD24_SR_PR31);
 	if (!b->pr31_known) {
@@ -232,9 +239,11 @@ int wd24s6b_copy(struct wd24s6b *b, u32 dst, u32 src, u32 len)
 		return die(b, "PR31 changed between COPYs", 0);
 	}
 	b->b7 = true;
-	if ((err = wrv(b, WD24_SR, WD24_SR_PR31, b->pr31 | WD24_PR31_RWSPLIT, 0xff)))
+	err = wrv(b, WD24_SR, WD24_SR_PR31, b->pr31 | WD24_PR31_RWSPLIT, 0xff);
+	if (err)
 		return die(b, "COPY PR31 b7 readback", err);
-	if ((err = lockstep(b, false)))
+	err = lockstep(b, false);
+	if (err)
 		return die(b, "COPY SR06 relock with b7", err);
 	/* 5: copy, SR06 LOCKED; reads PR0A (src bank), writes PR0B (dst) */
 	while (done < len) {
@@ -242,28 +251,34 @@ int wd24s6b_copy(struct wd24s6b *b, u32 dst, u32 src, u32 len)
 		u32 s = back ? src + len - done - n : src + done;
 		u32 d = back ? dst + len - done - n : dst + done;
 
-		if ((err = setbanks(b, (u8)(s >> 12), (u8)(d >> 12))))
+		err = setbanks(b, (u8)(s >> 12), (u8)(d >> 12));
+		if (err)
 			return die(b, "COPY bank readback", err);
 		io->mr(io->priv, s & 0xfff, b->buf, n);
 		io->mw(io->priv, d & 0xfff, b->buf, n);
 		done += n;
 	}
 	/* 6-8: unlock, PR31 base, relock */
-	if ((err = lockstep(b, true)))
+	err = lockstep(b, true);
+	if (err)
 		return die(b, "COPY SR06 re-unlock", err);
 	v = io->rd(io->priv, WD24_SR, WD24_SR_PR31);
 	if (v != (b->pr31 | WD24_PR31_RWSPLIT))
 		return die(b, "PR31 b7 not held through the copy (data unverified)", 0);
-	if ((err = wrv(b, WD24_SR, WD24_SR_PR31, b->pr31, 0xff)))
+	err = wrv(b, WD24_SR, WD24_SR_PR31, b->pr31, 0xff);
+	if (err)
 		return die(b, "COPY PR31 restore readback", err);
 	b->b7 = false;
-	if ((err = lockstep(b, false)))
+	err = lockstep(b, false);
+	if (err)
 		return die(b, "COPY SR06 relock", err);
 	/* 9: back to the split windows */
 	b->pr1set = true;
-	if ((err = wrv(b, WD24_GR, WD24_GR_PR1, b->pr1 | WD24_PR1_PR0B, 0xff)))
+	err = wrv(b, WD24_GR, WD24_GR_PR1, b->pr1 | WD24_PR1_PR0B, 0xff);
+	if (err)
 		return die(b, "COPY PR1 b3 on readback", err);
-	if ((err = setbanks(b, (u8)(b->w1 - WD24S6B_HPG), b->w0)))
+	err = setbanks(b, (u8)(b->w1 - WD24S6B_HPG), b->w0);
+	if (err)
 		return die(b, "COPY window restore readback", err);
 	if (b->ncopy++ < 8)
 		LOG(b, "COPY %05x -> %05x len %x %s ok\n", src, dst, len, back ? "backward" : "forward");

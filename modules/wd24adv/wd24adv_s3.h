@@ -40,9 +40,10 @@
  *    write of any kind (no abort, no restore, no PR0A, no 23C0h) and no
  *    VRAM access; latched (dead); the trial expiry restores the text state.
  * Guard: 23C0h only the 25 selects and the final 1002h; 23C2h only block 1
- * (never block 2, never 23C4h), only the current op's listed word for that
- * register, or the snapshot word of a register S3 writes; CNTRL1 only the
- * current op's word, once, right after the idle check.
+ * (block 2 data only during the canned cursor one-shot, never 23C4h),
+ * only the current op's listed word for that register, or the snapshot
+ * word of a register S3 writes; CNTRL1 only the current op's word, once,
+ * right after the idle check.
  */
 #ifndef WD24ADV_S3_H
 #define WD24ADV_S3_H
@@ -68,7 +69,8 @@
 /* HOSTCOL probe op (pat 4): if the engine is still busy after the 2 px/word
  * count, the 1 px/word hypothesis is fed (pre-planned words, value px|px<<8,
  * at most w*h words in all, each after an ACT read) instead of holding:
- * idle then = HCOL_ALT (stopped, restored, not dead). */
+  * idle then = HCOL_ALT (stopped, restored, not dead).
+  */
 #define WD24S5_PAT_PROBE 4
 
 struct wd24s3_par {
@@ -126,7 +128,8 @@ extern const struct wd24s3_prog wd24s3_prog5, wd24s3_prog5h;
 /* host data: words owed after the start (DS 21.14 mono: 4 px in bits 3:0,
  * msb = leftmost, as wd90c24fb cexp var 0, OBS-FB; DS 21.12 colour: 4 px
  * per two words, low word first, low byte = left pixel: UNPROVEN); no
- * word straddles rows; pad pixels 0 */
+  * word straddles rows; pad pixels 0
+  */
 u32 wd24s5_words(const struct wd24s3_op *o);
 u32 wd24s5_wpr(const struct wd24s3_op *o);
 u16 wd24s5_word(const struct wd24s3_op *o, u32 n);
@@ -186,6 +189,10 @@ struct wd24s3 {
 	u32 ndiff, diff_off;
 	u8 diff_got, diff_want;
 	bool dirty[WD24S1_N_BLT];
+	/* Canned cursor one-shot. Off unless that run set cursor. */
+	bool cursor, chide, crestore;
+	unsigned int cstep;
+	bool cdirty[WD24S1_N_CUR];
 	u32 restore_fail;
 	u16 restore_rb;
 	u16 alias;
@@ -202,14 +209,22 @@ void wd24s3_init(struct wd24s3 *s, const struct wd24s1_io *io,
 /* before wd24s3_run only: select the stage program (S3 is the default) */
 void wd24s3_set_prog(struct wd24s3 *s, const struct wd24s3_prog *p);
 int wd24s3_run(struct wd24s3 *s);	/* 0 = OK */
+/*
+ * One fill or copy built by wd24s4_make_*. 0 = done, registers put back.
+ * 1 = not started: the caller may use CPU stores. 2 = the operation was
+ * started and did not finish: the caller must not touch video memory.
+ */
+int wd24s4_kick(struct wd24s3 *s, const struct wd24s3_op *op);
 /* after TIMEOUT: reads only (23C0h must still be 1001h, then <= SPINS
  * 23C2h reads); 1 = CNTRL1 ACT seen clear (sets idle_seen), 0 = busy or
- * unknown.  Not dead or already idle: 1, no access. */
+  * unknown.  Not dead or already idle: 1, no access.
+  */
 int wd24s3_idle_poll(struct wd24s3 *s);
 const char *wd24s3_res_name(enum wd24s3_res r);
 void wd24s3_apply(const struct wd24s3_op *o, u8 *win);	/* model, bank 6 */
 /* model for a window starting at base: ROP (fill: fg op dst), copy in
- * the engine's order (BACK: bottom row first, right to left) */
+  * the engine's order (BACK: bottom row first, right to left)
+  */
 void wd24s3_apply_at(const struct wd24s3_op *o, u8 *win, u32 base);
 u8 wd24s3_rop(u16 rop, u8 src, u8 dst);
 u32 wd24s3_sum(const u8 *p, u32 n, u32 h);		/* FNV-1a */

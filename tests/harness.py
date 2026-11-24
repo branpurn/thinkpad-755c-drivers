@@ -143,7 +143,7 @@ def main():
         g.send("tc32 floppy=0,thinkpad tce=sda1 snd_ad1848.port=0x534 snd_ad1848.irq=9 snd_ad1848.dma1=3 snd_ad1848.thinkpad=0\r", slow=True)
         out, _ = g.expect(r"tc32: ready\.", a.boot_timeout)
         check("module-capable kernel boots to rcS", True)
-        g.expect(r"root@box:[^\n#]*# ", 60)
+        g.expect(r"root@[^:\n]+:[^\n#]*# ", 60)
         g.run("stty -echo 2>/dev/null; export PS1='# '", 20)
         g.expect(r"# ", 10)
         g.run("dmesg -n 1")   # keep printk off the serial shell; read it with dmesg

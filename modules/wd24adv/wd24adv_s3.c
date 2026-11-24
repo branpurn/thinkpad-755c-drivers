@@ -5,6 +5,7 @@
  * guard.  Shared by the kernel module (s3=1) and tests/test_s3.c.
  */
 #include "wd24adv_s3.h"
+#include "wd24adv_cur.h"
 #ifdef __KERNEL__
 #include <linux/io.h>
 #include <linux/vmalloc.h>
@@ -20,16 +21,20 @@
 
 #define LO(a)	((a) & 0xfff)
 #define HI(a)	((a) >> 12)
-#define PARS(s, d, w, h)	{ 2, LO(s) }, { 3, HI(s) }, { 4, LO(d) }, { 5, HI(d) }, \
-	{ 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, 0x300 }, { 1, 0 }
 
 const struct wd24s3_op wd24s3_ops[WD24S3_NOPS] = {
 	{ "FILL 8x8 @60000h c=3Ch", true, 0x60000, 0x60000, 8, 8, 0x3c, WD24S3_FILL, 11,
-	  { PARS(0x60000, 0x60000, 8, 8), { 0xa, 0x3c } }, 0x300, false, 0, false, 0, 0 },
+	  { { 2, LO(0x60000) }, { 3, HI(0x60000) }, { 4, LO(0x60000) }, { 5, HI(0x60000) },
+	    { 8, WD24S3_PITCH }, { 6, 8 }, { 7, 8 }, { 0xe, 0xff }, { 9, 0x300 }, { 1, 0 },
+	    { 0xa, 0x3c } }, 0x300, false, 0, false, 0, 0 },
 	{ "FILL 32x32 @60200h c=C3h", true, 0x60200, 0x60200, 32, 32, 0xc3, WD24S3_FILL, 11,
-	  { PARS(0x60200, 0x60200, 32, 32), { 0xa, 0xc3 } }, 0x300, false, 0, false, 0, 0 },
+	  { { 2, LO(0x60200) }, { 3, HI(0x60200) }, { 4, LO(0x60200) }, { 5, HI(0x60200) },
+	    { 8, WD24S3_PITCH }, { 6, 32 }, { 7, 32 }, { 0xe, 0xff }, { 9, 0x300 }, { 1, 0 },
+	    { 0xa, 0xc3 } }, 0x300, false, 0, false, 0, 0 },
 	{ "COPY 32x32 60200h->60100h fwd", false, 0x60200, 0x60100, 32, 32, 0, WD24S3_COPY, 10,
-	  { PARS(0x60200, 0x60100, 32, 32) }, 0x300, false, 0, false, 0, 0 },
+	  { { 2, LO(0x60200) }, { 3, HI(0x60200) }, { 4, LO(0x60100) }, { 5, HI(0x60100) },
+	    { 8, WD24S3_PITCH }, { 6, 32 }, { 7, 32 }, { 0xe, 0xff }, { 9, 0x300 }, { 1, 0 } },
+	  0x300, false, 0, false, 0, 0 },
 };
 
 /*
@@ -43,15 +48,20 @@ const struct wd24s3_op wd24s3_ops[WD24S3_NOPS] = {
  * programmed at the bottom-right pixel (wd_blt_copy_lin).
  */
 #define A(x, y)	((u32)(y) * WD24S3_PITCH + (x))
-#define PARR(s, d, w, h, r)	{ 2, LO(s) }, { 3, HI(s) }, { 4, LO(d) }, { 5, HI(d) }, \
-	{ 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, r }, { 1, 0 }
 #define FILL4(nm, x, rop, c) { nm, true, A(x, 112), A(x, 112), 64, 16, c, WD24S3_FILL, 11, \
-	{ PARR(A(x, 112), A(x, 112), 64, 16, rop), { 0xa, c } }, rop, false, 0, false, 0, 0 }
+	{ { 2, LO(A(x, 112)) }, { 3, HI(A(x, 112)) }, { 4, LO(A(x, 112)) }, { 5, HI(A(x, 112)) }, \
+	  { 8, WD24S3_PITCH }, { 6, 64 }, { 7, 16 }, { 0xe, 0xff }, { 9, rop }, { 1, 0 }, \
+	  { 0xa, c } }, rop, false, 0, false, 0, 0 }
 #define BR(a, w, h)	((a) + ((h) - 1) * WD24S3_PITCH + (w) - 1)
 #define COPYF(nm, s, d, w, h) { nm, false, s, d, w, h, 0, WD24S3_COPY, 10, \
-	{ PARR(s, d, w, h, 0x300) }, 0x300, false, 0, false, 0, 0 }
+	{ { 2, LO(s) }, { 3, HI(s) }, { 4, LO(d) }, { 5, HI(d) }, \
+	  { 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, 0x300 }, { 1, 0 } }, \
+	0x300, false, 0, false, 0, 0 }
 #define COPYB(nm, s, d, w, h) { nm, false, s, d, w, h, 0, WD24S3_BACKC, 10, \
-	{ PARR(BR(s, w, h), BR(d, w, h), w, h, 0x300) }, 0x300, true, 0, false, 0, 0 }
+	{ { 2, LO(BR(s, w, h)) }, { 3, HI(BR(s, w, h)) }, \
+	  { 4, LO(BR(d, w, h)) }, { 5, HI(BR(d, w, h)) }, \
+	  { 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, 0x300 }, { 1, 0 } }, \
+	0x300, true, 0, false, 0, 0 }
 
 const struct wd24s3_op wd24s4_ops[WD24S4_NOPS] = {
 	FILL4("FILL 64x16 (16,112) SRC c=3Ch", 16, 0x300, 0x3c),
@@ -78,11 +88,10 @@ const struct wd24s3_op wd24s4_ops[WD24S4_NOPS] = {
  * Before every 23C4h word, 23C2h (select 1001h) must read ACT set; the
  * guard allows a 23C4h write only for the running op's next owed word.
  */
-#define MPARS(d, w, h, t, f, b)	{ 2, 0 }, { 3, 0 }, { 4, LO(d) }, { 5, HI(d) }, \
-	{ 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, 0x300 }, \
-	{ 1, (t) ? 8 : 0 }, { 0xa, f }, { 0xb, b }
 #define MONO(nm, x, y, w, h, t, f, b, pt) { nm, false, A(x, y), A(x, y), w, h, f, \
-	WD24S3_MONO, 12, { MPARS(A(x, y), w, h, t, f, b) }, 0x300, false, 1, t, b, pt }
+	WD24S3_MONO, 12, { { 2, 0 }, { 3, 0 }, { 4, LO(A(x, y)) }, { 5, HI(A(x, y)) }, \
+	{ 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, 0x300 }, \
+	{ 1, (t) ? 8 : 0 }, { 0xa, f }, { 0xb, b } }, 0x300, false, 1, t, b, pt }
 #define HCOL(nm, x, y, w, h, pt) { nm, false, A(x, y), A(x, y), w, h, 0, \
 	WD24S3_HCOL, 10, { { 2, 0 }, { 3, 0 }, { 4, LO(A(x, y)) }, { 5, HI(A(x, y)) }, \
 	{ 8, WD24S3_PITCH }, { 6, w }, { 7, h }, { 0xe, 0xff }, { 9, 0x300 }, { 1, 0 } }, \
@@ -213,7 +222,8 @@ const struct wd24s3_prog wd24s3_prog5h = {
 	"S5 HOSTCOL", wd24s5h_ops, WD24S5H_NOPS, 0x10000, 0x10, 400, 80, "s5", true, 2600 };
 
 /* registers S3 may write (snapshot restore allowed): block 1 idx 1-A, E;
- * a host-data program (S5) also B (BG) */
+  * a host-data program (S5) also B (BG)
+  */
 static bool s3_reg(const struct wd24s3_prog *p, unsigned int idx)
 {
 	return (idx >= 1 && idx <= 0xa) || idx == 0xe || (p->host && idx == 0xb);
@@ -227,7 +237,8 @@ u32 wd24s3_sum(const u8 *p, u32 n, u32 h)
 }
 
 /* DS Table 19-3 abcd: result bit = code bit (3 - (2 * src + dst)), the
- * X11 GX numbering (clear 0, and 1, copy 3, xor 6, or 7, invert A, set F) */
+  * X11 GX numbering (clear 0, and 1, copy 3, xor 6, or 7, invert A, set F)
+  */
 u8 wd24s3_rop(u16 rop, u8 src, u8 dst)
 {
 	unsigned int code = (rop >> 8) & 0xf, b;
@@ -321,6 +332,28 @@ int wd24s3_guard_out(const struct wd24s3 *s, u16 port, u16 val)
 	}
 	if (port != WD24S1_P_DATA || !s->armed || s->wdata >= s->prog->max_data)
 		return -EPERM;		/* everything else: never */
+	if (s->cursor) {
+		unsigned int ci = val >> 12;
+
+		/*
+		 * Block comes from the index register. The register number
+		 * is the data word's high nibble, as wd_cur_reg writes it.
+		 */
+		if ((s->cur & 0xf0ff) != (WD24S1_NOINC | 2) || ci >= WD24S1_N_CUR)
+			return -EPERM;
+		if (s->cstep < WD24CUR_NSHOW && !s->chide && !s->crestore) {
+			u16 want = ((u16)wd24cur_show[s->cstep].idx << 12) |
+				   wd24cur_show[s->cstep].val;
+
+			return val == want ? 0 : -EPERM;
+		}
+		if (s->chide)
+			return val == WD24CUR_HIDE ? 0 : -EPERM;
+		if (s->crestore && s->snap_ok &&
+		    val == s->snap[WD24S1_N_BLT + ci])
+			return 0;
+		return -EPERM;
+	}
 	if ((s->cur & 0xf0ff) != (WD24S1_NOINC | 1))
 		return -EPERM;		/* block 1 only: cursor block never */
 	idx = (s->cur >> 8) & 0xf;
@@ -436,6 +469,13 @@ static int out16(struct wd24s3 *s, u16 port, u16 val)
 		return 0;
 	} else {
 		s->wdata++;
+		if (s->cursor && !s->chide && !s->crestore &&
+		    s->cstep < WD24CUR_NSHOW)
+			s->cstep++;
+		else if (s->cursor && s->chide) {
+			s->chide = false;
+			s->crestore = true;
+		}
 	}
 	logacc(s, true, 16, port, val);
 	return 0;
@@ -464,7 +504,8 @@ static void vread(struct wd24s3 *s, u8 *dst)
 }
 
 /* busy wait: 0 idle (CNTRL1 word in *last), -ETIMEDOUT; only the first
- * and the last read are logged, the count is kept */
+  * and the last read are logged, the count is kept
+  */
 static int wait_idle(struct wd24s3 *s, u32 *spins, bool *busy, u16 *last)
 {
 	u32 n;
@@ -553,7 +594,8 @@ static const char *snapshot(struct wd24s3 *s)
 }
 
 /* banks 0-6 except the program's bank: checksums (S3: 0-5); then the
- * program's bank (left selected) into dst */
+  * program's bank (left selected) into dst
+  */
 static int vram_pass(struct wd24s3 *s, u32 *crc, u8 *dst)
 {
 	unsigned int b, k = 0;
@@ -834,6 +876,327 @@ final:
 	return res == WD24S3_OK ? 0 : -EIO;
 }
 
+int wd24s4_kick(struct wd24s3 *s, const struct wd24s3_op *op)
+{
+	struct wd24s3_prog prog;
+	struct wd24s3_op held;
+	unsigned int p;
+	u16 a, b, v = 0;
+	u32 spins = 0;
+
+	if (!s || !op || s->dead || !s->io)
+		return s && s->dead ? 2 : 1;
+	held = *op;
+	memset(&prog, 0, sizeof(prog));
+	prog.ops = &held;
+	prog.nops = 1;
+	prog.max_ix = 800;
+	prog.max_data = 200;
+	prog.stage = "rect";
+	prog.param = "accel";
+	s->prog = &prog;
+	s->op = 0;
+	s->restored = false;
+	s->have_saved = false;
+	s->snap_ok = false;
+	s->armed = false;
+	s->go = false;
+	s->wix = 0;
+	s->wdata = 0;
+	s->wgo = 0;
+	s->whost = 0;
+	s->nlog = 0;
+	s->host_n = 0;
+	a = in16(s, WD24S1_P_INDEX);
+	b = in16(s, WD24S1_P_INDEX);
+	if (a != b) {
+		s->prog = NULL;
+		return 1;
+	}
+	/* WD24S2_S (0x1002) is 23C0h at entry on both S1 runs. A mode
+	 * set does not leave it there, and the rectangle was refused
+	 * before any pixel was compared. A stable other value is
+	 * selected to that idle word first. The guard allows the
+	 * select once have_saved is set.
+	 */
+	s->saved = a;
+	s->have_saved = true;
+	if (a != WD24S2_S) {
+		if (sel_rb(s, WD24S2_S)) {
+			out16(s, WD24S1_P_INDEX, a & IDX_WR);
+			s->have_saved = false;
+			s->prog = NULL;
+			return 1;
+		}
+		s->saved = WD24S2_S;
+	}
+	if (snapshot(s)) {
+		out16(s, WD24S1_P_INDEX, s->saved & IDX_WR);
+		s->restored = true;
+		s->prog = NULL;
+		return 1;
+	}
+	s->snap_ok = true;
+	if (s->snap[0] & WD24S1_ACT || (s->snap[CC_K] & WD24S2_CC_EN)) {
+		out16(s, WD24S1_P_INDEX, s->saved & IDX_WR);
+		s->restored = true;
+		s->prog = NULL;
+		return 1;
+	}
+	s->armed = true;
+	if (sel_rb(s, SEL_CNTRL1) || wait_idle(s, &spins, NULL, &v)) {
+		if (v & WD24S1_ACT) {
+			s->dead = true;
+			s->armed = false;
+			s->res = WD24S3_TIMEOUT;
+			s->why = "busy before the rectangle";
+			s->prog = NULL;
+			return 2;
+		}
+		goto unstarted;
+	}
+	for (p = 0; p < held.npar; p++) {
+		u16 w = (u16)(held.par[p].idx << 12) | held.par[p].val;
+
+		if (sel_rb(s, sel1(held.par[p].idx)))
+			goto unstarted;
+		s->dirty[held.par[p].idx] = true;
+		if (out16(s, WD24S1_P_DATA, w) || in16(s, WD24S1_P_DATA) != w)
+			goto unstarted;
+	}
+	if (sel_rb(s, SEL_CNTRL1) || (in16(s, WD24S1_P_DATA) & WD24S1_ACT))
+		goto unstarted;
+	s->go = true;
+	if (out16(s, WD24S1_P_DATA, held.cntrl1)) {
+		s->go = false;
+		goto unstarted;
+	}
+	s->go = false;
+	s->wgo++;
+	if (wait_idle(s, &spins, NULL, &v)) {
+		s->dead = true;
+		s->armed = false;
+		s->res = WD24S3_TIMEOUT;
+		s->why = "rect still busy";
+		s->prog = NULL;
+		return 2;
+	}
+	s->op = -1;
+	restore_dirty(s);
+	out16(s, WD24S1_P_INDEX, s->saved & IDX_WR);
+	s->armed = false;
+	s->restored = true;
+	s->res = WD24S3_OK;
+	s->prog = NULL;
+	return 0;
+unstarted:
+	s->go = false;
+	s->op = -1;
+	restore_dirty(s);
+	out16(s, WD24S1_P_INDEX, s->saved & IDX_WR);
+	s->armed = false;
+	s->restored = true;
+	s->prog = NULL;
+	return 1;
+}
+
+static const struct wd24s3_prog wd24cur_prog = {
+	"cursor", NULL, 0, 0, 0, 800, 40, "cursor_gate", false, 0 };
+
+static int cur_block(struct wd24s3 *s)
+{
+	return sel_rb(s, WD24S1_NOINC | 2);
+}
+
+static int cur_wr(struct wd24s3 *s, u8 idx, u16 val)
+{
+	u16 w = ((u16)idx << 12) | (val & 0xfff);
+
+	if (s->cur != (WD24S1_NOINC | 2) && cur_block(s))
+		return -EIO;
+	if (out16(s, WD24S1_P_DATA, w))
+		return -EIO;
+	s->cdirty[idx] = true;
+	return 0;
+}
+
+static int cur_rd(struct wd24s3 *s, u8 idx, u16 *full)
+{
+	if (sel_rb(s, wd24s1_sel(WD24S1_N_BLT + idx)))
+		return -EIO;
+	*full = in16(s, WD24S1_P_DATA);
+	return 0;
+}
+
+static int cur_putback(struct wd24s3 *s)
+{
+	unsigned int i;
+	int bad = 0;
+
+	if (s->cstep == WD24CUR_NSHOW) {
+		s->chide = true;
+		if (cur_wr(s, 0, WD24CUR_HIDE)) {
+			bad = 1;
+			s->chide = false;
+		}
+	}
+	s->crestore = true;
+	for (i = 0; i < WD24S1_N_CUR; i++) {
+		if (!s->cdirty[i])
+			continue;
+		if (cur_wr(s, (u8)i, s->snap[WD24S1_N_BLT + i] & 0xfff))
+			bad = 1;
+	}
+	return bad;
+}
+
+static int cur_post(struct wd24s3 *s)
+{
+	unsigned int k;
+
+	if (read_all(s, s->post, &s->npost))
+		return -EIO;
+	for (k = 0; k < WD24S1_NSEL; k++)
+		if (s->post[k] != s->snap[k])
+			return -EIO;
+	if (s->post[0] & WD24S1_ACT)
+		return -EIO;
+	return 0;
+}
+
+int wd24cur_run(struct wd24s3 *s, const struct wd24cur_mem *m,
+		struct wd24cur_res *out)
+{
+	u8 saved[WD24CUR_BYTES], got[WD24CUR_BYTES], pat[WD24CUR_BYTES];
+	unsigned int i, nmatch;
+	u16 a, b, w;
+	int wrote = 0, vram_back = 1, regs_back = 1, ix_ok = 0;
+
+	if (out)
+		memset(out, 0, sizeof(*out));
+	if (!s || !s->io || !m || !m->read || !m->write)
+		return -EINVAL;
+	memset(s->cdirty, 0, sizeof(s->cdirty));
+	s->cursor = false;
+	s->chide = false;
+	s->crestore = false;
+	s->cstep = 0;
+	s->restored = false;
+	s->have_saved = false;
+	s->snap_ok = false;
+	s->armed = false;
+	s->dead = false;
+	s->prog = &wd24cur_prog;
+	s->wix = 0;
+	s->wdata = 0;
+	s->nlog = 0;
+	a = in16(s, WD24S1_P_INDEX);
+	b = in16(s, WD24S1_P_INDEX);
+	if (a != b || a != WD24S2_S) {
+		s->why = "23C0h is not 1002h";
+		s->prog = NULL;
+		return -ENODEV;
+	}
+	s->saved = a;
+	s->have_saved = true;
+	if (snapshot(s)) {
+		s->why = "cursor snapshot refused";
+		goto index;
+	}
+	s->snap_ok = true;
+	wd24cur_pattern(pat);
+	if (m->read(m->priv, WD24CUR_PAT, saved, WD24CUR_BYTES)) {
+		s->why = "cursor pattern save failed";
+		goto index;
+	}
+	if (m->write(m->priv, WD24CUR_PAT, pat, WD24CUR_BYTES)) {
+		s->why = "cursor pattern write failed";
+		wrote = 1;
+		goto vram;
+	}
+	wrote = 1;
+	if (m->read(m->priv, WD24CUR_PAT, got, WD24CUR_BYTES)) {
+		s->why = "cursor pattern read failed";
+		goto vram;
+	}
+	for (i = nmatch = 0; i < WD24CUR_BYTES; i++)
+		nmatch += got[i] == pat[i];
+	if (out)
+		out->vram = nmatch;
+	if (nmatch != WD24CUR_BYTES) {
+		s->why = "cursor pattern did not read back";
+		goto vram;
+	}
+	s->cursor = true;
+	s->armed = true;
+	for (i = 0; i < WD24CUR_NSHOW - 1; i++) {
+		if (cur_wr(s, wd24cur_show[i].idx, wd24cur_show[i].val)) {
+			s->why = "cursor register write refused";
+			goto regs;
+		}
+	}
+	if (cur_rd(s, 1, &w) || w != ((1u << 12) | wd24cur_expect[1]) ||
+	    cur_rd(s, 2, &w) || w != ((2u << 12) | wd24cur_expect[2])) {
+		s->why = "cursor address did not read back";
+		goto regs;
+	}
+	if (cur_wr(s, wd24cur_show[WD24CUR_NSHOW - 1].idx,
+		   wd24cur_show[WD24CUR_NSHOW - 1].val)) {
+		s->why = "cursor enable write refused";
+		goto regs;
+	}
+	if (out)
+		out->regs = 0;
+	for (i = 0; i < 8; i++) {
+		if (cur_rd(s, (u8)i, &w))
+			break;
+		if ((w & 0xfff) == wd24cur_expect[i] && (w >> 12) == i && out)
+			out->regs++;
+	}
+	if (out)
+		out->show = out->regs == 8;
+	if (!out || !out->show) {
+		s->why = "cursor registers did not read back";
+		goto regs;
+	}
+	if (m->hold)
+		m->hold(m->priv);
+regs:
+	regs_back = cur_putback(s) == 0 && cur_post(s) == 0;
+vram:
+	if (wrote) {
+		vram_back = 0;
+		if (!m->write(m->priv, WD24CUR_PAT, saved, WD24CUR_BYTES) &&
+		    !m->read(m->priv, WD24CUR_PAT, got, WD24CUR_BYTES)) {
+			for (i = nmatch = 0; i < WD24CUR_BYTES; i++)
+				nmatch += got[i] == saved[i];
+			vram_back = nmatch == WD24CUR_BYTES;
+		}
+	}
+index:
+	if (s->have_saved && !s->restored) {
+		if (out16(s, WD24S1_P_INDEX, s->saved & IDX_WR) == 0 &&
+		    in16(s, WD24S1_P_INDEX) == s->saved) {
+			s->restored = true;
+			ix_ok = 1;
+		}
+	} else if (!s->have_saved) {
+		ix_ok = 1;
+	}
+	s->armed = false;
+	s->cursor = false;
+	s->prog = NULL;
+	if (out)
+		out->restored = regs_back && vram_back && (s->restored || ix_ok);
+	if (out && out->restored && out->show && out->vram == WD24CUR_BYTES)
+		s->why = NULL;
+	else if (!s->why)
+		s->why = "cursor restore mismatch";
+	if (!out)
+		return s->why ? -EIO : 0;
+	return out->show && out->vram == WD24CUR_BYTES && out->restored ? 0 : -EIO;
+}
+
 #ifdef __KERNEL__
 #ifdef WD24S1_QEMU_FAKE
 #include <linux/moduleparam.h>
@@ -853,7 +1216,8 @@ static u16 fake_reg[WD24S1_NSEL] = {
 };
 static unsigned int fake_busy;
 /* 0: busy 3 reads per op (S5: until the words are in); 1: the first start never finishes; 2: the first
- * start stays busy for SPINS + 100 reads (S3 times out, then goes idle) */
+  * start stays busy for SPINS + 100 reads (S3 times out, then goes idle)
+  */
 static int fake_hang;
 module_param(fake_hang, int, 0444);
 static bool fake_started;
@@ -921,7 +1285,8 @@ static void fake_blt(u16 c1)
 		return;
 	}
 	/* BACK: addresses are the bottom-right pixel, rows bottom-up, right
-	 * to left; result = ROP (idx 9 bits 11:8) of source and destination */
+	 * to left; result = ROP (idx 9 bits 11:8) of source and destination
+	 */
 	for (r = 0; r < h; r++)
 		for (i = 0; i < w; i++) {
 			bool bk = c1 & 0x0400;

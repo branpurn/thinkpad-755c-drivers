@@ -1,0 +1,67 @@
+Register writes, read-back, and restore. This is the live path in
+`wd24adv_core.c`. A write the guard refuses is not performed. A
+read-back that differs from the mask stops the plan and runs
+`wd24_restore_all()`. Text restore (trial expiry, rmmod, control
+`text`) logs a read-back difference and keeps going, because it
+writes values that were read at load.
+
+`wd24_restore_all()` order, the same as `wd90c24fb` `wd_restore_text`:
+extended registers from the BIOS snapshot, standard VGA mode, font
+planes, DAC, relock, unblank. `wd_restore_panel()` is not called.
+PR19, PR57, and PR4 bit 5 are never written.
+
+The 13h aperture map writes none of these. Close of that map does not
+run this restore. The trial and rmmod path still does.
+
+## Standard VGA
+
+| register | port | read-back mask | restore |
+|---|---|---|---|
+| MISC | 3C2 write, 3CC read | `EF` (bit 4 does not read back) | saved byte in `wd24_restore_std` |
+| SR00-SR04 | 3C4/3C5 | `03 3D 0F 3F 0E` | saved bytes in `wd24_restore_std` |
+| GR00-GR08 | 3CE/3CF | `0F 0F 0F 1F 03 7B 0F 0F FF` | saved bytes in `wd24_restore_std` |
+| AR00-AR14 | 3C0/3C1 | `3F` for 00-0F, then `EF FF 3F 0F 0F` | saved bytes in `wd24_restore_std` |
+| AR20 | 3C0 | no data read-back (mask 0) | written as part of the attribute restore |
+| CR00-CR18 | 3D4/3D5 | `FF` | saved bytes in `wd24_restore_std` |
+| DAC | 3C6, 3C7, 3C8, 3C9 | each written byte is read back; a difference is counted | `wd24_restore_cmap`: 3C6=`FF`, 3C8=`00`, 768 data bytes |
+| planes | A0000, four maps | differing bytes counted, max `FF` reported | `wd24_restore_planes` from the load save. Skipped if video memory is locked |
+
+Index ports 3C4, 3CE, and 3D4 are saved on `begin` and written back on
+`end` of a tagged hardware section. That restores the index, not the
+data register.
+
+## Paradise registers the guard allows
+
+| register | index | read-back | restore |
+|---|---|---|---|
+| PR20 / SR06 | SR 06 | bits 3:0 must equal the written low nibble; bits 7:4 read 0. Lock state is the 3C4 index-width test, not the data byte | BIOS value from the load snapshot, `wd24_restore_ext` |
+| PR30A | SR 10 | full byte | BIOS snapshot |
+| PR31 | SR 11 | full byte. Bit 7 (R/W split) only while the S6 lock step is open, or when restoring the BIOS value | BIOS snapshot. An S6 copy also writes the base value back before relock |
+| PR72 | SR 35 | full byte. Only `50` while locked, then the saved `P` | BIOS snapshot |
+| PR68 | SR 31 | full byte, and only bits 4:3 may change. `allow_clock` and PR72 open | BIOS snapshot |
+| PR69 | SR 32 | full byte. Same clock gate as PR68 | BIOS snapshot |
+| PR0A | GR 09 | bits 6:0 | BIOS snapshot. A 640x480 set writes 0, then SR06 is restored |
+| PR0B | GR 0A | bits 6:0 | BIOS snapshot |
+| PR1 | GR 0B | full byte. Bits 5:4 (`0x30`, the aperture) must not change. Bit 3 (window split) only in the S6 dual-window step, or when restoring BIOS | BIOS snapshot. An S6 end puts bit 3 back |
+| PR3 | GR 0D | full byte | BIOS snapshot |
+| PR4 | GR 0E | full byte, bit 5 (tristate) must stay | BIOS snapshot |
+| PR5 | GR 0F | bits 2:0. Unlock writes `05`; relock writes the BIOS value | BIOS snapshot |
+| PR10 | CR 29 | full byte. Unlock writes `85`; relock writes the BIOS value | BIOS snapshot |
+| PR11 | CR 2A | full byte | BIOS snapshot. Left as BIOS when the LCD is on |
+| PR13 | CR 2C | full byte | BIOS snapshot |
+| PR14 | CR 2D | full byte | BIOS snapshot |
+| PR15 | CR 2E | full byte | BIOS snapshot |
+| PR16 | CR 2F | full byte | BIOS snapshot |
+| PR1B | CR 34 | full byte. The shadow key `(value & 7) == 6` is refused. The only allowed write is the panel-read idiom `(lock & 0F) \| A0`, then the lock byte | the lock byte read at the start of that idiom |
+
+## Never written
+
+PR12, PR17, PR18, PR19, PR2, PR57, CR35, CR3A, the 23C0h cursor
+block, and the linear-aperture bits. A mode set re-reads PR18, PR19,
+and MISC and stops with `-ENODEV` unless PR19 is `54`, PR18 is `C7`,
+and MISC bit 0 is 1. Those reads are not writes.
+
+S4 and the canned cursor program use the registers already in this
+table. Their read-back is the same mask. A blitter timeout does not
+invent a second restore: `wd24_restore_all()` is still the text path,
+and a locked plane restore is skipped.

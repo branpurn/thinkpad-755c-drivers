@@ -1,0 +1,89 @@
+# i486 Doom indexed backend
+
+The engine is doomgeneric commit `e257a09527062bfb986b6e5e0780839b6cbd5b71`
+(GPL-2). `build.sh` fetches it into `/tmp` and does not commit it.
+The host smoke uses Freedoom Phase 1, 0.13.0, `freedoom1.wad`
+sha256 `7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d`,
+from the Freedoom 0.13.0 zip
+`3f9b264f3e3ce503b4fb7f6bdcb1f419d93c7b546f4df3e874dd878db9688f59`.
+Freedoom is BSD. The wad is not committed. A proprietary WAD is not used.
+A shareware `doom1.wad` mirror returned 404, so no smaller IWAD is pinned.
+
+`build.sh` produces `/tmp/wd24x-doom.s`
+sha256 `e735b3fdb770780bc8ac4c97f7239cafb63103aae310f5b43d5c0e6bbd8a3164`
+size 435064. i486 static-pie, no INTERP, no `cmov`. Built with
+`-DCMAP256`. The engine zone minimum is 6 MiB (`DEFAULT_RAM` / `MIN_RAM`
+in `i_system.c`). The wad is read through stdio into that zone. The
+file itself stays in the RAM filesystem for the whole session.
+
+## What the default binary does
+
+`WD24X_DOOM_FB`, `WD24X_DOOM_PALETTE`, and `WD24X_DOOM_INPUT` unset:
+no `/dev/fb0` open, no `FBIOPUTCMAP`, no tty open. It still composes a
+private 640x480 index frame so the present can be checksummed.
+`-nosound` is passed by the bench. Sound is not initialized. A fair
+comparison with a Windows 98 run would use the same sound setting on
+both sides. This bench is silent, so it does not match a run that
+mixed audio. Detail is the engine default (high). Windows 98 "low
+detail" is a different setting and is not selected here.
+
+Render is 320x200 indices. `playpal0` is the engine's gamma-adjusted
+PLAYPAL entry 0 at exit, decimal channels 0..255. The DAC form used
+if a palette put is requested is `(channel >> 2) << 10`. For every
+byte 0..255 that equals the fbcon `(byte << 8) | byte` value shifted
+down by 10, which is what the colormap candidate stores. The host
+test checks all 256 bytes.
+
+`WD24X_DOOM_PRESENT=letterbox` (the default) writes each source pixel
+as a 2x2 block at rows 40..439. The picture is 640x400 of index data
+with 40 rows of index 0 above and below. Framebuffer pixels are square,
+so that picture is 8:5, the raw buffer aspect. A CRT showed 320x200 as
+4:3 by using tall pixels. Letterbox does not do that.
+
+`WD24X_DOOM_PRESENT=fill` scales 2x horizontally and repeats source
+rows in the pattern 2,3,2,2,3 (12 destination rows for each 5 source
+rows). 320x200 then covers all of 640x480, which is the integer form
+of that 4:3 stretch. Copies stop at each 64 KiB boundary and do not
+write at or past `0x4b000`. The host test counts 4 forward window
+changes and no span that crosses a window.
+
+`WD24X_DOOM_FB=mmap` opens `/dev/fb0` only when the fixed screen is
+640x480x8, line length 640, and the mapping covers `0x4b000` bytes.
+The same present buffer is then stored through that mapping in window
+sized pieces. Any other geometry prints `fb refused` and exits.
+`WD24X_DOOM_PALETTE=put` sends 256 entries with `FBIOPUTCMAP` after the
+mmap is open. Any other value, including `1`, does not. `put` without
+`mmap` exits before the wad is used. This put is the candidate's
+colormap contract. It has not been run on the 755C.
+
+`WD24X_DOOM_INPUT=tty` saves the whole termios, clears `ICANON` and
+`ECHO`, sets `VMIN` and `VTIME` to 0, and puts the saved struct back
+on the normal exit and on `SIGINT` / `SIGTERM`. `SIGKILL` cannot run
+that restore. Arrow keys are `ESC [ A/B/C/D`. A tty byte has no key-up,
+so each recognized byte is one tap (down, then up) and a held key does
+not keep running. `KDSETMODE` is not called. If the VT is stuck in
+graphics mode, this read can time out. That is not treated as a reason
+to change KD mode.
+
+## Host pins, not the 755C
+
+`qemu-i386-static -cpu 486`, Freedoom `demo1`, `-nosound`, letterbox,
+two frames: index `0x00e988bb`, present `0x807cd9bd`, playpal0 `1 1 1`.
+The full demo, twice: 7117 gametics, 7156 frames, index `0x3ac75f8d`,
+present `0x506f4d2d`, playpal0 `1 32 1`. The engine also prints a
+frames-per-second figure for that qemu process. The two runs did not
+match each other (533 and 535 realtics). That figure is not a 755C
+result and not a Windows 98 comparison. The present copy is included.
+The bank-fault cost of the real mapping is not.
+
+Native peak `VmHWM` on this host for the same demo was 8988 KiB. That
+binary is not the i486 static one. The Freedoom file is 28795076 bytes
+(28121 KiB). It remains in the RAM filesystem while the process runs,
+and lump bytes are also copied into the zone, so adding the file size
+to the RSS double-counts those copies. The file alone is larger than
+MemAvailable figures recorded on the machine (19876, 19816, and 20916
+KiB). Freedoom phase 1 does not fit in that free RAM. A conservative
+sum of the file plus the measured RSS is 37109 KiB, above 36 MiB, and
+that sum double-counts. Subtracting the 6 MiB zone from the RSS still
+leaves about 30965 KiB, which is more than the recorded free RAM.
+There is no 12 MiB guarantee.

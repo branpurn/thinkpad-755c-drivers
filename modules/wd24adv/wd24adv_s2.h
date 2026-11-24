@@ -54,7 +54,8 @@ struct wd24s2_w {
 
 extern const struct wd24s2_w wd24s2_list[WD24S2_NW];
 /* S1 live readings (commit 3ad7142): documentation + tests only, no
- * longer a precondition or an allowed write value */
+  * longer a precondition or an allowed write value
+  */
 extern const u16 wd24s2_ref[WD24S1_NSEL];	/* by select k (wd24s1_sel) */
 
 enum wd24s2_res {

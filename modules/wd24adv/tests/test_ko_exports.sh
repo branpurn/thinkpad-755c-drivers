@@ -1,0 +1,79 @@
+#!/bin/sh
+# The checker, plus a source scan so a 64 KiB kmalloc cannot return quietly.
+set -u
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
+CHECK=$ROOT/scripts/check-ko-exports.sh
+MAIN=$ROOT/modules/wd24adv/wd24adv_main.c
+LIST=$ROOT/modules/wd24adv/floppy-exports.txt
+fail=0
+pass=0
+ok() { pass=$((pass + 1)); }
+bad() { fail=$((fail + 1)); echo "FAIL $1"; }
+
+tmp=$(mktemp -d)
+printf '%s\n' vfree vmalloc_noprof > "$tmp/good"
+printf '%s\n' vfree __kmalloc_large_noprof > "$tmp/bad"
+if sh "$CHECK" --undef "$tmp/good"; then ok; else bad "allowed"; fi
+if sh "$CHECK" --undef "$tmp/bad"; then bad "large allowed"; else ok; fi
+if grep -q '__kmalloc_large_noprof' "$LIST"; then bad "list has large"; else ok; fi
+if grep -q 'kmalloc(WD24S6D_PRESENT_SRC' "$MAIN"; then bad "present kmalloc"; else ok; fi
+if grep -E 'kmalloc\((8192|64000|65536)[,)]' "$MAIN"; then bad "big kmalloc"; else ok; fi
+if grep -q 'vmalloc(WD24S6D_PRESENT_SRC)' "$MAIN"; then ok; else bad "present vmalloc"; fi
+for sym in do_blank_screen do_unblank_screen fg_console vc_cons; do
+	if grep -qx "$sym" "$LIST"; then ok; else bad "list $sym"; fi
+done
+if grep -q 'vc_cons_allocated(' "$MAIN"; then bad "unexported helper"; else ok; fi
+# i386 string_32.h leaves memmove out of line. memcpy is __builtin_memcpy,
+# so a call does not reference that symbol. Neither name is exported.
+# (memcpy)( would, because the macro does not apply.
+for sym in memmove memcpy; do
+	if grep -qx "$sym" "$LIST"; then bad "list has $sym"; else ok; fi
+done
+hit=0
+for f in "$ROOT"/modules/wd24adv/wd24adv_*.c "$ROOT"/modules/wd24adv/wd24adv_*.h; do
+	[ -f "$f" ] || continue
+	if grep -nE '(^|[^A-Za-z0-9_])memmove[[:space:]]*\(' "$f"; then
+		hit=1
+	fi
+done
+if [ "$hit" = 1 ]; then bad "memmove call"; else ok; fi
+hit=0
+for f in "$ROOT"/modules/wd24adv/wd24adv_*.c "$ROOT"/modules/wd24adv/wd24adv_*.h; do
+	[ -f "$f" ] || continue
+	if grep -nE '\(memcpy\)[[:space:]]*\(' "$f"; then
+		hit=1
+	fi
+done
+if [ "$hit" = 1 ]; then bad "memcpy symbol"; else ok; fi
+KO=$ROOT/modules/wd24adv/wd24adv.ko
+ko_out=$(sh "$CHECK" "$KO" 2>&1) && ko_st=0 || ko_st=$?
+case "$ko_out" in
+*"ko is not built"*)
+	echo "check-ko-exports: gate rejected an unbuilt ko"
+	[ "$ko_st" != 0 ] && ok || bad "unbuilt status"
+	;;
+*)
+	[ "$ko_st" = 0 ] && ok || bad "ko undef ($ko_out)"
+	;;
+esac
+if sh "$CHECK" "$tmp/absent.ko"; then bad "absent path passed"; else ok; fi
+if grep -q -- '-Werror=frame-larger-than=1280' "$ROOT/modules/wd24adv/Kbuild"; then ok; else bad "frame flag"; fi
+if grep -E '(^|[[:space:]])-Werror=frame-larger-than([[:space:]]|$)' "$ROOT/modules/wd24adv/Kbuild"; then
+	bad "bare frame flag"
+else
+	ok
+fi
+echo 'int f(void){return 0;}' > "$tmp/t.c"
+if gcc -Werror=frame-larger-than -c "$tmp/t.c" -o "$tmp/t.o" 2>"$tmp/bare.err"; then
+	bad "compiler accepted bare flag"
+else
+	ok
+fi
+if gcc -Werror=frame-larger-than=1280 -c "$tmp/t.c" -o "$tmp/t.o" 2>"$tmp/sized.err"; then
+	ok
+else
+	bad "compiler rejected sized flag"
+fi
+rm -rf "$tmp"
+echo "test_ko_exports: $pass passed, $fail failed"
+[ "$fail" = 0 ]

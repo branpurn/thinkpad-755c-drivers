@@ -1,0 +1,84 @@
+Kernel config notes for Doom on the 486. This does not change the
+boot kernel. The proposed lines are config/tc755x-doom-speed.fragment.
+Do not copy that fragment into a running image until a separate
+kernel build is asked for.
+
+The file read here is /tmp/linux-src/kbuild/.config, Linux/i386
+6.18.57. CONFIG_M486=y and CONFIG_MODULE_UNLOAD=y are set, which is
+what the docs say puts `486` and `mod_unload` on the module vermagic.
+CONFIG_LOCALVERSION is empty in this file. The boot image described
+in docs/WD24ADV-NEXT-STAGE.md is `6.18.57-tc755x`. This .config is
+the 6.18.57 M486 tree next to the sources, not a committed
+`-tc755x` defconfig. The boot image's own .config is not in this
+repository.
+
+What is already off, and is not the slow-mo:
+
+- CONFIG_PREEMPT_NONE=y. UP, no voluntary preempt, no RT. Leave it.
+- CONFIG_SMP is not set. One CPU. Leave it.
+- CONFIG_HIGH_RES_TIMERS is not set. CONFIG_HZ_PERIODIC=y.
+  CONFIG_HZ=250. CONFIG_HPET_TIMER is not set. CONFIG_ACPI and
+  CONFIG_PM are not set, so there is no ACPI PM timer. CONFIG_M486
+  does not select a TSC (CONFIG_M586TSC is off). The clocksource
+  that is built in is CONFIG_CLKSRC_I8253 (the PIT).
+- PROVE_LOCKING, LOCK_STAT, DEBUG_SPINLOCK, DEBUG_MUTEXES,
+  DEBUG_ATOMIC_SLEEP, UBSAN, KFENCE, FTRACE, DEBUG_PAGEALLOC,
+  PAGE_POISONING, and SLUB_DEBUG_ON are not set. CONFIG_LOCKDEP
+  and CONFIG_KASAN and CONFIG_KCSAN have no `=y` line.
+  CONFIG_LOCKDEP_SUPPORT=y is only the architecture flag.
+- CONFIG_DEBUG_KERNEL=y only opens the menu. The expensive debug
+  options under it are off.
+
+Clock and sleeps:
+
+- clock_gettime(CLOCK_MONOTONIC) still exists when
+  CONFIG_POSIX_TIMERS is off. kernel/time/posix-stubs.c keeps
+  CLOCK_MONOTONIC, CLOCK_REALTIME, and CLOCK_BOOTTIME, and
+  clock_nanosleep. ktime_get_ts64 reads the clocksource between
+  ticks, so a frame histogram can show 1 ms steps even though
+  clock_getres reports hrtimer_resolution. With high-res timers
+  off, that resolution is LOW_RES_NSEC, which is one tick:
+  1000000000/250 = 4000000 ns, 4 ms.
+- A 1 ms nanosleep therefore waits for the next periodic tick, up
+  to 4 ms, and often the whole tick. Doom's I_Sleep(1) is that
+  yield in TryRunTics and in the wipe loop. DG_SleepMs ignores the
+  argument so the 486 does not pay the tick. Turning the sleep
+  back on would add up to 4 ms whenever the engine is waiting for
+  the next tic. That stays off.
+- I_GetTime is `(milliseconds * 35) / 1000`. 28 ms is still 0 tics,
+  29 ms is 1, 57 ms is still 1, 58 ms is 2. That is the vanilla
+  truncation. DG_GetTicksMs now uses CLOCK_MONOTONIC so a wall-clock
+  step does not jump the tic. The picture for a timedemo does not
+  change: timedemo is singletics and plays the demo lump.
+- Input is poll() with a 0 timeout. It does not sleep the frame.
+
+What is worth changing, and what it does not do:
+
+- CONFIG_CC_OPTIMIZE_FOR_SIZE=y, CONFIG_FRAME_POINTER=y.
+  The Doom renderer is userspace and is not rebuilt by this.
+  These two make every kernel function larger in the frame-pointer
+  case and smaller-but-slower in the size case. The present ioctl,
+  tty read, and mode set are the kernel paths Doom hits. Expect a
+  small change there, not the gap from 19 fps to a 35 Hz picture.
+- CONFIG_SLUB_DEBUG=y with SLUB_DEBUG_ON off. The runtime poison
+  is off. Dropping SLUB_DEBUG shrinks the allocator a little.
+- CONFIG_PERF_EVENTS=y. Unused on this machine. Dropping it
+  removes that code from the tick path.
+- Do not raise HZ to 1000 and do not turn on high-res timers to
+  chase smoothness. The game clock already reads the PIT between
+  ticks. A 1 ms tick would multiply timer interrupts on a 75 MHz
+  486. High-res timers would reprogram the PIT for every short
+  sleep, and this Doom build does not take those sleeps.
+- Do not enable PREEMPT. One CPU, Doom wants the CPU.
+
+The 13h flip writes CR0C/CR0D while 3DA bit 3 is set, and it does
+not write the next start, or the unmap restore, until the previous
+start has been seen to latch. Skipping that wait on the pages run
+logged CR0C 0x80 and then unmap CR0C 0x00 with the blue page never
+shown. `/proc/wd24adv/live` carries `flip skip`, `wait`, and
+`latch_to` for that.
+
+WD24X_DOOM_FRAMESTATS=1 prints the interval histogram and the
+render / copy / flip split to stderr at exit, and a short line
+every 35 presents and on SIGINT. Unset, those clock_gettime calls
+are not made. The flip time in that split is the ioctl.

@@ -1,5 +1,5 @@
 S6 v2 (s6=1, guarded SR06 unlock/relock) live run, 2026-11-04 22:47-22:53 EST
-Approval: the owner, card t387s1239 (this S6 v2 run only).
+Approval: the owner (this S6 v2 run only).
 Module: wd24adv.ko sha256 08c12db4b650c06aa81bb0d290f289819b9d7e356bc7cb6ba24a8f880c0e7118
 (commit 1b43ec8), sent with send1.sh (logger SIGSTOP/SIGCONT); remote sha matched.
 Lines: docs/WD24ADV-LIVE-TEST.md "S6 v2" (v1 list, G=08c12db4001).
@@ -35,7 +35,7 @@ Baseline wd24probe3 (under X): RC=19 (expected, probe-only module),
   restored. Matches the pre-S6 baseline: no lasting state change.
 
 == commands.log ==
-2026-11-04 22:47:06 EST  S6 v2: send-file wd24adv-s6v2.ko -> /tmp/wd24adv.ko (approval t387s1239)
+2026-11-04 22:47:06 EST  S6 v2: send-file wd24adv-s6v2.ko -> /tmp/wd24adv.ko
 2026-11-04 22:47:06 EST  host: SIGSTOP logger 64434; send-file.sh ~/wd24adv-s6v2.ko -> /tmp/wd24adv.ko (38400)
 2026-11-04 22:48:09 EST  host: SIGCONT logger 64434
 2026-11-04 22:48:18 EST  S6 v2: send-file done, sha 08c12db4 match

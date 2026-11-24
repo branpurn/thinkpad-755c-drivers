@@ -1,0 +1,339 @@
+# Doom present cost, and the next path
+
+Measured on ead705ed with wd24x-doom f4470178 (built from 62a5460,
+-O2 -DNDEBUG -march=i486). `measure`, 60 frames: render 78.85 ms,
+present 427.18 ms, palette 0.28 ms per frame, about 1.97 frames/s.
+Present is 84% of that. Faults 0, thrash 0, rmmod text restore
+mismatches 0. The gate then slept `wait 144` and failed `live_ok`
+because the 180 s trial was still `PENDING`. Measure modes now rmmod
+instead of waiting for that timer. Do not raise the thrash bound.
+The fast path below is present_mode=13h, default off.
+
+## What the current present does
+
+`WD24S6D_IOC_PRESENT` accepts LETTER2X on the 640x480 session. Userspace hands over the
+320x200 index buffer (64000 bytes). The kernel copies that once, then
+for each of five 64 KiB windows calls the proven SETWIN and stores
+32-bit groups. Each group is expanded in C from the 320x200 source
+(2x, letterbox, bars of index 0). That is 76800 expansions and 76800
+`writel`s into `ioremap(0xa0000, ...)`, which is uncached. There is no
+write combining. The only port I/O in the loop is those five window
+programs. The fault counter is not touched, so the bound stays 32.
+
+The userspace ioctl path does not build a second 640x480 buffer unless
+`WD24X_DOOM_SUM=1`. The 64000-byte index hash runs only when that sum
+is on. With the sum off it is not in the render bucket.
+
+`tools/wd24-doom/build.sh` was `-Os`. The measurement build is `-O2
+-DNDEBUG -march=i486`, still stripped, still no `-g` and no `-pg`.
+
+## Clock
+
+The 486 has no `rdtsc`. The port uses `clock_gettime(CLOCK_MONOTONIC)`.
+`WD24X_DOOM_TIME` empty or 0 is off. A positive number is the print
+interval. The line is
+
+    WD24X-DOOM time frames N render_ms R present_ms P palette_ms C
+
+`render_ms` is the gap since the previous present returned (the game
+and `D_Display` up to `I_FinishUpdate`). `palette_ms` is `FBIOPUTCMAP`.
+`present_ms` is the present ioctl. Cumulative.
+
+The kernel adds `present frames ... ns N copy_ns C` on `/proc/wd24adv/s6d`.
+Those are jiffy spans, one tick each, not a cycle counter. `ns` is the
+window program and the stores. `copy_ns` is the 64000-byte copy in.
+`ead705ed` does not have those fields. The userspace line does not
+need them.
+
+## Fast path, already cited
+
+`320x200-8` is the proven mode 13h set in `wd24adv_modes.c` (`std_13h`):
+
+- CR09 = 0x41. VGA maximum-scan-line 1, so each row is two scanlines.
+  That is the doublescan BIOS mode 13h uses. CR14 = 0x40, CR17 = 0xA3.
+- Chain-4 (sequencer), direct A0000, 64000 bytes. The pattern writer
+  does not touch PR0A. Live 2026-11-02, module 5f275b4: 64000 bytes,
+  no register write for the picture, revert 896/336, mismatches 0.
+  The panel showed the bars letterboxed and the owner called it good.
+- Restore is the trial text restore that already follows every
+  `mode=` load. No new register, and no new read-back. The mode set's
+  existing read-back covers the CRTC words.
+
+A present in that mode is one 64000-byte copy into the A0000 window.
+No 2x expand, no five window programs, no 300 KiB frame. `320x240-8x`
+stays UNPROVEN and is not the path. A banked mmap of 640x480 is the
+path that latches the thrash bound. Do not use it for the timedemo.
+
+`present_mode` still defaults to empty, so a 640x480 load stays
+letterbox. The Doom run sets `present_mode=13h`. The session is
+`mode=320x200-8`. The present op is the 64000-byte copy. Trial expiry
+is the same text restore as the 2026-11-02 run.
+`WD24X_DOOM_PRESENT=13h` asks with `FBIOPUT_VSCREENINFO` 320x200x8 and
+the direct ioctl, and uses letterbox if a 640x480 frame refuses.
+
+`measure13h` on module `2436a39a` with `wd24x-doom` `f95ae448`: 60
+frames, render 1735 ms, present 1005 ms, palette 16 ms. Per frame
+that is 28.92 ms, 16.75 ms, and 0.27 ms, 45.93 ms together, about
+21.8 frames/s. `blit direct 64000`, switches 0, faults 0, thrash 0,
+rmmod mismatches 0. The script in that run still waited for the trial
+and then failed `live_ok`. `measure13h` and `timedemo13h` now rmmod
+instead. `sh docs/s6d-doom-run.sh timedemo13h` is the full
+`-timedemo demo1`. The Win98 comparison is `doom -timedemo demo1`
+on the same wad with `screenblocks` 10, `detaillevel` 0, and sound off.
+
+## Offline i486 timings
+
+`qemu-i386-static -cpu 486` ran a freestanding `-march=i486 -mtune=i486`
+binary. That CPU model rejects later instructions. It does not charge
+486 clocks, so these are relative costs of the i486 instruction stream,
+not a 755C result. The same column pixels were checked before the timers.
+
+| build | FixedMul C | column loop | 40 times 64000-byte copy |
+| --- | --- | --- | --- |
+| `-O2`, frame pointer kept | 1009 us | 4172 us | 1045 us |
+| `-O2 -fomit-frame-pointer` | 682 us | 3443 us | 1040 us |
+| same, 4-wide column unroll |  | 2351 us |  |
+| same, `-fno-tree-vectorize` |  | 3573 us | 3690 us |
+
+`-O2 -march=i486` already lowers `FixedMul`'s 64-bit multiply to
+`imull` plus `shrdl`, which is the DOS inner product. A hand `imul`
+was not faster once the frame pointer was gone (715 us against 682).
+`-Os` is not in the table: that freestanding bench needed a 64-bit
+divide helper `-Os` did not link. Do not pass `-fno-tree-vectorize`.
+
+`WD24X_DOOM_FAST` on `tools/wd24-doom/build.sh` is empty by default,
+which keeps the flags that built `f95ae448`. `omitfp` adds
+`-fomit-frame-pointer`. `direct` also points the renderer at
+`DG_ScreenBuffer` and skips the 320x200 row copy when the scale is 1.
+`unroll` rewrites `R_DrawColumn` and `R_DrawSpan` to four pixels per
+trip, same pixels as the do/while. `all` is those three.
+`WD24X_DOOM_DETAIL=low` sets `detailLevel` to 1. That is not the
+default and it is not part of `FAST=all`: it draws each column twice
+as wide and changes the picture. High detail stays `detailLevel` 0.
+
+A span microbench on the same qemu `-cpu 486` binary, 2000 spans
+checked equal first: base 790 us, unroll 607 us. That is the span
+loop only.
+
+`unroll` also rewrites `R_DrawFuzzColumn` and `R_DrawTranslatedColumn`
+the same way. Fuzz still steps `fuzzpos` once per pixel, including the
+wrap at `FUZZTABLE`. On qemu `-cpu 486`, 2000 calls of 48 pixels:
+fuzz base 387 us, unroll 276 us, one framebuffer hash
+`1128849253`. Translated column base 292 us, unroll 223 us, hash
+`2518251749`. The base and unrolled hashes matched. That is not a
+755C timedemo. `demo1.wad` is not in this environment, so a full
+demo framebuffer was not replayed. `R_MapPlane` and `R_RenderSegLoop`
+call the drawers above. `FixedDiv` keeps the overflow test and the
+64-bit divide. `detail=low` stays off.
+
+## Other engines
+
+Stay on doomgeneric (linuxdoom 1.10 C, GPL-2). Do not swap the engine.
+
+| engine | license | fit on this 486 |
+| --- | --- | --- |
+| Chocolate Doom | GPL-2 | SDL, vanilla C columns. Same inner loop class as ours, plus a library we do not have. |
+| Crispy Doom | GPL-2+ | Chocolate plus higher resolution. Not a 320x200 speed port. |
+| PrBoom+ | GPL-2 | SDL, C++. Aimed at limits and GL, not a 36 MB machine with no SDL. |
+| FastDoom | GPL-2 (GPLv2; DoomWiki says GPLv2+) | DOS, 386/486, no SDL. The fast paths that change pixels (potato, flat surfaces, flat sky) are not demo-exact. Its column and span unrolls are the same id loops. |
+| DOS Doom asm | id GPL source, the asm was the DOS build; linuxdoom-1.10 shipped the C loops | `FixedMul` in our `-O2 -march=i486` build is already `imull` + `shrdl`. A hand column was not faster than that C once the frame pointer was omitted. |
+
+Nothing here is copied from those trees. The unroll is the original
+do/while written four times.
+
+`WD24X_DOOM_FB=aperture` with `WD24X_DOOM_PRESENT=13h` maps the
+chain-4 window and draws into it. The map is `0xA0000` for 65536
+bytes. The frame is the first 64000. The other 1536 bytes are inside
+`A0000-AFFFF` and are not the frame. The map writes no VGA register
+and does not call SETWIN. A fault handler is not installed, so a
+missed page cannot reprogram the window. Closing the mapping does not
+run the dual-window end, which would read and write the index ports.
+Text restore stays on the trial and rmmod path. `FAST=all` does not
+turn this on. `sh docs/s6d-doom-run.sh timedemo13hmap` is the run.
+Each column store is an uncached write. That can be slower than the
+ioctl copy. The morning batch measures it. It does not replace the
+ioctl timedemo.
+
+`aperturecopy` must not copy with `rep movsl`. At `-O2 -march=i486`
+a normal store loop inlines to that string move. `wd24x_doom_copy_dwords`
+is one `movl` per dword, the same shape as the kernel `writel` on the
+ioctl path. That codegen change is not the rotated picture. The same
+rotation is on the aperture path, which has no copy. A host render of
+one frame through ioctl, aperture, and aperturecopy is byte-identical,
+and rows 168..199 stay the status bar. The stripped `FAST=all` binary
+is `/tmp/wd24x-doom.s`, 557944 bytes, sha256
+`f0857f0cae65f1165966a7fd0e67577982eccd6d8b2076594a49ac9a5d25d7e0`.
+Put that sha in `WD24X_DOOM_SHA` before the next hardware run.
+
+The rotation matches vgacon still owning the VT. Linux 6.18.57
+`vgacon_scroll` calls `vga_set_mem_top`, and that is `write_vga(12,
+origin/2)`, which is CR0C then CR0D. The write is skipped when
+`vga_is_gfx` is set or `vc_mode` is not `KD_TEXT`. `KDSETMODE
+KD_GRAPHICS` is what sets both, through `do_blank_screen(1)`. Doom
+and this run script did not do that, and the module's trace does not
+record vgacon's `outw`. One 80-column text row is 160 bytes. The
+register stores half of that, and mode 13h doubleword multiplies by
+4, so one text row is 320 graphics bytes. 113 text rows are 36160
+bytes. Doom's status bar starts at buffer row 168, so it shows up at
+display row 55. That is the photo's "about rows 50-60" and "about
+36000". A whole text row does not move the picture sideways. 36000
+would be 112 rows plus 160 columns. `sh docs/s6d-scanpat-run.sh`
+draws the row bands and the corner markers for ten seconds. The live
+log's `scan mode` line is the CR0C/CR0D read after that graphics hold,
+not the write trace. A later `scan frame` or `scan unmap` line is the
+same registers after a frame. Hardware on module `2163a34` (`4d216845`), Doom `185e0403`: the wrap is
+gone by eye. `scan mode` and the later scan lines stayed `dw_bytes=0`.
+`timedemo13hmap` was 20.01 fps and `timedemo13hcopy` was 16.88 fps.
+The row bands and the white lines were in order. The red and green
+corner marks were a single row of text-palette colours 4 and 2, which
+are the same indexes as two of the bands and are dark on that palette,
+so a photo does not show them. The bit column was one pixel wide.
+The picture now uses 40 by 16 blocks at indexes 0xE0..0xE3, four pixels
+per bit, and programs those DAC entries.
+
+The map path draws into the page the CRTC is scanning, so a moved
+weapon is visible in both the old and new places. The copy path draws
+in cached memory and then replaces the whole window, which is why it
+does not ghost, and why it is the slower of the two (about 9 ms for
+the 64000-byte store). Two frames do not fit in the 64K chain-4
+window. The scanout start is CR0C/CR0D. This 13h set has CR14 bit 6,
+so that register counts units of 4 bytes. The next 64K of pixels is
+65536/4 = 0x4000 (CR0C=0x40, CR0D=0x00). PR3 bits 4:3 are CA17:CA16
+(datasheet 13.4). One of those bits is a +65536 character step, which
+is +256KiB in doubleword mode, not the next 64K. PR16 bits 4:3 are
+added to those same two bits (datasheet 13.13). Bit 6 of the BIOS
+value CR2F=0x42 keeps the counter at 64K locations. On `2fe57de` the
+flip wrote PR16 bit 3, left CR0C/CR0D at 0, and the picture did not
+move. PR0A (GR09) = 0x10 is only the CPU window at +64KiB
+(`wd_selftest_banks`). `WD24X_DOOM_FLIP=1` now writes CR0C/CR0D for
+the page just drawn and PR0A for the page after that. It does not write
+PR16 or PR3. KD_GRAPHICS stays on so vgacon does not rewrite CR0C/D.
+The CRTC loads that start at vertical retrace (datasheet 10.12).
+3DA bit 3 is that retrace (datasheet 15.8). go5 wrote CR0C and PR0A
+and returned at once, so Doom drew the page the beam was still
+finishing. There are now three pages. The page drawn next is neither
+the one just published nor the one before it. PR0A 0x20 is byte
+131072 by the same shift as 0x10, and CR0C 0x80 is that byte in
+doubleword units. The ioctl writes that start while bit 3 is set.
+A start that is still owed is left alone until bit 3 has been seen
+low and then high, including the unmap that puts CR0C back to 0.
+The pages run on the build that skipped this wait logged CR0C 0x80
+and then unmap CR0C 0x00, and the blue page never appeared.
+`WD24X_DOOM_VSYNC` is still only echoed. The first flip also
+unlocks (four writes). Later flips are CR0C, CR0D, and PR0A. Doom
+issues one flip before the first pixel so that pixel is not stored
+on the scanned page. That is not a 64000-byte copy.
+`sh docs/s6d-doom-run.sh timedemo13hflip` is the map path with flip
+on. `WD24X_DOOM_FRAMESTATS=1` adds a CLOCK_MONOTONIC interval
+histogram and a render / copy / flip split on stderr at exit,
+a running line every 35 presents, and the same histogram on
+SIGINT. It also prints a hash of source rows 168..199 (the
+status bar at screenblocks 10) and the flip's show/cr0c/pr0a.
+That hash is the engine buffer. The copy writes all 64000 of
+it. A long identical-byte run is a normal bar. A short run is
+noise already in the source. Unset, those samples are not taken.
+`sh docs/s6d-go7-run.sh` is that timedemo plus about a minute of
+E1M1 with the switch on.
+`sh docs/s6d-scanpat-run.sh pages` is the short check: red with
+a white block at the top left, green with one at the top right, blue
+with one in the middle, and the three register lines. Do that before
+the timedemo.
+
+On `2fe57de` that run printed `WD24X-DOOM flip 0 vsync 0` and the
+picture still ghosted. The `0` is the page, not the switch: drawing
+starts on page 0, so the first flip's `show` is 0, and the gate
+accepted that line. The env did reach Doom, because that line is
+printed only after the ioctl returns. The line is now `flip 1` for
+the switch and `show 0` for the page, and the script requires
+`flip 1`. Each flip also left PR5 at 05h, which is why `scan unmap`
+said `pr_locked=0`. The unmap read is before text restore. The close
+path writes CR0C/CR0D back to 0, writes the BIOS PR0A, and runs the
+existing relock before that read. Text restore relocks again.
+
+## Render bucket
+
+There is no `default.cfg`. The script refuses to run if one is present,
+so the engine keeps the compiled defaults in doomgeneric `m_menu.c`:
+`screenblocks` 10 and `detailLevel` 0. That is high detail, view
+320x168 (`setblocks * 32` by `(setblocks * 168 / 10) & ~7`), not
+`screenblocks` 9 and not the 320x200 fullscreen of `screenblocks` 11.
+`build.sh` defines `CMAP256`. `I_FinishUpdate` then `memcpy`s each
+320-byte index row and does not call `cmap_to_fb`. The palette path
+sets `palette_changed` and the port sends `FBIOPUTCMAP`. That is the
+0.28 ms bucket. The 78.85 ms is the renderer plus that index copy.
+
+## Aperture, read only
+
+427.18 ms for 76800 dword stores is 5.56 us/store, about 720 KB/s, into
+the uncached `ioremap` of A0000. No write combining. This tree does not
+document a wait-state or write-FIFO bit, and it does not program one.
+
+The names in `wd90c24_hw.h`, from the 1994 data sheet as cited there:
+
+- PR30A (SR10) is the memory interface. The 640x480 set writes
+  `(bios & ~0xcf) | 0xc1` (`wd90c24_hw.c`, `wd24_mode_ext`). Bits 5:4
+  stay as the BIOS left them.
+- PR31 (SR11) is the system interface. The same set writes
+  `(bios & 0x03) | 0x5c`. XFree86 kept bits 1:0. Bit 7 is the S6
+  read/write split, not a FIFO. A live unlocked read was 0x5D.
+- PR11 (CR2A) is the CRTC lock. With the LCD on it is left as the BIOS
+  set it. PR12 (CR2B) is the scratch pad. The guard refuses a PR12
+  write, and the save does not read it. PR15 (CR2E) is misc control 1
+  (`bios & ~0x50`, "clock 0 is not MCLK"). PR16 (CR2F) is misc control 2
+  and the 640x480 set writes 0x00.
+
+`wd24_save_ext` already reads PR11, PR15, PR16, PR30A and PR31 at load,
+after the existing unlock, and relocks. Printing that saved snapshot
+is the dump. It adds no register write. Do not read PR12, and do not
+write any of these to chase the 5.56 us. Mode 13h uses `WD24_EXT_BIOS`,
+so it does not apply the 640x480 PR30A/PR31 values.
+
+## Direct-mode loops, qemu -cpu 486
+
+Baseline on the 755C, module `2fe57de`: map 19.83 fps (8870 realtics),
+copy 17.07 fps (10308 realtics), same 5026-gametic demo1. The copy is
+the extra ~8 ms. The map path is the one to speed up. These loop times
+are one 320 by 168 field, `qemu-i386-static -cpu 486`, cached RAM, no
+VGA wait states. They are not a 755C fps.
+
+| loop | us | label |
+| --- | --- | --- |
+| column, one byte store | 111 | measured, qemu |
+| column, four-pixel unroll already in `FAST=all` | 70 | measured, qemu |
+| span, one byte store | 111 | measured, qemu |
+| span, four pixels packed into one dword | 90 | measured, qemu |
+| low detail, two byte stores, half the samples | 55 | measured, qemu |
+| low detail, one word store of the same two bytes | 62 | measured, qemu, slower |
+
+An 8-pixel column loop around a C `for` was 150 us against 71 us for
+the explicit 4-pixel unroll, same qemu run, so the 4-pixel form stays.
+A dword store at a column pixel would also write the next three
+columns: those pixels are 320 bytes apart, and `wd24_col_dword_ok`
+accepts a store only when the stride is 1. That is a span, not a
+column. The dword span is the new pixel-identical change in `FAST=all`. 90/111
+is the instruction stream only. The kernel's 5.56 us/dword was an
+`ioremap` `writel`, and a 50 ms frame shows the aperture byte stores
+are not that slow, so this is not a claim of several fps. The word
+store measured slower here, so low detail keeps the engine's two byte
+stores.
+
+`WD24X_DOOM_LOW=1` sets `detailLevel` 1. That changes the picture.
+Unset stays 0. The column loop above dropped from 111 us to 55 us
+because it takes half the texture samples. That ratio is measured.
+How much of the 50 ms frame is that loop is not.
+
+`WD24X_DOOM_BLOCKS` unset stays `screenblocks` 10, 320 by 168, 53760
+view pixels. `8` is 256 by 128, 32768 pixels, 60 percent of that view.
+`11` is 320 by 200, 64000 pixels, and it is larger, not faster. The
+counts are the `R_ExecuteSetViewSize` formula. The frame-time share
+of the view versus the status bar was not measured.
+
+Direct mode already skips the 320 by 200 `memcpy` when `FAST` includes
+`direct`. The palette ioctl runs only when `palette_changed` is set.
+The flip writes CR0C, CR0D, and PR0A, and does not copy the frame.
+The first flip also does the four unlock writes. Later flips do not.
+There is no 3DA poll, so a flip does not add the ~7 ms retrace wait.
+The CRTC loads the start at vertical retrace. The next draw uses the
+other CPU bank, so it does not wait for that load. This has not been
+timed on the panel. Stripped `FAST=all` `/tmp/wd24x-doom.s` is 557944
+bytes, sha256 `3478876ee0a6e40bd3ad1bf5d58c0363ff1197ae5a14d4cf3769cf33e5bed6b4`.

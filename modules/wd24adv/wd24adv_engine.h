@@ -27,7 +27,8 @@
 #include "wd24adv_core.h"
 
 /* S0 gate: no live path may touch 23C0h-23C5h.  Changing this needs an
- * approved stage; tests/test_engine.c fails the build if it is not 0. */
+  * approved stage; tests/test_engine.c fails the build if it is not 0.
+  */
 #define WD24X_LIVE_ALLOWED	0
 
 /* ports, DS 17.1 "Global port map" */
@@ -95,7 +96,8 @@ enum {
 
 /* VRAM map at 640x480-8, pitch 640 (design section 4).  1 MB: PR1 = C5h,
  * memory size bits 7:6 = 11 (POST trace; DS 13.2).  Only these surfaces
- * are legal BITBLT targets. */
+  * are legal BITBLT targets.
+  */
 #define WD24X_PITCH		640u
 #define WD24X_VRAM		0x100000u
 #define WD24X_FRAME		0x00000u	/* 640x480 = 4B000h bytes */
@@ -103,7 +105,15 @@ enum {
 #define WD24X_GUARD		0x4b000u	/* never a BITBLT target */
 #define WD24X_SCRATCH		0x4c000u
 #define WD24X_SCRATCH_END	0x4d000u
-#define WD24X_CURSOR		0x4d000u	/* 256 bytes, CPU-written only */
+/*
+ * Design section 4 reserved 4D000h as a BITBLT-excluded slot. Nothing
+ * in wd24adv has programmed it. The pattern wd90c24fb stores, and the
+ * 755C read back, is 50000h: data book 8.6.1 (doubleword address),
+ * registers 1=000 2=014. S6 also uses 50000h as off-screen bank X.
+ * This constant stays 4D000h so the S0 validator still refuses a blit
+ * into the design slot.
+ */
+#define WD24X_CURSOR		0x4d000u
 #define WD24X_CURSOR_END	0x4d100u
 #define WD24X_POOL		0x4e000u
 #define WD24X_POOL_END		0x100000u
@@ -166,7 +176,8 @@ struct wd24x {
 	const char *dead_why;
 	bool readback;		/* verify every 23C2h register write (default on) */
 	bool async;		/* FILL/COPY return busy (default off: wait after
-				 * every op, design 3.4 mini-gate) */
+				 * every op, design 3.4 mini-gate)
+				 */
 	/* state the guard relies on */
 	bool have_saved;	/* saved_ix holds this op's 23C0h value */
 	u16 saved_ix;
@@ -204,10 +215,12 @@ const struct wd24x_rule *wd24x_rule_find(u8 blk, u8 idx);
 
 void wd24x_init(struct wd24x *x, const struct wd24x_io *io);
 /* port-level guard: 0 or -EPERM (never allowed) / -EINVAL (bad value) /
- * -EBUSY (state: engine busy, no host op, ...) */
+  * -EBUSY (state: engine busy, no host op, ...)
+  */
 int wd24x_guard(const struct wd24x *x, u16 port, u16 val);
 /* reads: only 23C0h and 23C2h, never 23C4h (DS 21.13: a read with no data
- * holds the host off) */
+  * holds the host off)
+  */
 int wd24x_guard_in(const struct wd24x *x, u16 port);
 
 /* pure: validate and build the plan; no port access */
@@ -218,7 +231,8 @@ bool wd24x_backward(const struct wd24x_cmd *cmd);
 bool wd24x_surface(u32 off, u32 w, u32 h, u32 *base);
 
 /* sequencer.  All return 0, or <0 with nothing (more) written; on <0 the
- * caller draws with the CPU.  host: MONO/HOSTCOL data, host_words words. */
+  * caller draws with the CPU.  host: MONO/HOSTCOL data, host_words words.
+  */
 int wd24x_run(struct wd24x *x, const struct wd24x_cmd *cmd, const u16 *host,
 	      u32 nhost);
 int wd24x_sync(struct wd24x *x);	/* wait idle (bounded) */

@@ -16,7 +16,8 @@
 /* CNTRL1, DS 19.1.1 / 21.15.1: always packed (b9:8 = 01), always with the
  * activation bit (so the guard can never write the "0 while in progress"
  * value the DS 19.1.1 CAUTION warns about), never linear (b7/b6), never
- * destination = system I/O (b5:4 = 10), never reserved encodings. */
+  * destination = system I/O (b5:4 = 10), never reserved encodings.
+  */
 static const u16 c1_set[] = {
 	WD24X_C1_ACT | WD24X_C1_PACKED,				/* COPY forward */
 	WD24X_C1_ACT | WD24X_C1_PACKED | WD24X_C1_BACK,		/* COPY backward */
@@ -26,7 +27,8 @@ static const u16 c1_set[] = {
 	WD24X_C1_ACT | WD24X_C1_PACKED | WD24X_C1_SRC_IO,	/* HOSTCOL */
 };
 /* CNTRL2, DS 19.1.2 / 21.15.2: no line draw, IRQ, quick start, update
- * destination, pattern, colour transparency; b1 reserved = 0. */
+  * destination, pattern, colour transparency; b1 reserved = 0.
+  */
 static const u16 c2_set[] = { 0x000, WD24X_C2_MTRANS };
 static const u16 pitch_set[] = { WD24X_PITCH };
 /* DS 19.7 Table 19-3; the X GC functions of design S4 */
@@ -36,23 +38,24 @@ static const u16 rop_set[] = {
 };
 static const u16 mask_set[] = { 0x0ff };	/* all planes/maps updated */
 /* cursor control, DS 18.1: off, or 32x32 2-bit pattern (b10:9 = 00),
- * two-colour with inversion (b7:5 = 001), no plane protection (b8) */
+  * two-colour with inversion (b7:5 = 001), no plane protection (b8)
+  */
 static const u16 cc_set[] = { 0x000, WD24X_CC_2COL_INV,
 			      WD24X_CC_ENABLE | WD24X_CC_2COL_INV };
 /* pattern address = the design's cursor slot 4D000h in doubleword units
- * (DS 18.2 + Table 18-3 packed mode) = 13400h */
+  * (DS 18.2 + Table 18-3 packed mode) = 13400h
+  */
 static const u16 cpl_set[] = { (WD24X_CURSOR >> 2) & 0xfff };
 static const u16 cph_set[] = { (WD24X_CURSOR >> 2) >> 12 };
 
-#define SET(a)	(a), (u8)(sizeof(a) / sizeof((a)[0]))
 #define P	WD24_PROVEN
 #define U	WD24_UNPROVEN
 
 const struct wd24x_rule wd24x_rules[] = {
-	{ 1, WD24X_B_CNTRL1, 0x0fff, 0, 0x0fff, SET(c1_set), 0x0010, P, "CNTRL1",
+	{ 1, WD24X_B_CNTRL1, 0x0fff, 0, 0x0fff, c1_set, (u8)(sizeof(c1_set) / sizeof(c1_set[0])), 0x0010, P, "CNTRL1",
 	  "DS 19.1.1; COPY fwd/back + FILL: OBS-FB (self-test, X); MONO: OBS-FB "
 	  "(cexp var 0) + OBS-W; HOSTCOL (set[4]): UNPROVEN" },
-	{ 1, WD24X_B_CNTRL2, 0x0fff, 0, 0x0fff, SET(c2_set), 0, P, "CNTRL2",
+	{ 1, WD24X_B_CNTRL2, 0x0fff, 0, 0x0fff, c2_set, (u8)(sizeof(c2_set) / sizeof(c2_set[0])), 0, P, "CNTRL2",
 	  "DS 19.1.2; 000 and 008 (mono transparency): OBS-FB" },
 	{ 1, WD24X_B_SRC_LO, 0x0fff, 0, 0x0fff, NULL, 0, 0, P, "SRC_LO",
 	  "DS 19.2.1 bits 11:0 of a byte address (packed, DS 19.3.2): OBS-FB" },
@@ -66,23 +69,23 @@ const struct wd24x_rule wd24x_rules[] = {
 	  "DS 19.4.1 1..2K pixels, value = width: OBS-FB (w=1 cexp case)" },
 	{ 1, WD24X_B_DIM_Y, 0x0fff, 1, WD24X_DIM_MAX, NULL, 0, 0, P, "DIM_Y",
 	  "DS 19.4.2 1..2K rows: OBS-FB" },
-	{ 1, WD24X_B_PITCH, 0x0fff, 0, 0x0fff, SET(pitch_set), 0, P, "PITCH",
+	{ 1, WD24X_B_PITCH, 0x0fff, 0, 0x0fff, pitch_set, (u8)(sizeof(pitch_set) / sizeof(pitch_set[0])), 0, P, "PITCH",
 	  "DS 19.4.3 bytes, packed: low 2 bits 0, shared by src/dst: OBS-FB" },
-	{ 1, WD24X_B_ROP, 0x0f00, 0, 0x0f00, SET(rop_set), 0x007c, P, "ROP",
+	{ 1, WD24X_B_ROP, 0x0f00, 0, 0x0f00, rop_set, (u8)(sizeof(rop_set) / sizeof(rop_set[0])), 0x007c, P, "ROP",
 	  "DS 19.7 Table 19-3, 7:0 reserved; SRC, XOR: OBS-FB; CLEAR, AND, OR, "
 	  "INVDST, SET: UNPROVEN" },
 	{ 1, WD24X_B_FG, 0x00ff, 0, 0x00ff, NULL, 0, 0, P, "FG",
 	  "DS 19.5.1, 11:8 reserved: OBS-FB" },
 	{ 1, WD24X_B_BG, 0x00ff, 0, 0x00ff, NULL, 0, 0, P, "BG",
 	  "DS 19.5.2, 11:8 reserved: OBS-FB" },
-	{ 1, WD24X_B_MASK, 0x00ff, 0, 0x00ff, SET(mask_set), 0, P, "MASK",
+	{ 1, WD24X_B_MASK, 0x00ff, 0, 0x00ff, mask_set, (u8)(sizeof(mask_set) / sizeof(mask_set[0])), 0, P, "MASK",
 	  "DS 19.6.3; FFh updates all (OBS-FB), 0 prevents update (DS 21.7)" },
 	/* block 1 C (transparency colour), D (transparency mask), F: refused */
-	{ 2, WD24X_C_CTRL, 0x0fff, 0, 0x0fff, SET(cc_set), 0x0007, U, "CUR_CTRL",
+	{ 2, WD24X_C_CTRL, 0x0fff, 0, 0x0fff, cc_set, (u8)(sizeof(cc_set) / sizeof(cc_set[0])), 0x0007, U, "CUR_CTRL",
 	  "DS 18.1; never written by wd24adv/wd90c24fb on the 755C: UNPROVEN" },
-	{ 2, WD24X_C_PAT_LO, 0x0fff, 0, 0x0fff, SET(cpl_set), 0x0001, U, "CUR_PAT_LO",
+	{ 2, WD24X_C_PAT_LO, 0x0fff, 0, 0x0fff, cpl_set, (u8)(sizeof(cpl_set) / sizeof(cpl_set[0])), 0x0001, U, "CUR_PAT_LO",
 	  "DS 18.2.1; doubleword units in packed mode (Table 18-3): UNPROVEN" },
-	{ 2, WD24X_C_PAT_HI, 0x00ff, 0, 0x00ff, SET(cph_set), 0x0001, U, "CUR_PAT_HI",
+	{ 2, WD24X_C_PAT_HI, 0x00ff, 0, 0x00ff, cph_set, (u8)(sizeof(cph_set) / sizeof(cph_set[0])), 0x0001, U, "CUR_PAT_HI",
 	  "DS 18.2.2 bits 19:12, 11:8 reserved: UNPROVEN" },
 	{ 2, WD24X_C_PRIMARY, 0x00ff, 0, 0x00ff, NULL, 0, 0, U, "CUR_PRIMARY",
 	  "DS 18.5.1: UNPROVEN" },
@@ -154,7 +157,8 @@ int wd24x_guard(const struct wd24x *x, u16 port, u16 val)
 		blk = val & WD24X_IX_BLK_MASK;
 		idx = (val >> WD24X_IX_RIDX_SHIFT) & 0xf;
 		/* our selects: block 1 or 2, a listed index, always NOINC so a
-		 * stray read cannot move the index (DS 17.2 bit 12) */
+		 * stray read cannot move the index (DS 17.2 bit 12)
+		 */
 		if (!(val & WD24X_IX_NOINC))
 			return -EINVAL;
 		if (blk != WD24X_BLK_BLT && blk != WD24X_BLK_CUR)
@@ -173,7 +177,8 @@ int wd24x_guard(const struct wd24x *x, u16 port, u16 val)
 			return -EBUSY;	/* only inside a validated plan */
 		if (blk == WD24X_BLK_BLT) {
 			/* never reprogram a running engine (OBS-W waits idle;
-			 * DS 19.2 "should not read ... while in progress") */
+			 * DS 19.2 "should not read ... while in progress")
+			 */
 			if (x->busy || !x->idle_seen)
 				return -EBUSY;
 			if (idx == WD24X_B_CNTRL1 && data != x->plan_cntrl1)
@@ -184,7 +189,8 @@ int wd24x_guard(const struct wd24x *x, u16 port, u16 val)
 		if (x->dead)
 			return -EBUSY;
 		/* DS 21.12: with no op waiting the chip holds the host off
-		 * (UNPROVEN what follows): only words the op is owed */
+		 * (UNPROVEN what follows): only words the op is owed
+		 */
 		return (x->busy && x->host_op && x->host_left) ? 0 : -EBUSY;
 	default:
 		return -EPERM;	/* VGA, PM 24h-27h, 23C6h... not representable */
@@ -340,7 +346,8 @@ static int status(struct wd24x *x, bool *busy)
 /* bounded wait for CNTRL1 b11 = 0 (DS 19.1.1: resets automatically).
  * On timeout: latch dead.  Never writes CNTRL1 (no abort: DS 19.1.1
  * CAUTION; DS 21.18 says an abort ends "within a few memory clocks" but
- * the op cannot be resumed; which applies on the 755C is UNPROVEN). */
+  * the op cannot be resumed; which applies on the 755C is UNPROVEN).
+  */
 static int wait_idle(struct wd24x *x, u32 spins)
 {
 	u32 n;
@@ -419,7 +426,8 @@ bool wd24x_surface(u32 off, u32 w, u32 h, u32 *base)
  * no word straddles rows; msb first, no padding: OBS-FB var 0) and DS
  * 21.12 (colour: 32-bit groups as two 16-bit writes, low word first; no
  * doubleword straddles rows: UNPROVEN on the 755C).  Source alignment
- * (SRC_LO low 2 bits) is always 0. */
+  * (SRC_LO low 2 bits) is always 0.
+  */
 u32 wd24x_host_words(const struct wd24x_cmd *cmd)
 {
 	u32 per4 = (cmd->w + 3) / 4;
@@ -435,7 +443,8 @@ u32 wd24x_host_words(const struct wd24x_cmd *cmd)
 }
 
 /* same pitch: a destination above the source in memory is copied from
- * the end (bottom-right first, DS 19.1.1 b10 and 19.3 starting corner) */
+  * the end (bottom-right first, DS 19.1.1 b10 and 19.3 starting corner)
+  */
 bool wd24x_backward(const struct wd24x_cmd *cmd)
 {
 	return cmd->op == WD24X_COPY && cmd->dst > cmd->src;

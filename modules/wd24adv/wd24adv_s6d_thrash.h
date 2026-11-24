@@ -6,7 +6,10 @@
  * windows without a quiet same-window stretch (one x86 insn spanning banks
  * restart-faults forever). Count consecutive window *switches*; latch when
  * the count reaches the bound. A fault that stays in the current window
- * resets the counter. See WD24ADV-NEXT-STAGE.md / DESKTOP-DESIGN §3.3.
+ * resets the counter. A CPU draw that stays in the mapped window calls
+ * wd24s6d_thrash_quiet, because that path returns before note and would
+ * otherwise add every crossing for the whole session.
+ * See WD24ADV-NEXT-STAGE.md / DESKTOP-DESIGN §3.3.
  */
 #ifndef WD24ADV_S6D_THRASH_H
 #define WD24ADV_S6D_THRASH_H
@@ -73,6 +76,15 @@ static inline int wd24s6d_thrash_note(struct wd24s6d_thrash *t, u32 win)
 		return -1;
 	}
 	return 0;
+}
+
+/* A later access stayed in the window already noted. Clears the
+ * crossing count. Does not clear a latch that has already fired.
+ */
+static inline void wd24s6d_thrash_quiet(struct wd24s6d_thrash *t)
+{
+	if (!t->latched)
+		t->switches = 0;
 }
 
 #endif

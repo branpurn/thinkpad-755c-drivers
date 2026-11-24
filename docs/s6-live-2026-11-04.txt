@@ -1,5 +1,5 @@
 S6 s6=1 (dual window) live run, 2026-11-04 22:23-22:32 EST
-Approval: the owner, card t383s1217 (this S6 run only).
+Approval: the owner (this S6 run only).
 Module: wd24adv.ko sha256 e84364a8f5f8d2263bac6d15efb426fa78b3d52186eda4e12e36e03299891a11
 (commit 09bc0f4), sent with send1.sh (tc32-gfx send-file.sh, logger SIGSTOP/SIGCONT);
 remote sha matched. Lines: docs/WD24ADV-LIVE-TEST.md "S6" L1-L10, one per call, each
@@ -30,7 +30,7 @@ where SR11 is readable. The D1 write half (Y+0000', X+8000') was not verified
 because V is skipped on a stop.
 
 == commands.log ==
-2026-11-04 22:23:43 EST  S6 s6=1: send-file wd24adv-s6.ko -> /tmp/wd24adv.ko (approval t383s1217)
+2026-11-04 22:23:43 EST  S6 s6=1: send-file wd24adv-s6.ko -> /tmp/wd24adv.ko
 2026-11-04 22:23:43 EST  host: SIGSTOP logger 64434; send-file.sh ~/wd24adv-s6.ko -> /tmp/wd24adv.ko (38400)
 2026-11-04 22:24:46 EST  host: SIGCONT logger 64434
 2026-11-04 22:24:53 EST  S6 s6=1: send-file done, sha e84364a8 match

@@ -2,7 +2,7 @@
 /*
  * wd24adv user API - placeholder.  This header is independent of
  * wd90c24fb_ioctl.h and does not include or alter it.  No ioctl is
- * implemented yet; numbers are reserved here so they cannot collide with
+ * implemented yet except WD24S6D_IOC_PRESENT; numbers are reserved here so they cannot collide with
  * wd90c24fb ('W' 0x24-0x26).  Mode switching will use the standard
  * FBIOPUT_VSCREENINFO / FBIOPAN_DISPLAY.
  */
@@ -29,6 +29,55 @@ struct wd24adv_modeinfo {
 
 /* reserved, not implemented yet */
 #define WD24ADV_IOC_MODEINFO	_IOWR('W', 0x30, struct wd24adv_modeinfo)
+
+/*
+ * One blit. pixels is a userspace pointer to nbytes index bytes.
+ * LETTER2X: 320x200, scale 2, destination 0,0, nbytes 64000. The kernel
+ * writes the 640x480 frame through the already proven window program.
+ * DIRECT: the same 320x200 bytes, scale 1, nbytes 64000. Accepted only
+ * while present_mode=13h (the proven 320x200-8 set). One 64000-byte copy,
+ * no expansion and no window program. Anything else is -EINVAL and
+ * touches no register. switches and bytes are outputs.
+ */
+struct wd24s6d_present {
+	__u64 pixels;
+	__u32 src_w;
+	__u32 src_h;
+	__u32 dst_x;
+	__u32 dst_y;
+	__u32 scale;
+	__u32 op;
+	__u32 nbytes;
+	__u32 switches;
+	__u32 bytes;
+	__u32 reserved;
+};
+#define WD24ADV_BLIT_LETTER2X	0u
+#define WD24ADV_BLIT_DIRECT	1u
+#define WD24S6D_PRESENT_LETTER	WD24ADV_BLIT_LETTER2X
+#define WD24S6D_PRESENT_SRC	64000u
+#define WD24S6D_IOC_PRESENT	_IOWR('W', 0x40, struct wd24s6d_present)
+
+/*
+ * Show the 64K page just drawn and point the A0000 window at the next
+ * one. Three pages: cr0c/cr0d are 0x0000, 0x4000, or 0x8000, and pr0a
+ * is 0x00, 0x10, or 0x20. The ioctl writes the start while 3DA bit 3
+ * is set (datasheet 15.8, 10.12), after any start still owed has
+ * been seen to latch. late stays 0. vsync is echoed and does not
+ * add a second wait. Only valid in the 320x200-8 session.
+ */
+/* One line in /proc/wd24adv/live, refreshed on read. */
+#define WD24_FLIP_COUNT_SCAN "flip skip %u wait %u latch_to %u"
+struct wd24s6d_flip {
+	__u32 vsync;
+	__u32 show;
+	__u32 cpu;
+	__u32 pr0a;
+	__u32 late;
+	__u32 cr0c;
+	__u32 cr0d;
+};
+#define WD24S6D_IOC_FLIP	_IOWR('W', 0x41, struct wd24s6d_flip)
 /*
  * 'W' 0x31 was a panel/CRT routing ioctl in the scaffold.  Runtime routing
  * was removed for good: 0x31 stays reserved and must never be assigned.

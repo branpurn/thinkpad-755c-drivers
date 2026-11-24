@@ -94,7 +94,8 @@ enum wd24_rf {
 #define WD24_PR1_APERTURE	0x30
 
 /* The only panel state wd24adv accepts: live-verified on the 755C
- * (wd90c24fb load message and wd24probe3, 2026-11-02). */
+  * (wd90c24fb load message and wd24probe3, 2026-11-02).
+  */
 #define WD24_LIVE_PR18		0xc7	/* single TFT, LCD-only route */
 #define WD24_LIVE_PR19		0x54	/* LCD on, CRT off, centring on */
 
@@ -134,10 +135,12 @@ struct wd24_backend {
 	int (*write)(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 val);
 	u8 (*read)(struct wd24_ctx *c, enum wd24_rf rf, u8 idx);
 	/* 3C4 index width test (wd24probe3): 1 = SR06 latch unlocked
-	 * (index bits 5:3 stick), 0 = locked, <0 = no hardware */
+	 * (index bits 5:3 stick), 0 = locked, <0 = no hardware
+	 */
 	int (*seq_unlocked)(struct wd24_ctx *c);
 	/* DAC: 3C8/3C7 index 0, 768 bytes via 3C9 (vgastate cmap order);
-	 * pel = 3C6 value written first (vgastate writes FFh) */
+	 * pel = 3C6 value written first (vgastate writes FFh)
+	 */
 	void (*dac_read)(struct wd24_ctx *c, u8 pel, u8 *rgb768);
 	void (*dac_write)(struct wd24_ctx *c, u8 pel, const u8 *rgb768);
 	/* video memory window A0000-AFFFF, as currently mapped by the chip */
@@ -192,6 +195,7 @@ struct wd24_ctx {
 	const struct wd24_io *io;	/* port backend only */
 	bool allow_clock;	/* PR68/PR69 data writes (no mode uses them) */
 	bool fix_sr06;	/* load: if unlocked width + SR06==0x0F, write 0x0F once */
+	bool settle_blank; /* packed-8: SR06 restore before unblank */
 	/* state */
 	bool saved;		/* lock values in bios are valid (guard) */
 	unsigned int have;	/* WD24_HAVE_* */
@@ -288,6 +292,22 @@ int wd24_write_std(struct wd24_ctx *c, const struct wd24_std *std);
 void wd24_mode_ext(const struct wd24_mode *m, const struct wd24_ext *bios,
 		   struct wd24_ext *ext);
 
+/* Live read of the mode 13h start and the chain-4 map. No register write.
+ * gr0d is meaningful only while PR5 is the unlock value 05h. dw_bytes in
+ * the formatted line is CR0C:CR0D << 2, the mode 13h doubleword byte
+ * address, and does not add PR3 when the extended indexes are locked.
+ */
+struct wd24_scan {
+	u8 cr08, cr09, cr0c, cr0d, cr13, cr14, cr17, cr18;
+	u8 sr02, sr04;
+	u8 gr05, gr06, gr09, gr0d, gr0f;
+	u8 ar13;
+};
+
+void wd24_scan_read(struct wd24_ctx *c, struct wd24_scan *s);
+unsigned int wd24_scan_format(char *buf, unsigned int n, const char *when,
+			      const struct wd24_scan *s);
+
 int wd24_entry_check(struct wd24_ctx *c, enum wd24_phase ph);
 int wd24_verify(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 val);
 int wd24_save_cmap(struct wd24_ctx *c);
@@ -305,7 +325,8 @@ int wd24_plan_text(struct wd24_ctx *c);
 int wd24_pattern(struct wd24_ctx *c, const struct wd24_mode *m);
 bool wd24_has_pattern(const struct wd24_mode *m);
 /* trial: every successful mode set leaves trial_pending; expiry without a
- * confirm runs the text restore (the kernel module arms a timer) */
+  * confirm runs the text restore (the kernel module arms a timer)
+  */
 int wd24_confirm(struct wd24_ctx *c);
 int wd24_trial_expire(struct wd24_ctx *c);
 

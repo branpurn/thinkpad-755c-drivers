@@ -99,7 +99,8 @@ int wd24_guard(const struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 old, u8 val
 		case WD24_SR_PR20:	/* hw.c 72 unlock, 287/622/640 restore */
 			if (c->s6_active) {
 				/* S6: relock to the BIOS value at any time; the
-				 * unlock value only inside the S6 lock step */
+				 * unlock value only inside the S6 lock step
+				 */
 				if (c->saved && val == c->bios.pr20)
 					return 0;
 				return (c->saved && c->s6_lock_open &&
@@ -190,7 +191,8 @@ int wd24_guard(const struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 old, u8 val
 /* ---- accessors ---------------------------------------------------------- */
 
 /* reads update the model, so with a live backend it holds what the chip
- * last said (dry-run: the read returns the model, nothing changes) */
+  * last said (dry-run: the read returns the model, nothing changes)
+  */
 u8 wd24_read(struct wd24_ctx *c, enum wd24_rf rf, u8 idx)
 {
 	u8 v = c->be->read(c, rf, idx);
@@ -328,7 +330,8 @@ int wd24_modify(struct wd24_ctx *c, enum wd24_rf rf, u8 idx, u8 mask, u8 val)
 			  (wd24_read(c, rf, idx) & ~mask) | (val & mask));
 }
 
-#define TRY(x)	do { int _e = (x); if (_e) return _e; } while (0)
+#define TRY(x)	do { int _e = (x); if (_e) return _e; \
+} while (0)
 
 /* ---- wd90c24fb idioms --------------------------------------------------- */
 
@@ -409,9 +412,12 @@ int wd24_entry_check(struct wd24_ctx *c, enum wd24_phase ph)
 
 #define ENTRY_FAIL(rf, idx, got, want, why, fatal) do { \
 		ev_check(c, rf, idx, got, want, why); \
-		if (fatal) { wd24_note(c, "REFUSED by the entry check: no data register written"); \
-			return -ENODEV; } \
-		bad++; } while (0)
+		if (fatal) { \
+			wd24_note(c, "REFUSED by the entry check: no data register written"); \
+			return -ENODEV; \
+		} \
+		bad++; \
+} while (0)
 
 	misc = wd24_read(c, WD24_MISC, 0);
 	if (!(misc & 0x01))
@@ -451,7 +457,8 @@ int wd24_entry_check(struct wd24_ctx *c, enum wd24_phase ph)
 	if (unl != 0) {
 		/* Floppy/POST may leave width unlocked while SR06 bits 3:0 still
 		 * read 0x0F (same as after unlock to 4Fh). Opt-in fix_sr06 writes
-		 * 0x0F once (S6 "L" relock) and re-checks; otherwise refuse. */
+		 * 0x0F once (S6 "L" relock) and re-checks; otherwise refuse.
+		 */
 		if (load && c->fix_sr06 && sr06 == 0x0f && unl == 1) {
 			int ferr;
 
@@ -660,6 +667,118 @@ void wd24_mode_ext(const struct wd24_mode *m, const struct wd24_ext *bios,
 	ext->pr68 = (bios->pr68 & ~0x18) | 0x08;
 }
 
+static char *scan_put(char *p, char *end, const char *s)
+{
+	while (*s && p < end)
+		*p++ = *s++;
+	return p;
+}
+
+static char *scan_hex(char *p, char *end, const char *name, u8 v)
+{
+	static const char h[] = "0123456789abcdef";
+
+	p = scan_put(p, end, name);
+	if (p + 2 <= end) {
+		*p++ = h[v >> 4];
+		*p++ = h[v & 0x0f];
+	}
+	return p;
+}
+
+static char *scan_u(char *p, char *end, const char *name, unsigned int v)
+{
+	char tmp[10];
+	unsigned int i = 0;
+
+	p = scan_put(p, end, name);
+	if (!v) {
+		if (p < end)
+			*p++ = '0';
+		return p;
+	}
+	while (v && i < sizeof(tmp)) {
+		tmp[i++] = (char)('0' + (v % 10));
+		v /= 10;
+	}
+	while (i && p < end)
+		*p++ = tmp[--i];
+	return p;
+}
+
+void wd24_scan_read(struct wd24_ctx *c, struct wd24_scan *s)
+{
+	if (!s)
+		return;
+	memset(s, 0, sizeof(*s));
+	if (!c || !c->be || !c->be->begin || !c->be->read)
+		return;
+	c->be->begin(c);
+	s->cr08 = wd24_read(c, WD24_CR, 0x08);
+	s->cr09 = wd24_read(c, WD24_CR, 0x09);
+	s->cr0c = wd24_read(c, WD24_CR, 0x0c);
+	s->cr0d = wd24_read(c, WD24_CR, 0x0d);
+	s->cr13 = wd24_read(c, WD24_CR, 0x13);
+	s->cr14 = wd24_read(c, WD24_CR, 0x14);
+	s->cr17 = wd24_read(c, WD24_CR, 0x17);
+	s->cr18 = wd24_read(c, WD24_CR, 0x18);
+	s->sr02 = wd24_read(c, WD24_SR, 0x02);
+	s->sr04 = wd24_read(c, WD24_SR, 0x04);
+	s->gr05 = wd24_read(c, WD24_GR, 0x05);
+	s->gr06 = wd24_read(c, WD24_GR, 0x06);
+	s->gr09 = wd24_read(c, WD24_GR, 0x09);
+	s->gr0d = wd24_read(c, WD24_GR, WD24_GR_PR3);
+	s->gr0f = wd24_read(c, WD24_GR, WD24_GR_PR5);
+	s->ar13 = wd24_read(c, WD24_AR, 0x13);
+	if (c->be->end)
+		c->be->end(c);
+}
+
+unsigned int wd24_scan_format(char *buf, unsigned int n, const char *when,
+			      const struct wd24_scan *s)
+{
+	char *p, *end;
+	unsigned int ca, dw;
+	int locked;
+
+	if (!buf || n < 2 || !when || !s)
+		return 0;
+	locked = (s->gr0f & 0x07) != 0x05;
+	ca = ((unsigned int)s->cr0c << 8) | s->cr0d;
+	if (!locked) {
+		if (s->gr0d & 0x08)
+			ca |= 0x10000u;
+		if (s->gr0d & 0x10)
+			ca |= 0x20000u;
+	}
+	dw = ca << 2;
+	p = buf;
+	end = buf + n - 1;
+	p = scan_put(p, end, "scan ");
+	p = scan_put(p, end, when);
+	p = scan_put(p, end, locked ? " pr_locked=1" : " pr_locked=0");
+	p = scan_hex(p, end, " cr08=", s->cr08);
+	p = scan_hex(p, end, " cr09=", s->cr09);
+	p = scan_hex(p, end, " cr0c=", s->cr0c);
+	p = scan_hex(p, end, " cr0d=", s->cr0d);
+	p = scan_hex(p, end, " cr13=", s->cr13);
+	p = scan_hex(p, end, " cr14=", s->cr14);
+	p = scan_hex(p, end, " cr17=", s->cr17);
+	p = scan_hex(p, end, " cr18=", s->cr18);
+	p = scan_hex(p, end, " sr02=", s->sr02);
+	p = scan_hex(p, end, " sr04=", s->sr04);
+	p = scan_hex(p, end, " gr05=", s->gr05);
+	p = scan_hex(p, end, " gr06=", s->gr06);
+	p = scan_hex(p, end, " ar13=", s->ar13);
+	p = scan_hex(p, end, " gr09=", s->gr09);
+	p = scan_hex(p, end, " gr0d=", s->gr0d);
+	p = scan_u(p, end, " dw_bytes=", dw);
+	if (p < end)
+		*p++ = '\n';
+	*p = 0;
+	return (unsigned int)(p - buf);
+}
+
 /* ---- standard VGA state, DAC and video memory (Linux vgastate) ------------
  *
  * wd90c24fb saves VGA_SAVE_MODE | VGA_SAVE_FONTS | VGA_SAVE_CMAP with
@@ -730,7 +849,8 @@ int wd24_save_std(struct wd24_ctx *c)
 }
 
 /* vgastate restore_vga_mode (the AR index 00h write is part of the
- * backend's AR access, which always clears the palette address source) */
+  * backend's AR access, which always clears the palette address source)
+  */
 int wd24_restore_std(struct wd24_ctx *c)
 {
 	const struct wd24_std *v = &c->vga;
@@ -818,7 +938,8 @@ int wd24_save_planes(struct wd24_ctx *c)
 }
 
 /* vgastate restore_vga_text (depth-4 block included: write mode 0 with
- * rotate 0, bit mask FF, set/reset off), all four planes, each read back */
+  * rotate 0, bit mask FF, set/reset off), all four planes, each read back
+  */
 int wd24_restore_planes(struct wd24_ctx *c)
 {
 	u8 gr1, gr3, gr4, gr5, gr6, gr8, seq1, seq2, seq4;
@@ -900,7 +1021,8 @@ int wd24_restore_all(struct wd24_ctx *c)
 	unsigned int mis = c->nmismatch;
 	int err = 0, e;
 
-#define KEEP(x) do { e = (x); if (e && !err) err = e; } while (0)
+#define KEEP(x) do { e = (x); if (e && !err) err = e; \
+} while (0)
 	c->restoring = true;
 	if (c->have & WD24_HAVE_EXT)
 		KEEP(wd24_restore_ext(c, &c->bios));
@@ -980,9 +1102,46 @@ static int mode_steps(struct wd24_ctx *c, const struct wd24_mode *m)
 	TRY(wd24_screen_on(c, false));
 	TRY(wd24_restore_ext(c, &ext));
 	TRY(wd24_write_std(c, m->std));
+	/* write_std leaves SR01 bit 5 set (seq[1] | 0x20), the same
+	 * screen-off bit as wd24_screen_on(false) / hw.c 354. The
+	 * visible page is byte 0: std CR0C/CR0D are 0 and a BIOS
+	 * PR0A of 0 is that bank (wd24adv_flip.h). Clearing it here
+	 * is memory only. A non-zero BIOS bank is not rewritten.
+	 */
+	if (m->ext == WD24_EXT_BIOS && (m->flags & WD24M_DIRECT) &&
+	    m->std && !m->std->crtc[0x0c] && !m->std->crtc[0x0d] &&
+	    m->frame_bytes <= WD24_PLANE && c->bios.pr0a == 0x00 &&
+	    c->be->mem_write) {
+		static u8 z[256];
+		u32 off;
+
+		for (off = 0; off < m->frame_bytes; ) {
+			u32 n = m->frame_bytes - off;
+
+			if (n > sizeof(z))
+				n = sizeof(z);
+			c->be->mem_write(c, off, z, n);
+			off += n;
+		}
+		ev_bulk(c, 0, "13h: clear visible page while SR01 bit 5 is set");
+	} else if (m->ext == WD24_EXT_BIOS && (m->flags & WD24M_DIRECT) &&
+		   c->bios.pr0a != 0x00) {
+		wd24_note(c, "13h clear skipped: BIOS PR0A is not bank 0");
+	}
 	if (m->ext == WD24_EXT_PACKED8) {
 		c->tag = "bank 0, hw.c 389-390/397";
 		TRY(wd24_write(c, WD24_GR, WD24_GR_PR0A, 0x00));
+		/*
+		 * Default matches the existing order: unblank, then SR06.
+		 * settle_blank writes the BIOS SR06 first. Both writes are
+		 * the ones already in this function. wd90c24fb's unblank
+		 * (hw.c 637-640) restores SR06 before the panel is shown.
+		 */
+		if (c->settle_blank) {
+			c->tag = "SR06 = saved, hw.c 640";
+			TRY(wd24_write(c, WD24_SR, WD24_SR_PR20, c->bios.pr20));
+			return wd24_screen_on(c, true);
+		}
 		TRY(wd24_screen_on(c, true));
 		c->tag = "SR06 = saved, hw.c 640";
 		return wd24_write(c, WD24_SR, WD24_SR_PR20, c->bios.pr20);
@@ -1133,7 +1292,8 @@ int wd24_pattern(struct wd24_ctx *c, const struct wd24_mode *m)
 	}
 	size = m->xres * m->yres;
 	/* reversed bars from the first whole row at or above 256 KiB (still
-	 * proves no CRTC wrap there; no switch in the middle of a row) */
+	 * proves no CRTC wrap there; no switch in the middle of a row)
+	 */
 	rev = (4 * WD24_PLANE + m->xres - 1) / m->xres;
 	if (!c->be->mem_write) {
 		ev_bulk(c, 0, "pattern: (dry-run: memory not written)");
@@ -1301,7 +1461,8 @@ int wd24_selftest(struct wd24_ctx *t, wd24_report_fn report, void *arg)
 	bool ok;
 
 #define CHECK(cond, what) do { bool _ok = (cond); if (!_ok) fails++; \
-	report(arg, _ok, (what)); } while (0)
+	report(arg, _ok, (what)); \
+} while (0)
 
 	CHECK(wd24_modes_validate(&bad, &why) == 0, "mode table validates");
 

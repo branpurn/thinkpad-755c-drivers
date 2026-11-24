@@ -1,0 +1,57 @@
+Browser pass, after the eight steps in `docs/s6d-morning.txt`.
+It does not replace them. No hardware contact in this file.
+
+`tools/wd24-browser/build.sh` writes `/tmp/wd24-ns-prefix/nsfb/`.
+Copy that directory to `/tmp/nsfb` on the machine and check the
+binary before the first insmod. It is not in git.
+
+- `nsfb` is 3358656 bytes
+- sha256 `531803c04944918491480e4add46641c5a91ee0d1dc8841fab81cc1098c7f446`
+- XMODEM at 1970 B/s: 1704 seconds, plus 1776 bytes, so 1705 seconds
+- qemu-user `-cpu 486` peak RSS 16400 kB, against 36*1024 = 36864 kB.
+  That number includes the emulator.
+
+`nsres/` is the English resource set: the shared files and `en/`,
+not the other locale directories. `pages/` is the canvas page.
+Stage both with the binary. 1705 seconds is the floppy-link cost of
+the binary if it goes over XMODEM instead of the CF card.
+
+Launch from the 755C console. Keys come from stdin:
+
+```
+NETSURFRES=/tmp/nsfb/nsres/ /tmp/nsfb/nsfb -f linux -b 8 -w 640 -h 480 file:///tmp/nsfb/pages/canvas.html
+```
+
+`docs/s6d-browser-run.sh` is the gate. It insmods, runs that launch
+with stdin on the console tty, hashes the frame, requires faults 0,
+then rmmods and checks the restore line. Stop on the first miss.
+
+The qemu ram dump of `canvas.html` at 640x480x8 was 307200 bytes,
+sha256 `7529e449c486f60726c39fea3a62e723f5f8fd71174f1a175a0664172c17100b`.
+That hash is the offline ram render. It is not the pass value for the
+panel: the hardware frame includes the DAC and the linux surface, and
+step 3 records whatever `/dev/fb0` actually holds. `WD24X_DOOM_FAST`
+is unrelated. Leave `settle_blank` at 0.
+
+Stop on the first failure. Do not start the next step.
+
+1. Same module as the morning desktop step, 640x480-8, trial 180,
+   `s6d=1 s6d_cmap=1`. Pass: insmod rc 0, `session ON` if a client
+   opens the fb, text console still the VGA driver until that open.
+2. Open the local page only. No network. Pass: the red, green, blue,
+   and white blocks are visible, the PNG bands are visible, the GIF
+   and JPEG do not draw as empty boxes. The owner looks at the panel
+   for this line.
+3. `sh tools/wd24-browser/fbhash.sh` while the page is up. Pass: one
+   `WD24X-BROWSER fb <64 hex> 307200` line, then the s6d text with
+   `faults 0`, `thrash 0`, and `mode letter` (this is 640x480, not
+   13h). Record `accel`, `gate`, and `match`.
+4. Scroll to `end of page`. The owner confirms the view moved. Run
+   `fbhash.sh` again. Pass: the hash changed, faults still 0.
+5. Quit the browser so `/dev/fb0` closes. Pass: rmmod, then dmesg
+   `live text: 0` and `mismatches 0`, and no `readback:` line.
+   `WD24X-BROWSER live` from the hash script is not required after
+   rmmod; read dmesg.
+
+If step 2 never draws, stop. Do not switch to Dillo or to the GTK
+`netsurf.tcz`. Those are X clients and are not this test.

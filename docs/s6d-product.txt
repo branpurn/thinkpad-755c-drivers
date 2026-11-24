@@ -1,0 +1,154 @@
+S6d product runbook. Not an acceptance of hue, smoothness, or the keyboard.
+Floppy kernel only: `6.18.57-tc755x`. The CF file `vmlinuz.x` does not
+export `vmf_insert_pfn`, `unmap_mapping_range`, or `zap_vma_ptes`.
+Do not load an S6d module into it.
+
+The staged product is `docs/WD24ADV-PRODUCT.txt`. Install, the commands,
+and recovery are `docs/WD24ADV-USE.txt`. This file is the next hardware run.
+
+Phase 2 and phase 3 passed at 16:15 ET on `fdf30c77` with the `a143000`
+scripts. Leave `docs/s6d-candidate.env` on that file. Desktop and Doom
+both load the module named in `docs/s6d-desktop.env`. That build must
+compile on 6.18.57, where `lock_fb_info()` returns void. It also has
+the present ioctl. A second open of `/dev/fb0` while X is mapped
+returns `-EBUSY`, and the close drops X's pages. `/proc/wd24adv/cmap`
+is the published cache, which is what `FBIOGETCMAP` would return, and
+it is filled only after `fb_setcmap` read `3C9` back. The proc does
+not touch a port.
+
+At 18:10 ET, `c6ca389` did not compile (`lock_fb_info` used as an int)
+and Doom on `fdf30c77` took `Bus error`. The mmap path faults once per
+64 KiB window and never faults twice in the same window, so the
+consecutive-switch counter reaches 32 within the first frames and the
+fault returns SIGBUS. The bound stays 32. The timedemo does not mmap.
+`WD24X_DOOM_FB=ioctl` sends the 320x200 buffer. The kernel programs
+each 64 KiB window once and writes it with 32-bit stores. `present
+switches 5` is that count. `zone memory: ... 600000` is the engine's
+`%x` of 6 MiB. `couldn't open demo1.lmp` is the external-file probe;
+play continues from the wad.
+
+Nothing here writes a speculative VGA register. Each script hash-checks
+its inputs, stops on the first failure, and waits out the trial so text
+comes back with mismatches 0. `trial` cannot exceed 600.
+
+## Build, then pin
+
+Module, same floppy tree and recipe as `fdf30c77`. Vermagic must be
+`6.18.57-tc755x mod_unload 486`. Copy it to the path in
+`docs/s6d-desktop.env` and replace that file's `WD24X_CANDIDATE_SHA`.
+Leave `docs/s6d-candidate.env` on `fdf30c77`. The Doom script reads
+the desktop env for the module.
+
+Userspace, static i486 musl. From `modules/wd24adv/tests`:
+
+```
+i486-linux-musl-gcc -static -march=i486 -mtune=i486 -Os -std=gnu11 -Wall -Werror -o /tmp/wd24x-xcmp wd24x-xcmp.c
+i486-linux-musl-strip /tmp/wd24x-xcmp
+```
+
+Replace `WD24X_XCMP_SHA` in `docs/s6d-desktop.env` with the stripped file.
+The glyph binary, X archive, xkb archive, and extractor stay at the
+hashes already in that env. This machine has no i486 musl gcc, so those
+two sha256 values ship as `UNPINNED` and both scripts refuse to insmod
+until they are replaced.
+
+Doom, from the repo root, with the engine pin in `tools/wd24-doom/build.sh`:
+
+```
+sh tools/wd24-doom/build.sh
+```
+
+That writes `/tmp/wd24x-doom.s`. Copy it to `/tmp/wd24x-doom` and put its
+sha256 in `WD24X_DOOM_SHA` in `docs/s6d-doom.env`.
+
+Shareware `doom1.wad` v1.9, not in this tree. 4196020 bytes.
+sha256 `1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771`
+(sha1 `5b2e249b9c5133ec987b3ea77596381dc0d6bc1d`). Copy it to
+`/tmp/doom1.wad`. Do not use the 28 MiB Freedoom file. The engine's zone
+default is 6 MiB. Together with the wad that fits in about 25 MiB free
+and no swap. Delete `/tmp/default.cfg` and `/tmp/doom.cfg` if they
+exist. A config would change screen size, and the script stops if it
+sees one.
+
+## What the Win98 run compares
+
+Same wad. This engine's compiled defaults, with no config file:
+`screenblocks` 10 and `detaillevel` 0 (high detail, view 320x168,
+status bar still drawn). Sound off. The Win98 comparison is that
+same shareware wad and those settings:
+
+```
+doom -timedemo demo1
+```
+
+On Win98, `default.cfg` must contain `screenblocks 10` and
+`detaillevel 0`, and sound must be off. Our gate is
+`sh docs/s6d-doom-run.sh timedemo13h`. It passes `-nosound -nogui`
+and `present_mode=13h`. The script prints Doom's `timed N gametics
+in N realtics` line and `WD24X-DOOM-FPS gametics N realtics N
+fps_x100 N` with `fps_x100 = gametics * 3500 / realtics` (35 Hz).
+A completed timedemo exits 255 because the engine reports the timing
+through `I_Error` and then `exit(-1)`. That 255 plus the gametics
+line is success, not a driver fault.
+
+The Doom present is mode 13h: one 64000-byte copy, no expansion, no
+window program. On module `2436a39a` with `wd24x-doom` `f95ae448`,
+60 frames were 28.92 ms render, 16.75 ms present, 0.27 ms palette,
+45.93 ms/frame, about 21.8 frames/s. `demo1` remains the letterbox
+gate (five window programs, `present switches 5`). `WD24X_DOOM_FB=mmap`
+still exists and is not what the script sets.
+
+## Order
+
+One script at a time. `/proc/fb` empty, no X socket, no `wd24adv` in
+`/proc/modules`. Copy the script next to its env file and run it with
+`sh`. The Doom script also needs `s6d-desktop.env` in that same
+directory. Do not export `WD24X_MOCK`.
+
+1. Desktop, after the new module and `wd24x-xcmp` are pinned.
+   `sh /tmp/s6d-desktop-run.sh`
+   Xfbdev `:1 -nolisten tcp -noreset -fb /dev/fb0`, then the glyph
+   client (indices 0 and 15), then QueryColors against
+   `/proc/wd24adv/cmap`. Trial 180. Pass is all of:
+   `WD24X-GLYPH shadow 640x480x8 marks 5 match 5 ctrl 1`
+   `WD24X-XCMAP entries 256 shift10 1`
+   `WD24X-CMAP-CACHE entries 256 shift10 1`
+   `WD24X-DESKTOP-RUN cmap match 256`
+   `wd24adv live: trial expiry -> 0`
+   `readback mismatches 0`
+   `in_text 1`
+   `WD24X-DESKTOP-RUN done`
+   This is not a long-lived X session and not a panel reading of hue.
+
+2. Doom timedemo, after the new module and `wd24x-doom` are pinned.
+   Do not use `fdf30c77` for this. `sh /tmp/s6d-doom-run.sh timedemo13h`
+   One insmod, `mode=320x200-8 present_mode=13h`, trial 600. Input
+   stays off. Sound is off. `screenblocks` 10, `detaillevel` 0.
+   Pass adds
+   `WD24X-DOOM fb ioctl 320 200`,
+   `WD24X-DOOM blit direct 64000`,
+   `WD24X-DOOM present switches 0`,
+   `WD24X-DOOM palette put 256`,
+   the gametics line, and `WD24X-DOOM-RUN restore mismatches 0`.
+   Faults stay 0. The thrash latch stays clear. The script rmmods
+   when Doom exits. It does not wait out the trial.
+
+3. Normal play, only while someone is watching the panel.
+   `sh /tmp/s6d-doom-run.sh eyes`
+   That one sets `WD24X_DOOM_INPUT=tty`. It does not call `KDSETMODE`.
+   Quit from the keyboard if the keys work. If they do not, the trial
+   still ends the mode at 600s.
+
+## If it stops
+
+The script's `stop` line is the reason. Do not insmod again over a
+loaded module, and do not start the other script until the console
+line is VGA+ bind 1 and `/proc/fb` is empty.
+
+If the shell still answers and the trial has not expired, wait. Do not
+kill `-9` a mapped client unless the script already did: `SIGKILL`
+skips the server's `KD_TEXT` ioctl. The module trial is the text
+restore. `rmmod` after a clean script prints `RM=0`.
+
+If the shell is dead, that is the power-cycle. It is the one step that
+is not on the serial line.

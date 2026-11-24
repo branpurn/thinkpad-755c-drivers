@@ -10,7 +10,8 @@
 #include "wd24adv_s6.h"
 
 #define LOG(s, ...) do { if ((s)->loglen < WD24S6_LOG) (s)->loglen += \
-	snprintf((s)->log + (s)->loglen, WD24S6_LOG - (s)->loglen, __VA_ARGS__); } while (0)
+	snprintf((s)->log + (s)->loglen, WD24S6_LOG - (s)->loglen, __VA_ARGS__); \
+} while (0)
 
 static const char *const resn[] = { "NOT RUN", "OK", "SPLIT ONLY", "RW ONLY",
 	"NO DUAL WINDOW", "ENTRY CHECK", "REGISTER READBACK", "MEMORY",
@@ -27,7 +28,8 @@ static const struct { u8 bank; u16 off; const char *n; } R[WD24S6_NREG] = {
 	{ WD24S6_Y, 0x2000, "Y+2000" }, { WD24S6_X, 0x8000, "X+8000" },
 	{ WD24S6_X, 0x1000, "X+1000" },
 	/* not used by a working chip; saved so that a chip which ignores PR1 b3
-	 * or PR31 b7 (writes then land in X) is still restored exactly */
+	 * or PR31 b7 (writes then land in X) is still restored exactly
+	 */
 	{ WD24S6_X, 0x0000, "X+0000" }, { WD24S6_X, 0x2000, "X+2000" },
 };
 
@@ -68,7 +70,8 @@ static int wr(struct wd24s6 *s, enum wd24_rf rf, u8 idx, u8 v, const char *n)
 /* SR06 lock step.  on: unlock to (BIOS & EFh) | 48h; off: relock to BIOS.
  * Each write is read back by the guard layer (bits 3:0 + index width); the
  * index width is read again here and logged.  Returns 0 if the lock is in
- * the requested state. */
+  * the requested state.
+  */
 static int lockstep(struct wd24s6 *s, bool on)
 {
 	const struct wd24s6_io *io = s->io;
@@ -145,7 +148,8 @@ void wd24s6_run2(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save, bool ho
 	io->open(io->priv, true);
 
 	/* E2: PR31 is readable only unlocked: unlock, read, relock.  The only
-	 * writes before the entry decision are this SR06 pair. */
+	 * writes before the entry decision are this SR06 pair.
+	 */
 	LOG(s, "E2 PR31 entry read (SR06 unlock/relock only)\n");
 	err = lockstep(s, true);
 	if (!err)
@@ -180,12 +184,14 @@ void wd24s6_run2(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save, bool ho
 	LOG(s, "saved 7 x 4 KiB: Y+0000 Y+1000 Y+2000 X+8000 X+1000 X+0000 X+2000\n");
 
 	/* prefill (single window) and check memory works */
-	if ((err = wr(s, WD24_GR, WD24_GR_PR0A, WD24S6_Y, "PR0A")))
+	err = wr(s, WD24_GR, WD24_GR_PR0A, WD24S6_Y, "PR0A");
+	if (err)
 		goto reg;
 	put_pat(s, 0x0000, 1);
 	put_pat(s, 0x1000, 2);
 	i = cmp_pat(s, 0x0000, 1) + cmp_pat(s, 0x1000, 2);
-	if ((err = wr(s, WD24_GR, WD24_GR_PR0A, WD24S6_X, "PR0A")))
+	err = wr(s, WD24_GR, WD24_GR_PR0A, WD24S6_X, "PR0A");
+	if (err)
 		goto reg;
 	put_pat(s, 0x8000, 3);
 	put_pat(s, 0x1000, 4);
@@ -199,14 +205,16 @@ void wd24s6_run2(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save, bool ho
 	LOG(s, "prefill: 4 x 4 KiB verified (single window)\n");
 
 	/* P1: PR0B */
-	if ((err = wr(s, WD24_GR, WD24_GR_PR0B, WD24S6_Y, "PR0B")))
+	err = wr(s, WD24_GR, WD24_GR_PR0B, WD24S6_Y, "PR0B");
+	if (err)
 		goto reg;
 	s->rb_pr0b = io->rd(io->priv, WD24_GR, WD24_GR_PR0B);
 	LOG(s, "P1 PR0B readback %02x\n", s->rb_pr0b);
 
 	/* P2: PR1 b3 -> split */
 	pr1set = true;
-	if ((err = wr(s, WD24_GR, WD24_GR_PR1, s->pr1 | WD24_PR1_PR0B, "PR1")))
+	err = wr(s, WD24_GR, WD24_GR_PR1, s->pr1 | WD24_PR1_PR0B, "PR1");
+	if (err)
 		goto reg;
 	s->rb_pr1_on = io->rd(io->priv, WD24_GR, WD24_GR_PR1);
 	LOG(s, "P2 PR1 readback %02x\n", s->rb_pr1_on);
@@ -226,10 +234,12 @@ void wd24s6_run2(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save, bool ho
 		goto restore;
 	}
 	pr1set = false;
-	if ((err = wr(s, WD24_GR, WD24_GR_PR0A, WD24S6_Y, "PR0A")))
+	err = wr(s, WD24_GR, WD24_GR_PR0A, WD24S6_Y, "PR0A");
+	if (err)
 		goto reg;
 	s->v_lo = cmp_pat(s, 0x0000, 5);
-	if ((err = wr(s, WD24_GR, WD24_GR_PR0A, WD24S6_X, "PR0A")))
+	err = wr(s, WD24_GR, WD24_GR_PR0A, WD24S6_X, "PR0A");
+	if (err)
 		goto reg;
 	s->v_hi = cmp_pat(s, 0x8000, 6);
 	s->split_ok = !s->d_lo && !s->d_hi && !s->v_lo && !s->v_hi &&
@@ -239,10 +249,12 @@ void wd24s6_run2(struct wd24s6 *s, const struct wd24s6_io *io, u8 *save, bool ho
 
 	/* U + P3: unlock, PR31 b7 -> read PR0A (X), write PR0B (Y) */
 	unl = true;
-	if ((err = lockstep(s, true)))
+	err = lockstep(s, true);
+	if (err)
 		goto reg;
 	pr31set = true;
-	if ((err = wr(s, WD24_SR, WD24_SR_PR31, s->pr31 | WD24_PR31_RWSPLIT, "PR31")))
+	err = wr(s, WD24_SR, WD24_SR_PR31, s->pr31 | WD24_PR31_RWSPLIT, "PR31");
+	if (err)
 		goto reg;
 	s->rb_pr31_on = io->rd(io->priv, WD24_SR, WD24_SR_PR31);
 	LOG(s, "P3 PR31 readback %02x\n", s->rb_pr31_on);
@@ -372,7 +384,8 @@ reg:
 /* ---- model ------------------------------------------------------------ */
 /* lock: DS 14.1 pattern x1x01xxx (fault lock_exact48: 86Box, exactly 48h).
  * Locked: SR07+ read 00h (755C live) or FFh (locked_ff, 86Box), writes
- * ignored.  SR06 reads back bits 3:0 only (DS table 6-8 / live 4F -> 0F). */
+  * ignored.  SR06 reads back bits 3:0 only (DS table 6-8 / live 4F -> 0F).
+  */
 static bool m_unl(const struct wd24s6_model *m)
 {
 	u8 v = m->sr[0x06];
@@ -417,7 +430,8 @@ static int m_wr(void *priv, enum wd24_rf rf, u8 idx, u8 v)
 
 	m->nreg++;
 	/* the guard rules, restated: b3 only while open; b7 and the SR06
-	 * unlock value only while open and inside the lock step */
+	 * unlock value only while open and inside the lock step
+	 */
 	if (rf == WD24_GR && idx == 0x0b && (v & 0x08) && !m->open)
 		return -1;
 	if (rf == WD24_SR && idx == 0x11 && (v & 0x80) && !(m->open && m->lock_open))
@@ -493,7 +507,8 @@ void wd24s6_model_init(struct wd24s6_model *m, u8 *vram1m)
 	for (i = 0; i < 0x100000; i++)
 		vram1m[i] = (u8)(i * 13 + (i >> 12));
 	/* the 640x480-8 trial state: PR1 C5h (POST trace), PR31 5Dh, GR06 05h,
-	 * SR06 0Fh = BIOS value, locked (trial mode ends "SR06 = saved") */
+	 * SR06 0Fh = BIOS value, locked (trial mode ends "SR06 = saved")
+	 */
 	m->gr[0x06] = 0x05;
 	m->gr[0x0b] = 0xc5;
 	m->sr[0x06] = 0x0f;

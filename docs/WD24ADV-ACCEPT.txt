@@ -1,0 +1,42 @@
+Release acceptance. Offline checklist. A line is accepted only after
+it is seen on the 755C serial log. This file does not claim that.
+
+Build the module on the floppy tree. Vermagic must be
+`6.18.57-tc755x mod_unload 486`. Pin the `.ko` and `wd24x-doom`
+before the first insmod. Doom is `WD24X_DOOM_FAST=all` with
+`WD24X_DOOM_DETAIL` unset. The morning order and the script hashes
+are `docs/s6d-morning.txt` and `docs/s6d-morning-SHA256SUMS`.
+
+## Modes
+
+- 640x480-8, 640x400-8, and 320x200-8 are the PROVEN rows in
+  `modules/wd24adv/README.md`. 320x240-8x and the virtual-800 mode
+  stay refused.
+- A mode that is not in that table is not a pass.
+- `present_mode` stays empty except the Doom scripts, which set `13h`.
+
+## Session
+
+- `timedemo13h` finishes inside trial 600 and rmmods itself. Pass is
+  the gametics line, `blit direct 64000`, `present switches 0`,
+  `restore mismatches 0`.
+- `timedemo13hmap` and `timedemo13hcopy` use the same module and the
+  same binary. A slower gametics line is still a pass. Faults stay 0
+  and switches stay 0.
+- Desktop: glyph, xcmp `shift10 1`, cache `shift10 1`, `busy 1` and
+  `frozen 0` while X holds `/dev/fb0`, `busy 0` and `frozen 1` after
+  X exits, `cmap match 256`, then `done`.
+- fbcon, accel (`match 1024`), scroll (`thrash 0`), and cursor
+  (`restored 1`) each end on their done line before the next insmod.
+
+## Recovery
+
+- rmmod prints `live text: 0` and `mismatches 0`. A `readback:` line
+  is a fail.
+- Do not insmod while `wd24adv` is still in `/proc/modules`.
+- A blitter timeout does not rmmod. Power-cycle. See USE.
+- `settle_blank` stays 0 for this checklist. It is the experiment in
+  `docs/s6d-startup.txt`.
+- Register writes, masks, and restore are `docs/WD24ADV-REGS.txt`.
+  No write outside that table.
+- Phase 2 and phase 3 stay on `fdf30c77`. Thrash bound stays 32.

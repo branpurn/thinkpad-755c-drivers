@@ -596,8 +596,8 @@ kept-no-effect, FFh variants -> NOT HELD; re-unlock refused -> RESTORE FAIL,
 relocked, guard closed; PR31 b7 ignored -> not OK; v2 on a lock-clear chip
 still OK); other host suites unchanged; QEMU qemu-wd24adv-s6.py 24/24 (v2 19 + S6c dry-run, s6c-without-s6 refusal, real .ko zero data writes, fake OK, rmmod).
 
-Copy route (as v2): box -> grok-bot-server -> Pop ~/wd24adv-s6c.ko, check
-sha on Pop, then `~/755c-install/xkit/send1.sh ~/wd24adv-s6c.ko /tmp/wd24adv.ko`,
+Copy route (as v2): box -> relay host -> serial host ~/wd24adv-s6c.ko, check
+sha on the serial host, then `~/755c-install/xkit/send1.sh ~/wd24adv-s6c.ko /tmp/wd24adv.ko`,
 then on the 755C `sha256sum /tmp/wd24adv.ko` must start 96a6b527.
 
 Lines (separate approval; plog each; one per call, wait for the prompt; no
@@ -664,8 +664,8 @@ tool sha256 `de6a9b34c9855fec53508a2e3859d0c77c1296c2dfad549942b408e6690f44f7`.
 Tests: host test_s6b + all suites; QEMU qemu-wd24adv-s6b.py,
 qemu-wd24adv.py (trial=601 refused), qemu-wd24adv-s6.py, qemu-wd24adv-s3.py.
 
-Copy route: box -> grok-bot-server -> Pop ~/wd24adv-s6b.ko and
-~/wd24s6b-test, check both shas on Pop, then
+Copy route: box -> relay host -> serial host ~/wd24adv-s6b.ko and
+~/wd24s6b-test, check both shas on the serial host, then
 `~/755c-install/xkit/send1.sh ~/wd24adv-s6b.ko /tmp/wd24adv.ko` and
 `~/755c-install/xkit/send1.sh ~/wd24s6b-test /tmp/wd24s6b-test`; on the
 755C `sha256sum /tmp/wd24adv.ko /tmp/wd24s6b-test` must start f73f8e1c /

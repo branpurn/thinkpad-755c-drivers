@@ -1,0 +1,51 @@
+Load, unload, recovery. Not a hardware result.
+
+A status line typed from another machine must not let that machine's
+shell expand $?. Send the quotes, and read the number the 755C prints:
+
+    echo 'GO5_RC=$?'
+
+The module vermagic must be `6.18.57-tc755x mod_unload 486`. A module
+built on another kernel will not load. This tree's cloud build has no
+Module.symvers for that kernel, so it does not produce the .ko.
+
+Load, dry-run (no register writes). This is what the extension's
+startup script does. It is safe for onboot.lst after modutils.tcz:
+
+    tce-load -i modutils.tcz
+    tce-load -i wd24adv.tcz
+
+A live session is not part of onboot. It is a separate insmod, for
+example:
+
+    insmod wd24adv.ko dryrun=0 live=1 mode=320x200-8 trial=180 s6d=1 \
+        s6d_fbcon=1 s6d_bind=0 present_mode=13h
+
+Unload:
+
+    rmmod wd24adv
+
+If rmmod says the module is in use, a framebuffer console is still
+bound. Write 0 to that vtcon's bind file (that is vt_unbind, then
+do_unbind_con_driver), then rmmod again:
+
+    echo 0 > /sys/class/vtconsole/vtcon1/bind
+
+Recovery: the trial timer runs the same text restore as rmmod. If the
+picture is wrong and the shell still answers, wait for the trial or
+write `text` to `/proc/wd24adv/control`. If the console is stuck in
+the fbcon latch, the driver schedules one text restore and does not
+keep printing. If the shell does not answer, the serial console is
+the way out. Do not power-cycle as the first step if the serial shell
+still runs.
+
+Suspend: this module has no struct device, so the kernel APM driver
+does not call it. The verified hand-back is the text restore already
+used by the trial and by rmmod. Resume does not re-enter graphics by
+itself. That is deliberate. wd90c24fb has the APM callbacks; this
+module does not copy them without a hardware suspend measurement.
+
+Known limits: no VBE, so Xvesa cannot set a mode. Xfbdev mmaps the
+framebuffer and does not call the BITBLT ops. fbcon does. CRTC sync
+registers are not rewritten for DPMS; blank is sequencer SR01 bit 5.
+No Win98 parity is claimed.

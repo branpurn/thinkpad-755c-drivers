@@ -119,11 +119,11 @@ acrhtox  X)- U<P/ d|e|v /encuhlol  N>O/-tXm
 user@host:~# p/xautostart.log 2>&1 & )
 /bin/sh: syntax error: unexpected ")"
 user@host:~# 
-FOLLOW-UP (owner approval t377u, 2026-11-05 02:3x UTC): L9 then L10 each sent ALONE
+FOLLOW-UP (owner approval, 2026-11-05 02:3x UTC): L9 then L10 each sent ALONE
 - L9 startx returned to the prompt; L10: Xfbdev 938, X-UP.
 - Baseline wd24probe3: RC=19, 3CC=E3 GR0F=05 GR0E=01 CR11=8C CR29=85 CR34=A0 PR18=C7 PR19=54 SR06=0F, result=ok restore_fail=0. Matches S4 baseline.
 
-2026-11-04 21:33:35 EST  S5 L9 (resend, approved t377u, alone): startx
+2026-11-04 21:33:35 EST  S5 L9 (resend, approved, alone): startx
 2026-11-04 21:33:35 EST  slow: ( PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; HOME=/root; export PATH HOME; ( sleep 5; exec startx ) </dev/null >/tmp/xautostart.log 2>&1 & ) CR
 2026-11-04 21:34:15 EST  S5 L10 (alone): wait X
 2026-11-04 21:34:15 EST  slow: i=0; while ! pidof Xfbdev >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; sleep 5; pidof Xfbdev && echo X-UP || echo NO-X CR
