@@ -41,9 +41,10 @@
  * pages that other page is the one the beam is still finishing, for
  * up to one 70 Hz field. This step keeps three pages, so the page
  * drawn next is neither the one just published nor the one before
- * it. The flip waits for bit 3 only when that next page is still
- * the one on the beam. A free page does not stall the frame. A
- * start write that does not wait can meet the beam mid-line.
+ * it. The start is still loaded at retrace. A write that is not in
+ * retrace, or one overwritten before bit 3 has been seen low and
+ * then high, never becomes the picture. The pages run showed that:
+ * CR0C 0x80 was logged and the blue page was not.
  */
 #ifndef WD24ADV_FLIP_H
 #define WD24ADV_FLIP_H
@@ -165,9 +166,58 @@ static inline void wd24_flip_beam_arm(struct wd24_flip_beam *b,
 	}
 }
 
+/* The CRTC loads CR0C/CR0D at vertical retrace (datasheet 10.12).
+ * 3DA bit 3 is that retrace (datasheet 15.8). owed is 1 after a
+ * start write. The write has latched only once bit 3 has been 0
+ * and then 1 since the write, so the high sample is a later
+ * retrace. Unmap and the next start write wait for that.
+ */
+struct wd24_flip_latch {
+	int owed;
+	int saw_low;
+};
+
+static inline void wd24_flip_latch_init(struct wd24_flip_latch *s)
+{
+	s->owed = 0;
+	s->saw_low = 0;
+}
+
+static inline void wd24_flip_latch_arm(struct wd24_flip_latch *s)
+{
+	s->owed = 1;
+	s->saw_low = 0;
+}
+
+/* 1 when the owed start has latched, or nothing is owed. */
+static inline int wd24_flip_latch_sample(struct wd24_flip_latch *s, int bit3)
+{
+	if (!s->owed)
+		return 1;
+	if (!bit3) {
+		s->saw_low = 1;
+		return 0;
+	}
+	if (s->saw_low) {
+		s->owed = 0;
+		s->saw_low = 0;
+		return 1;
+	}
+	return 0;
+}
+
+/* 1 when the start may be written with no spin: nothing is owed,
+ * and bit 3 is already set so the write is in retrace.
+ */
+static inline int wd24_flip_skip_wait(const struct wd24_flip_latch *s, int bit3)
+{
+	return s && !s->owed && bit3;
+}
+
 /* latched is 1 after a field (or an in-retrace write) has moved the
  * beam onto the page this call publishes. old is the page that was
  * scanning before that. go5 aimed the CPU at old before the sample.
+ * This does not decide the retrace wait. The latch above does.
  */
 static inline int wd24_flip_draw_ok(unsigned int show, unsigned int cpu,
 				    unsigned int old, int latched)

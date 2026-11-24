@@ -89,6 +89,8 @@ static int fs_prev_tic;
 static uint64_t fs_prev;
 static struct wd24x_doom_fs fs;
 extern int gametic;
+static unsigned hud_show, hud_cr0c, hud_pr0a;
+static void arm_signals(void);
 
 static int time_of(void)
 {
@@ -157,6 +159,83 @@ static void fs_dump(void)
 				fs.hist[i]);
 	}
 	fprintf(stderr, "\n");
+	{
+		unsigned skip = 0, wait = 0, to = 0;
+		const char *path = getenv("WD24X_WD24_LIVE");
+		FILE *fp;
+		char buf[256];
+
+		if (!path || !path[0])
+			path = "/proc/wd24adv/live";
+		fp = fopen(path, "r");
+		if (fp) {
+			while (fgets(buf, sizeof(buf), fp)) {
+				unsigned s, w, t;
+
+				if (sscanf(buf, WD24_FLIP_COUNT_SCAN, &s, &w, &t) == 3) {
+					skip = s;
+					wait = w;
+					to = t;
+				}
+			}
+			fclose(fp);
+		}
+		fprintf(stderr,
+			"WD24X-DOOM framestats flip skip %u wait %u latch_to %u\n",
+			skip, wait, to);
+	}
+	fflush(stderr);
+}
+
+/* One running line so a SIGINT before exit still has counts. */
+static void fs_tick(void)
+{
+	if (!fs_on)
+		return;
+	if (fs_presents != 1 && (fs_presents % 35u) != 0)
+		return;
+	fprintf(stderr,
+		"WD24X-DOOM framestats tick frames %u intervals %u over1 %u over2 %u\n",
+		fs_presents, fs.frames, fs.over1, fs.over2);
+	fflush(stderr);
+}
+
+/* Rows 168..199 are the 32-pixel status bar when screenblocks is 10.
+ * The hash is the engine buffer before the copy. The copy writes all
+ * 64000 of that buffer into the CPU window. db5d913.. the flip change
+ * did not touch that copy, a dirty rectangle, or a VRAM clear.
+ * run is the longest identical-byte run. A HUD is long runs. Noise
+ * in the source is a short run. Noise only on the glass, with a long
+ * run here, is the scan reading a different bank than this buffer.
+ */
+static void hud_src_line(unsigned frame)
+{
+	const uint8_t *p;
+	unsigned i, nz = 0, run = 1, best = 1;
+	unsigned hash = 2166136261u;
+
+	if (!fs_on || !DG_ScreenBuffer)
+		return;
+	if (frame != 1 && (frame % 35u) != 0)
+		return;
+	p = (const uint8_t *)DG_ScreenBuffer + 168u * 320u;
+	for (i = 0; i < 32u * 320u; i++) {
+		hash ^= p[i];
+		hash *= 16777619u;
+		if (p[i])
+			nz++;
+		if (i && p[i] == p[i - 1]) {
+			run++;
+			if (run > best)
+				best = run;
+		} else {
+			run = 1;
+		}
+	}
+	fprintf(stderr,
+		"WD24X-DOOM hud src frame %u rows 168 199 hash 0x%08x nz %u run %u show %u cr0c %02x pr0a %02x\n",
+		frame, hash, nz, best, hud_show, hud_cr0c, hud_pr0a);
+	fflush(stderr);
 }
 
 static void time_line(void)
@@ -564,6 +643,9 @@ static int flip_once(void)
 		printf("WD24X-DOOM flip latched 1\n");
 		flip_said = 1;
 	}
+	hud_show = fr.show;
+	hud_cr0c = fr.cr0c;
+	hud_pr0a = fr.pr0a;
 	return 0;
 }
 
@@ -573,6 +655,10 @@ void DG_Init(void)
 		fs_on = 1;
 		wd24x_fs_clear(&fs);
 		atexit(fs_dump);
+		/* Timedemo does not own the tty, so SIGINT would
+		 * otherwise leave no histogram.
+		 */
+		arm_signals();
 	}
 	const char *present_s = getenv("WD24X_DOOM_PRESENT");
 	const char *dev;
@@ -836,6 +922,8 @@ void DG_DrawFrame(void)
 		fs_have_prev = 1;
 		fs_prev_tic = gametic;
 		fs_have_tic = 1;
+		fs_tick();
+		hud_src_line(frames);
 	}
 	if (sum_frames)
 		present_sum = fnv(present, WD24X_DOOM_FRAME);

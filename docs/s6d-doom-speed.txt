@@ -214,20 +214,26 @@ and returned at once, so Doom drew the page the beam was still
 finishing. There are now three pages. The page drawn next is neither
 the one just published nor the one before it. PR0A 0x20 is byte
 131072 by the same shift as 0x10, and CR0C 0x80 is that byte in
-doubleword units. The ioctl waits for bit 3 only when the CPU page
-is still the one on the beam. With three pages that is not the usual
-case: the page drawn next is free, and the flip does not stall for a
-field. A start write that does not wait can still meet the beam
-mid-line.
+doubleword units. The ioctl writes that start while bit 3 is set.
+A start that is still owed is left alone until bit 3 has been seen
+low and then high, including the unmap that puts CR0C back to 0.
+The pages run on the build that skipped this wait logged CR0C 0x80
+and then unmap CR0C 0x00, and the blue page never appeared.
 `WD24X_DOOM_VSYNC` is still only echoed. The first flip also
 unlocks (four writes). Later flips are CR0C, CR0D, and PR0A. Doom
 issues one flip before the first pixel so that pixel is not stored
 on the scanned page. That is not a 64000-byte copy.
 `sh docs/s6d-doom-run.sh timedemo13hflip` is the map path with flip
 on. `WD24X_DOOM_FRAMESTATS=1` adds a CLOCK_MONOTONIC interval
-histogram and a render / copy / flip split on stderr at exit.
-Unset, those samples are not taken. `sh docs/s6d-go7-run.sh` is
-that timedemo plus about a minute of E1M1 with the switch on.
+histogram and a render / copy / flip split on stderr at exit,
+a running line every 35 presents, and the same histogram on
+SIGINT. It also prints a hash of source rows 168..199 (the
+status bar at screenblocks 10) and the flip's show/cr0c/pr0a.
+That hash is the engine buffer. The copy writes all 64000 of
+it. A long identical-byte run is a normal bar. A short run is
+noise already in the source. Unset, those samples are not taken.
+`sh docs/s6d-go7-run.sh` is that timedemo plus about a minute of
+E1M1 with the switch on.
 `sh docs/s6d-scanpat-run.sh pages` is the short check: red with
 a white block at the top left, green with one at the top right, blue
 with one in the middle, and the three register lines. Do that before

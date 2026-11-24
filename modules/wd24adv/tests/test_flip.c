@@ -78,6 +78,21 @@ int main(void)
 		T(!wd24_flip_beam_advanced(19) && wd24_flip_beam_advanced(20),
 		  "field edge is 20 ms");
 	}
+	{
+		struct wd24_flip_latch s;
+
+		wd24_flip_latch_init(&s);
+		T(wd24_flip_latch_sample(&s, 0), "nothing owed is latched");
+		T(wd24_flip_skip_wait(&s, 1), "no spin when bit 3 is already set");
+		T(!wd24_flip_skip_wait(&s, 0), "active display still waits");
+		wd24_flip_latch_arm(&s);
+		T(!wd24_flip_latch_sample(&s, 1), "the write's own retrace is not the latch");
+		T(!wd24_flip_skip_wait(&s, 1), "an owed start is not skipped");
+		T(!wd24_flip_latch_sample(&s, 0), "leaving retrace is not the latch yet");
+		T(wd24_flip_latch_sample(&s, 1), "the next retrace latches the start");
+		T(!s.owed, "the owed start is clear");
+		T(wd24_flip_skip_wait(&s, 1), "a latched start may be written in retrace");
+	}
 	printf("test_flip: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;
 }

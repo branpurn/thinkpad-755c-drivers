@@ -369,6 +369,10 @@ static const struct proc_ops modes_ops = {
 static const struct proc_ops self_ops = {
 	.proc_read = self_read, .proc_lseek = default_llseek };
 
+static void live_note_flip_counts(void);
+static int wd24_wait_vsync(void);
+static int flip_wait_owed(int *spun);
+
 static ssize_t live_read(struct file *f, char __user *b, size_t n, loff_t *p)
 {
 	/* Non-blocking: a draw or mode set may hold hw_lock. A blocked
@@ -382,6 +386,7 @@ static ssize_t live_read(struct file *f, char __user *b, size_t n, loff_t *p)
 
 	if (!hw_try())
 		return rd(b, n, p, busy, sizeof(busy) - 1);
+	live_note_flip_counts();
 	r = rd(b, n, p, live_txt, live_len);
 	hw_rel();
 	return r;
@@ -2033,9 +2038,8 @@ static struct wd24s6b *s6d_b;
 static struct fb_info *s6d_info;
 static bool s6d_armed, s6d_busy, s6d_13h;
 static unsigned int flip_cpu;
-static struct wd24_flip_beam flip_beam;
-static unsigned long flip_arm_jiff;
-static int flip_arm_set;
+static struct wd24_flip_latch flip_latch;
+static unsigned int flip_skip, flip_wait, flip_latch_to;
 static int flip_used;
 static unsigned int flip_scans;
 static int flip_hot;
@@ -2240,7 +2244,23 @@ static void s6d_vma_close(struct vm_area_struct *vma)
 	 */
 	if (flip_used && hw && hw->saved) {
 		int rerr;
+		int spun = 0;
 
+		/* The last start has to be seen on 3DA bit 3 before
+		 * these registers are put back, and the restore is
+		 * itself a start write, so it goes out while bit 3
+		 * is set. The pages run wrote CR0C 0x80 and unmap
+		 * put 0 back in the same log step. A timeout still
+		 * restores, so text mode can return.
+		 */
+		(void)flip_wait_owed(&spun);
+		if (wd24_retrace_bit() != 1) {
+			if (wd24_wait_vsync())
+				flip_latch_to++;
+			spun = 1;
+		}
+		if (spun)
+			flip_wait++;
 		hw->be->begin(hw);
 		rerr = wd24_write(hw, WD24_CR, 0x0c, 0x00);
 		if (!rerr)
@@ -2252,8 +2272,7 @@ static void s6d_vma_close(struct vm_area_struct *vma)
 		hw->be->end(hw);
 		flip_used = 0;
 		flip_cpu = 0;
-		wd24_flip_beam_init(&flip_beam);
-		flip_arm_set = 0;
+		wd24_flip_latch_init(&flip_latch);
 		flip_scans = 0;
 		flip_hot = 0;
 		if (rerr)
@@ -3132,8 +3151,9 @@ static int s6d_present_13h(const u8 *src, u32 *nsw)
  * lock again. Drop hw before console_lock: the trial worker takes
   * console_lock, then hw_lock.
   */
-/* 3DA bit 3, capped. Used only when the CPU page is still scanned. */
+/* 3DA bit 3, capped. The start write and the unmap restore use it. */
 static int wd24_wait_vsync(void);
+static int flip_wait_owed(int *spun);
 
 /* One read of 3DA bit 3. 1 in retrace, 0 in active display, -1 if the
  * port is not there. Does not spin.
@@ -3145,27 +3165,74 @@ static int wd24_retrace_bit(void)
 	return !!(hw->io->inb(hw->io->priv, 0x3da) & 0x08);
 }
 
-static unsigned int flip_elapsed_ms(void)
+/* Caller holds hw_lock. 0 when the owed start has latched (or none
+ * is owed). -ETIMEDOUT when bit 3 does not show the low-then-high
+ * edge within 100 ms. *spun is 1 if this call looped.
+ */
+static int flip_wait_owed(int *spun)
 {
-	unsigned long d;
+	unsigned long deadline;
 
-	if (!flip_arm_set)
+	*spun = 0;
+	if (!flip_latch.owed)
 		return 0;
-	d = jiffies - flip_arm_jiff;
-	/* 32-bit jiffies: do not multiply a long gap by 1000 first. */
-	return (unsigned int)((d / HZ) * 1000ul + (d % HZ) * 1000ul / HZ);
+	if (!hw || !hw->io || !hw->io->inb)
+		return -ENODEV;
+	deadline = jiffies + HZ / 10;
+	for (;;) {
+		int bit = wd24_retrace_bit() == 1;
+
+		if (wd24_flip_latch_sample(&flip_latch, bit))
+			return 0;
+		*spun = 1;
+		if (time_after(jiffies, deadline)) {
+			flip_latch_to++;
+			return -ETIMEDOUT;
+		}
+		cpu_relax();
+	}
 }
 
-/* Caller holds hw_lock. Does not take console_lock. The wait is
- * 3DA bit 3 (datasheet 15.8) and only when wd24_flip_needs_wait says
- * the CPU page is still on the beam. A free page skips the wait.
- * CR0C/CR0D are still the refresh start (datasheet 10.12).
+static void live_note_flip_counts(void)
+{
+	char line[96];
+	unsigned int i = 0;
+	int n;
+
+	if (!live_txt)
+		return;
+	while (i < live_len) {
+		unsigned int j = i;
+
+		while (j < live_len && live_txt[j] != '\n')
+			j++;
+		if (j < live_len)
+			j++;
+		if (j - i >= 10 && !memcmp(live_txt + i, "flip skip ", 10)) {
+			memmove(live_txt + i, live_txt + j, live_len - j);
+			live_len -= j - i;
+			continue;
+		}
+		i = j;
+	}
+	n = scnprintf(line, sizeof(line), WD24_FLIP_COUNT_SCAN "\n",
+		      flip_skip, flip_wait, flip_latch_to);
+	if (n > 0 && live_len + (unsigned int)n < TXT_MAX) {
+		memcpy(live_txt + live_len, line, (size_t)n);
+		live_len += (unsigned int)n;
+	}
+}
+
+/* Caller holds hw_lock. Does not take console_lock. CR0C/CR0D are
+ * the refresh start (datasheet 10.12) and are written while 3DA bit
+ * 3 is set (datasheet 15.8). The previous start is left in place
+ * until that bit has been seen low, then high.
  */
 static int s6d_flip_now(struct wd24s6d_flip *req)
 {
 	struct wd24_flip_step step;
 	int err = 0;
-	int waited = 0;
+	int spun = 0;
 	int bit;
 
 	if (!s6d_13h || !s6d_armed || !hw || hw->in_text || !s6d_st ||
@@ -3175,16 +3242,18 @@ static int s6d_flip_now(struct wd24s6d_flip *req)
 		return -EINVAL;
 	wd24_flip_step(flip_cpu, &step);
 	req->late = 0;
-	wd24_flip_beam_note(&flip_beam, flip_elapsed_ms());
+	err = flip_wait_owed(&spun);
+	if (err)
+		return err;
 	bit = wd24_retrace_bit();
-	if (wd24_flip_needs_wait(&flip_beam, step.show, step.cpu)) {
+	if (bit != 1) {
 		err = wd24_wait_vsync();
-		if (err)
+		spun = 1;
+		if (err) {
+			flip_wait++;
+			flip_latch_to++;
 			return err;
-		waited = 1;
-	} else if (bit == 1) {
-		/* Already in retrace, so the start write is not mid-line. */
-		waited = 1;
+		}
 	}
 	hw->be->begin(hw);
 	if (!flip_hot)
@@ -3198,10 +3267,12 @@ static int s6d_flip_now(struct wd24s6d_flip *req)
 	hw->be->end(hw);
 	if (err)
 		return err;
+	if (spun)
+		flip_wait++;
+	else
+		flip_skip++;
 	flip_cpu = step.cpu;
-	wd24_flip_beam_arm(&flip_beam, step.show, waited);
-	flip_arm_set = 1;
-	flip_arm_jiff = jiffies;
+	wd24_flip_latch_arm(&flip_latch);
 	flip_used = 1;
 	flip_hot = 1;
 	req->show = step.show;
@@ -3638,8 +3709,10 @@ static void s6d_arm(const struct wd24_mode *m)
 	s6d_scan_frame = false;
 	s6d_scan_unmap = false;
 	flip_cpu = 0;
-	wd24_flip_beam_init(&flip_beam);
-	flip_arm_set = 0;
+	wd24_flip_latch_init(&flip_latch);
+	flip_skip = 0;
+	flip_wait = 0;
+	flip_latch_to = 0;
 	flip_scans = 0;
 	flip_hot = 0;
 	s6d_latch_noted = 0;
@@ -3782,7 +3855,8 @@ static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 			"cmap_param %d published %d frozen %d\n"
 			"present frames %u last %u total %u ns %llu copy_ns %llu mode %s\n"
 			"accel %u gate %u match %u\n"
-			"cursor %u show %u regs %u vram %u restored %u\n",
+			"cursor %u show %u regs %u vram %u restored %u\n"
+			"flip skip %u wait %u latch_to %u\n",
 			s6d_armed, s6d_st->active, s6d_st->stopping, s6d_busy,
 			s6d_st->fb_reg, s6d_info ? s6d_info->node : -1,
 			s6d_fbcon, s6d_bind,
@@ -3795,7 +3869,8 @@ static ssize_t s6d_read(struct file *f, char __user *b, size_t n, loff_t *p)
 			(unsigned long long)s6d_pf_copy_ns,
 			s6d_13h ? "13h" : "letter",
 			accel, s6d_agate, s6d_amatch,
-			cursor_gate, cur_show, cur_regs, cur_vram, cur_rest);
+			cursor_gate, cur_show, cur_regs, cur_vram, cur_rest,
+			flip_skip, flip_wait, flip_latch_to);
 	}
 	hw_rel();
 	if (len < 0)

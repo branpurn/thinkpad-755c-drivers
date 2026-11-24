@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "../../../tools/wd24-doom/wd24x-doom-framestats.h"
+#include "../wd24adv_ioctl.h"
 
 static int fails, passes;
 #define T(c, w) do { if (c) passes++; else { fails++; printf("FAIL %s\n", w); } } while (0)
@@ -43,6 +44,14 @@ int main(void)
 	T(s.render_ns == 4000 && s.copy_ns == 6000 && s.flip_ns == 5000,
 	  "split sums");
 	T(s.hist[wd24x_fs_bucket(20)] == 3, "histogram");
+	{
+		unsigned skip, wait, to;
+		const char *line = "flip skip 2 wait 40 latch_to 1\n";
+
+		T(sscanf(line, WD24_FLIP_COUNT_SCAN, &skip, &wait, &to) == 3,
+		  "live count line");
+		T(skip == 2 && wait == 40 && to == 1, "live count values");
+	}
 	printf("test_framestats: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;
 }

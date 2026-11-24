@@ -71,19 +71,14 @@ What is worth changing, and what it does not do:
   sleep, and this Doom build does not take those sleeps.
 - Do not enable PREEMPT. One CPU, Doom wants the CPU.
 
-The stall that matches "slow mo" at a similar timedemo fps is the
-13h flip. Until the free-page check, every flip waited for 3DA bit
-3 before returning. That is 0 to about 14 ms, mean about 7 ms, on
-top of a frame that was already near 50 ms. Timedemo fps counts
-gametics over wall tics, so the wait shows up as a lower fps and
-as a hitch after each presented frame. With three pages the CPU
-page is not the one on the beam, and the flip no longer waits
-unless that page is still the scanned one. A start write that
-does not wait can still flash one line. That is the pages-test
-black line, not a second register.
+The 13h flip writes CR0C/CR0D while 3DA bit 3 is set, and it does
+not write the next start, or the unmap restore, until the previous
+start has been seen to latch. Skipping that wait on the pages run
+logged CR0C 0x80 and then unmap CR0C 0x00 with the blue page never
+shown. `/proc/wd24adv/live` carries `flip skip`, `wait`, and
+`latch_to` for that.
 
 WD24X_DOOM_FRAMESTATS=1 prints the interval histogram and the
-render / copy / flip split to stderr at exit. Unset, those
-clock_gettime calls are not made. The flip time in that split is
-the ioctl, which is the retrace wait when the wait runs and a
-few port writes when it does not.
+render / copy / flip split to stderr at exit, and a short line
+every 35 presents and on SIGINT. Unset, those clock_gettime calls
+are not made. The flip time in that split is the ioctl.
