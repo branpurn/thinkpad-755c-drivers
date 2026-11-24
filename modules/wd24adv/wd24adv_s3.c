@@ -909,12 +909,27 @@ int wd24s4_kick(struct wd24s3 *s, const struct wd24s3_op *op)
 	s->host_n = 0;
 	a = in16(s, WD24S1_P_INDEX);
 	b = in16(s, WD24S1_P_INDEX);
-	if (a != b || a != WD24S2_S) {
+	if (a != b) {
 		s->prog = NULL;
 		return 1;
 	}
+	/* WD24S2_S (0x1002) is 23C0h at entry on both S1 runs. A mode
+	 * set does not leave it there, and the rectangle was refused
+	 * before any pixel was compared. A stable other value is
+	 * selected to that idle word first. The guard allows the
+	 * select once have_saved is set.
+	 */
 	s->saved = a;
 	s->have_saved = true;
+	if (a != WD24S2_S) {
+		if (sel_rb(s, WD24S2_S)) {
+			out16(s, WD24S1_P_INDEX, a & IDX_WR);
+			s->have_saved = false;
+			s->prog = NULL;
+			return 1;
+		}
+		s->saved = WD24S2_S;
+	}
 	if (snapshot(s)) {
 		out16(s, WD24S1_P_INDEX, s->saved & IDX_WR);
 		s->restored = true;

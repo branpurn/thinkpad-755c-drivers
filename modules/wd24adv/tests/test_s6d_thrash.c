@@ -39,6 +39,17 @@ int main(void)
 	CHECK(wd24s6d_thrash_note(&t, 8) == 0, "sw2");
 	CHECK(wd24s6d_thrash_note(&t, 0) == -1, "sw3 latches");
 
+	/* A stay between crossings is what a 640x480 paint does. Thirty-two
+	 * crossings with no stay is the latch. The same crossings with a
+	 * stay after each one are not.
+	 */
+	wd24s6d_thrash_init(&t, WD24S6D_THRASH_BOUND_DEFAULT);
+	for (i = 0; i < WD24S6D_THRASH_BOUND_DEFAULT + 8u; i++) {
+		CHECK(wd24s6d_thrash_note(&t, i * 16u) == 0, "cross %u", i);
+		wd24s6d_thrash_quiet(&t);
+		CHECK(t.switches == 0 && !t.latched, "stay %u", i);
+	}
+
 	/* default bound */
 	wd24s6d_thrash_init(&t, 0);
 	CHECK(t.bound == WD24S6D_THRASH_BOUND_DEFAULT, "default bound");

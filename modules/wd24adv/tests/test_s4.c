@@ -475,10 +475,20 @@ int main(void)
 		reset();
 		pattern();
 		m.ix = 0x1001;
-		CHECK(wd24s4_make_fill(&op, 16, 112, 64, 16, 0x3c) == 0, "kick refuse build");
+		CHECK(wd24s4_make_fill(&op, 16, 112, 64, 16, 0x3c) == 0, "kick select build");
 		r = wd24s4_kick(&s, &op);
-		CHECK(r == 1 && m.ndw == 0, "kick refused, no data write (%d, %d)",
-		      r, m.ndw);
+		CHECK(r == 0 && s.res == WD24S3_OK, "kick selects 1002h then fills (%d %d %s)",
+		      r, s.res, s.why ? s.why : "-");
+		CHECK(m.ix == WD24S2_S, "kick select left %04x", m.ix);
+		for (i = nbad = 0; i < 640 * 480; i++) {
+			u32 x = i % 640, y = i / 640;
+			u8 want = vram0[i];
+
+			if (y >= 112 && y < 128 && x >= 16 && x < 80)
+				want = 0x3c;
+			nbad += m.vram[i] != want;
+		}
+		CHECK(nbad == 0, "kick select pixels %u", nbad);
 	}
 
 	printf("test_s4: %d passed, %d failed\n", passes, fails);

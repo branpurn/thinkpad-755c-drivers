@@ -92,6 +92,7 @@ fi
 	if [ "${WD24X_DOOM_FLIP:-}" = "1" ]; then
 		echo "WD24X-DOOM flip env 1"
 		echo "WD24X-DOOM flip ${WD24X_MOCK_FLIP_DIGIT:-1} vsync ${WD24X_DOOM_VSYNC:-0} show 0"
+		echo "WD24X-DOOM flip latched 1"
 	fi
 if [ "${WD24X_DOOM_FB:-}" = "aperture" ] || [ "${WD24X_DOOM_FB:-}" = "aperturecopy" ]; then
 	echo "WD24X-DOOM present 13h"
@@ -272,6 +273,7 @@ grep -q "FB=aperture" "$M/doom.args" && ok || bad "flip fb"
 grep -q "FLIP=1" "$M/doom.args" && ok || bad "flip env"
 grep -q "WD24X-DOOM-RUN env flip 1" "$M/out" && ok || bad "flip echo"
 grep -q "WD24X-DOOM flip 1 vsync 0 show 0" "$M/out" && ok || bad "flip line"
+grep -q "WD24X-DOOM flip latched 1" "$M/out" && ok || bad "latched"
 grep -q "WD24X-DOOM flip 0 vsync 0" "$M/out" && bad "flip zero passed" || ok
 grep -q "WD24X-DOOM blit direct 64000" "$M/out" && bad "flip ioctl" || ok
 [ "$rc" = 0 ] && ok || bad "flip rc"

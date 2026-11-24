@@ -117,5 +117,8 @@ grep -q "stop no session" "$M/out" && bad "old session gate" || ok
 [ "$rc" != 0 ] && ok || bad "no bind rc"
 grep -q "WD24X-FBCON-RUN unbind vtcon1" "$M/out" && ok || bad "no bind unbind"
 
+grep -q wd24s6d_thrash_quiet "$ROOT/modules/wd24adv/wd24adv_main.c" && ok || bad "quiet"
+grep -q wd24s6d_thrash_quiet "$ROOT/modules/wd24adv/wd24adv_s6d_thrash.h" && ok || bad "quiet fn"
+
 echo "test_fbcon_run: $pass passed, $fail failed"
 [ "$fail" = 0 ]

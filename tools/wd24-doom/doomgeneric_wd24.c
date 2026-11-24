@@ -486,6 +486,29 @@ static int read_tty_key(unsigned char *doomkey)
 	return wd24x_keys_byte(&keys, b, doomkey);
 }
 
+/* 1 is this switch, not the page. show is the page just published.
+ * The first call is before any pixel, so show is 0 and the CPU bank
+ * is the hidden page. A log line "flip 0" was that page.
+ */
+static int flip_once(void)
+{
+	struct wd24s6d_flip fr;
+
+	memset(&fr, 0, sizeof(fr));
+	fr.vsync = do_vsync ? 1u : 0u;
+	if (ioctl(fb_fd, WD24S6D_IOC_FLIP, &fr) != 0)
+		return -1;
+	if (!flip_said) {
+		printf("WD24X-DOOM flip 1 vsync %u show %u\n",
+		       fr.vsync, fr.show);
+		printf("WD24X-DOOM flip cr0c %02x cr0d %02x pr0a %02x\n",
+		       fr.cr0c, fr.cr0d, fr.pr0a);
+		printf("WD24X-DOOM flip latched 1\n");
+		flip_said = 1;
+	}
+	return 0;
+}
+
 void DG_Init(void)
 {
 	const char *present_s = getenv("WD24X_DOOM_PRESENT");
@@ -591,6 +614,15 @@ fake_ready:
 	}
 	if (fb_aperture || fb_apcopy || use_13h)
 		printf("WD24X-DOOM flip env %d\n", do_flip ? 1 : 0);
+	/* The mmap starts on the page the CRTC is scanning. One flip
+	 * before any pixel publishes that page and banks the CPU at the
+	 * next one, so the first frame is not drawn on the beam.
+	 */
+	if (do_flip && !fb_fake && fb_fd >= 0 &&
+	    (fb_aperture || fb_apcopy || use_13h) && flip_once() != 0) {
+		printf("WD24X-DOOM flip refused\n");
+		do_flip = 0;
+	}
 	printf("WD24X-DOOM sum %s\n", sum_frames ? "on" : "off");
 	if (!wd24x_doom_input_opt_in(getenv("WD24X_DOOM_INPUT"))) {
 		printf("WD24X-DOOM input none\n");
@@ -700,25 +732,9 @@ void DG_DrawFrame(void)
 			wd24x_doom_emit(fb, 0, present, WD24X_DOOM_FRAME, NULL);
 	}
 	if (do_flip && !fb_fake && fb_fd >= 0 &&
-	    (fb_aperture || fb_apcopy || use_13h)) {
-		struct wd24s6d_flip fr;
-
-		memset(&fr, 0, sizeof(fr));
-		fr.vsync = do_vsync ? 1u : 0u;
-		if (ioctl(fb_fd, WD24S6D_IOC_FLIP, &fr) != 0) {
-			printf("WD24X-DOOM flip refused\n");
-			do_flip = 0;
-		} else if (!flip_said) {
-			/* 1 is this switch, not the page. show is the page just
-			 * displayed. The first one is 0 because drawing starts
-			 * on page 0. A log line "flip 0" was that page.
-			 */
-			printf("WD24X-DOOM flip 1 vsync %u show %u\n",
-			       fr.vsync, fr.show);
-			printf("WD24X-DOOM flip cr0c %02x cr0d %02x pr0a %02x\n",
-			       fr.cr0c, fr.cr0d, fr.pr0a);
-			flip_said = 1;
-		}
+	    (fb_aperture || fb_apcopy || use_13h) && flip_once() != 0) {
+		printf("WD24X-DOOM flip refused\n");
+		do_flip = 0;
 	}
 	if (sum_frames)
 		present_sum = fnv(present, WD24X_DOOM_FRAME);

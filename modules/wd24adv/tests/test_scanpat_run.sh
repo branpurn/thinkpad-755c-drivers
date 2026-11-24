@@ -94,8 +94,10 @@ cat > "$M/tmp/wd24x-scanpat" <<'EOF'
 #!/bin/sh
 if [ "$1" = "pages" ]; then
 	echo "WD24X-SCANPAT pages red then green"
+	echo "WD24X-SCANPAT mark left"
 	echo "WD24X-SCANPAT flip show 0 cr0c 00 cr0d 00 pr0a 10"
-	echo "WD24X-SCANPAT flip show 1 cr0c 40 cr0d 00 pr0a 00"
+	echo "WD24X-SCANPAT flip show 1 cr0c 40 cr0d 00 pr0a 20"
+	echo "WD24X-SCANPAT flip show 2 cr0c 80 cr0d 00 pr0a 00"
 	exit 0
 fi
 echo "WD24X-SCANPAT red rows 0-15 cols 40-79"
@@ -105,12 +107,14 @@ chmod 755 "$M/tmp/wd24x-scanpat"
 rc=$(run pages)
 grep -q "WD24X-SCANPAT-RUN done" "$M/out" && ok || bad "pages done"
 grep -q "flip show 1 cr0c 40" "$M/out" && ok || bad "pages line"
+grep -q "flip show 2 cr0c 80" "$M/out" && ok || bad "page2 line"
 [ "$rc" = 0 ] && ok || bad "pages rc"
 
 printf '%s\n' 'font 1 - Live' > "$M/proc/modules"
 cat > "$M/tmp/wd24x-scanpat" <<'EOF'
 #!/bin/sh
 echo "WD24X-SCANPAT pages red then green"
+echo "WD24X-SCANPAT mark left"
 echo "WD24X-SCANPAT flip show 0 cr0c 00 cr0d 00 pr0a 10"
 echo "WD24X-SCANPAT flip show 1 cr0c 00 cr0d 00 pr0a 00"
 exit 0

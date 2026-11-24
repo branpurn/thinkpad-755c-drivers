@@ -1,5 +1,8 @@
 #!/bin/sh
 # Doom on the desktop-env module. One shot. Does not start by being copied.
+# The device shell must be the one that expands $?. A host that types
+# echo GO_RC=$? sends the host's status. Send this instead:
+#   echo 'GO5_RC=$?'
 # WD24X_DOOM_FB=ioctl. Does not mmap. fdf30c77 has no present ioctl.
 # Do not set WD24X_MOCK on the target.
 #   sh s6d-doom-run.sh demo1
@@ -377,6 +380,9 @@ if [ "$mode" = "timedemo13hmap" ] || [ "$mode" = "timedemo13hflip" ]; then
 		fi
 		if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM flip 1 vsync $vs show 0"; then
 			fail "flip"
+		fi
+		if ! have_line "$P/tmp/wd24x-doom.out" "WD24X-DOOM flip latched 1"; then
+			fail "latched"
 		fi
 	fi
 elif [ "$mode" = "timedemo13hcopy" ]; then

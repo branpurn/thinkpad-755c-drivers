@@ -1,5 +1,10 @@
 Load, unload, recovery. Not a hardware result.
 
+A status line typed from another machine must not let that machine's
+shell expand $?. Send the quotes, and read the number the 755C prints:
+
+    echo 'GO5_RC=$?'
+
 The module vermagic must be `6.18.57-tc755x mod_unload 486`. A module
 built on another kernel will not load. This tree's cloud build has no
 Module.symvers for that kernel, so it does not produce the .ko.

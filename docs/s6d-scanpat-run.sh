@@ -6,16 +6,18 @@
 # those lines are not printed on the VGA console.
 #   sh s6d-scanpat-run.sh
 #   sh s6d-scanpat-run.sh pages
-# pages fills page 0 red, banks the CPU and fills page 1 green while
-# the start stays 0, then sets CR0C/CR0D to 0x4000. Red, then still
-# red, then green means the start moved the scanout. Red turning
-# green before the second line means the CPU bank did not move.
-# Staying red after "page 1 shown" means CR0C/CR0D did not move it.
-# Trial is 30s. The picture is up for 10s of that, or about 14s for
-# pages. pattern=0.
+# pages is the one-minute eye check. Page 0 is red with a white block
+# at the top left. Page 1 is green with a white block at the top right,
+# written while the start stays 0. Page 2 is blue with a white block
+# in the middle, written at PR0A 0x20. The picture should be red, then
+# still red, then green, then still green, then blue. Two blocks at
+# once means that draw hit the page on the beam. The register lines
+# are show 0 / cr0c 00 / pr0a 10, then show 1 / cr0c 40 / pr0a 20,
+# then show 2 / cr0c 80 / pr0a 00. Trial is 30s. pattern=0.
 # s6d_bind=0 leaves vtcon0 on vgacon; the module then sets KD_GRAPHICS.
 # Stripped i486 static binary from this tree: 26132 bytes,
-# sha256 c9a961f5785c11f74ef70b9fdfa7ef47834f4e2c28d8ca8fbd64aa5ca25b51d1.
+# sha256 3e6899e82e04de4204bce66b6af1464d4e493dacd2ae0f837955379f5da5de3c.
+# The earlier binary of the same size does not draw the third page.
 # Build: i486-linux-musl-gcc -static -march=i486 -mtune=i486 -O2 -s
 #   -o /tmp/wd24x-scanpat tools/wd24-scan/scanpat.c
 P=${WD24X_MOCK:-}
@@ -95,10 +97,14 @@ cat "$P/tmp/wd24x-scanpat.out"
 if [ "$mode" = "pages" ]; then
 	grep -q "WD24X-SCANPAT pages red then green" \
 		"$P/tmp/wd24x-scanpat.out" || stop "pages"
+	grep -q "WD24X-SCANPAT mark left" \
+		"$P/tmp/wd24x-scanpat.out" || stop "mark"
 	grep -q "WD24X-SCANPAT flip show 0 cr0c 00 cr0d 00 pr0a 10" \
 		"$P/tmp/wd24x-scanpat.out" || stop "page0"
-	grep -q "WD24X-SCANPAT flip show 1 cr0c 40 cr0d 00 pr0a 00" \
+	grep -q "WD24X-SCANPAT flip show 1 cr0c 40 cr0d 00 pr0a 20" \
 		"$P/tmp/wd24x-scanpat.out" || stop "page1"
+	grep -q "WD24X-SCANPAT flip show 2 cr0c 80 cr0d 00 pr0a 00" \
+		"$P/tmp/wd24x-scanpat.out" || stop "page2"
 else
 	grep -q "WD24X-SCANPAT red rows 0-15 cols 40-79" \
 		"$P/tmp/wd24x-scanpat.out" || stop "legend"

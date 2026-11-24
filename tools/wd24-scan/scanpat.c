@@ -58,20 +58,36 @@ static int kd_hold(void)
 	return 0;
 }
 
-/* Page 0 is solid red. The first flip leaves the CRTC there and banks
- * the CPU at +64KiB. Filling green must not change the picture if that
- * bank moved. The second flip points CR0C/CR0D at 0x4000. The picture
- * turns green only if that start is what the scanout uses.
+/* White 32x32 block. Index 15 is programmed full-scale with the corners. */
+static void mark_block(uint8_t *win, unsigned int x, unsigned int y)
+{
+	unsigned int row, col;
+
+	for (row = 0; row < 32; row++)
+		for (col = 0; col < 32; col++)
+			win[(y + row) * 320u + x + col] = 15;
+}
+
+/* Three pages, one mark each. Page 0 is red with a white block at the
+ * top left. The first flip leaves the CRTC there and banks the CPU at
+ * +64KiB. Page 1 is green with a white block at the top right; the
+ * picture must stay red until the second flip sets CR0C to 0x40.
+ * Page 2 is blue with a white block in the middle, written at PR0A
+ * 0x20, and it must not show until the third flip sets CR0C to 0x80.
+ * Both blocks at once means the CPU bank and the scanout are the same
+ * page. A black line at the change is the start write meeting the beam.
  */
 static int show_pages(int fd, uint8_t *win)
 {
 	struct wd24s6d_flip fr;
 
 	memset(win, WD24_SCAN_RED, WIN);
+	mark_block(win, 0, 0);
 	printf("WD24X-SCANPAT pages red then green\n");
+	printf("WD24X-SCANPAT mark left\n");
 	printf("WD24X-SCANPAT page 0 red\n");
 	fflush(stdout);
-	sleep(4);
+	sleep(2);
 	memset(&fr, 0, sizeof(fr));
 	if (ioctl(fd, WD24S6D_IOC_FLIP, &fr) != 0 ||
 	    fr.show != 0 || fr.cr0c != 0 || fr.cr0d != 0 || fr.pr0a != 0x10) {
@@ -81,20 +97,36 @@ static int show_pages(int fd, uint8_t *win)
 	printf("WD24X-SCANPAT flip show %u cr0c %02x cr0d %02x pr0a %02x\n",
 	       fr.show, fr.cr0c, fr.cr0d, fr.pr0a);
 	memset(win, WD24_SCAN_GRN, WIN);
+	mark_block(win, 288, 0);
+	printf("WD24X-SCANPAT mark right\n");
 	printf("WD24X-SCANPAT page 1 written, still showing page 0\n");
 	fflush(stdout);
-	sleep(4);
+	sleep(2);
 	memset(&fr, 0, sizeof(fr));
 	if (ioctl(fd, WD24S6D_IOC_FLIP, &fr) != 0 ||
-	    fr.show != 1 || fr.cr0c != 0x40 || fr.cr0d != 0 || fr.pr0a != 0) {
+	    fr.show != 1 || fr.cr0c != 0x40 || fr.cr0d != 0 || fr.pr0a != 0x20) {
 		fprintf(stderr, "WD24X-SCANPAT flip mismatch\n");
 		return 1;
 	}
 	printf("WD24X-SCANPAT flip show %u cr0c %02x cr0d %02x pr0a %02x\n",
 	       fr.show, fr.cr0c, fr.cr0d, fr.pr0a);
-	printf("WD24X-SCANPAT page 1 shown\n");
+	memset(win, WD24_SCAN_BLU, WIN);
+	mark_block(win, 144, 84);
+	printf("WD24X-SCANPAT mark mid\n");
+	printf("WD24X-SCANPAT page 2 written, still showing page 1\n");
 	fflush(stdout);
-	sleep(6);
+	sleep(2);
+	memset(&fr, 0, sizeof(fr));
+	if (ioctl(fd, WD24S6D_IOC_FLIP, &fr) != 0 ||
+	    fr.show != 2 || fr.cr0c != 0x80 || fr.cr0d != 0 || fr.pr0a != 0) {
+		fprintf(stderr, "WD24X-SCANPAT flip mismatch\n");
+		return 1;
+	}
+	printf("WD24X-SCANPAT flip show %u cr0c %02x cr0d %02x pr0a %02x\n",
+	       fr.show, fr.cr0c, fr.cr0d, fr.pr0a);
+	printf("WD24X-SCANPAT page 2 shown\n");
+	fflush(stdout);
+	sleep(3);
 	return 0;
 }
 

@@ -59,12 +59,11 @@ struct wd24s6d_present {
 #define WD24S6D_IOC_PRESENT	_IOWR('W', 0x40, struct wd24s6d_present)
 
 /*
- * Show the 64K page just drawn and point the A0000 window at the other
- * page. cr0c/cr0d are the CRTC start written for that page (0 or
- * 0x4000). pr0a is the CPU bank written for the page drawn next.
- * The CRTC loads cr0c/cr0d at vertical retrace, so this does not
- * poll 3DA. late stays 0. vsync is accepted and ignored.
- * Only valid in the 320x200-8 session.
+ * Show the 64K page just drawn and point the A0000 window at the next
+ * one. Three pages: cr0c/cr0d are 0x0000, 0x4000, or 0x8000, and pr0a
+ * is 0x00, 0x10, or 0x20. The start bytes are written only after 3DA
+ * bit 3 has been seen. late stays 0. vsync is echoed and does not
+ * add a second wait. Only valid in the 320x200-8 session.
  */
 struct wd24s6d_flip {
 	__u32 vsync;

@@ -2663,8 +2663,10 @@ static int s6d_ensure_off(u32 off)
 	base = wd24s6d_win_base_pg(off);
 	win = s6d_st->mapped_base;
 	pg = off / WD24S6D_PAGE;
-	if (win != ~0u && pg >= win && pg < win + (WD24S6D_WIN / WD24S6D_PAGE))
+	if (win != ~0u && pg >= win && pg < win + (WD24S6D_WIN / WD24S6D_PAGE)) {
+		wd24s6d_thrash_quiet(&s6d_st->thrash);
 		return 0;
+	}
 	if (wd24s6d_thrash_note(&s6d_st->thrash, base)) {
 		s6d_st->nthrash++;
 		s6d_st->why = "thrash latch";
@@ -2776,6 +2778,8 @@ static void s6d_accel_gate(void)
 			goto done;
 		s6d_agate = 1;
 	} else if (r != 0) {
+		if (s6d_st)
+			s6d_st->why = "accel refuse";
 		goto restore;
 	}
 	for (i = 0; i < W * H; i++) {
@@ -2946,17 +2950,27 @@ static void s6d_fillrect(struct fb_info *info, const struct fb_fillrect *r)
 static void s6d_cpu_copy(u32 sx, u32 sy, u32 dx, u32 dy, u32 w, u32 h)
 {
 	int back = (dy * WD24S6D_LINE + dx) > (sy * WD24S6D_LINE + sx);
-	u32 row, col;
+	u32 row;
 
+	if (w > WD24S6D_XRES)
+		return;
 	for (row = 0; row < h; row++) {
 		u32 rs = back ? h - 1 - row : row;
+		u8 tmp[WD24S6D_XRES];
+		u32 col;
 
+		/* The whole source row is read before any destination
+		 * byte of that row is written, so an overlap is the
+		 * same pixels as a temporary buffer. Reading and writing
+		 * one pixel at a time alternates 64K windows wherever
+		 * the row crosses a bank, and that counted as a livelock.
+		 */
 		for (col = 0; col < w; col++) {
-			u32 cs = back ? w - 1 - col : col;
-			u8 px;
-
-			if (s6d_pix(sx + cs, sy + rs, 0, &px) ||
-			    s6d_pix(dx + cs, dy + rs, 1, &px))
+			if (s6d_pix(sx + col, sy + rs, 0, &tmp[col]))
+				return;
+		}
+		for (col = 0; col < w; col++) {
+			if (s6d_pix(dx + col, dy + rs, 1, &tmp[col]))
 				return;
 		}
 	}
@@ -2970,7 +2984,7 @@ static void s6d_copyarea(struct fb_info *info, const struct fb_copyarea *a)
 	int ar;
 
 	(void)info;
-	if (!accel || !a || !a->width || !a->height || vram_dead)
+	if (!a || !a->width || !a->height || vram_dead)
 		return;
 	sx = a->sx;
 	sy = a->sy;
@@ -2991,7 +3005,7 @@ static void s6d_copyarea(struct fb_info *info, const struct fb_copyarea *a)
 		h = WD24S6D_YRES - dy;
 	if (!s6d_draw_enter(&took))
 		return;
-	if (!wd24s4_make_copy(&op, sx, sy, dx, dy, w, h)) {
+	if (accel && !wd24s4_make_copy(&op, sx, sy, dx, dy, w, h)) {
 		ar = s6d_accel_do(&op);
 		if (ar == 2) {
 			__module_get(THIS_MODULE);
@@ -3113,8 +3127,13 @@ static int s6d_present_13h(const u8 *src, u32 *nsw)
  * lock again. Drop hw before console_lock: the trial worker takes
   * console_lock, then hw_lock.
   */
-/* Caller holds hw_lock. Does not take console_lock. The CRTC loads
- * CR0C/CR0D at vertical retrace, so this does not poll 3DA.
+/* 3DA bit 3, capped. The page flip waits for this before CR0C/CR0D. */
+static int wd24_wait_vsync(void);
+
+/* Caller holds hw_lock. Does not take console_lock. CR0C/CR0D are
+ * written only while 3DA bit 3 is set (datasheet 15.8, 10.12). The
+ * CPU bank is the page after the one published, so a sample that
+ * lands on the following field is not the page Doom draws next.
  */
 static int s6d_flip_now(struct wd24s6d_flip *req)
 {
@@ -3128,6 +3147,9 @@ static int s6d_flip_now(struct wd24s6d_flip *req)
 		return -EINVAL;
 	wd24_flip_step(flip_cpu, &step);
 	req->late = 0;
+	err = wd24_wait_vsync();
+	if (err)
+		return err;
 	hw->be->begin(hw);
 	if (!flip_hot)
 		err = wd24_unlock(hw);
@@ -3148,17 +3170,17 @@ static int s6d_flip_now(struct wd24s6d_flip *req)
 	req->pr0a = step.pr0a;
 	req->cr0c = step.cr0c;
 	req->cr0d = step.cr0d;
-	/* Two lines are enough: page 0 still shown, then page 1 shown.
-	 * A Doom run flips once a frame and would fill the live log.
+	/* One line per page. A Doom run flips once a frame and would
+	 * fill the live log.
 	 */
-	if (flip_scans < 2) {
+	if (flip_scans < 3) {
 		flip_scans++;
 		live_append_scan("flip");
 	}
 	return 0;
 }
 
-/* 3DA bit 3, capped. Not used by the page flip. */
+/* 3DA bit 3, capped at 100 ms. */
 static int wd24_wait_vsync(void)
 {
 	unsigned long deadline = jiffies + HZ / 10;

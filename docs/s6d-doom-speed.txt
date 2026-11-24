@@ -206,17 +206,25 @@ value CR2F=0x42 keeps the counter at 64K locations. On `2fe57de` the
 flip wrote PR16 bit 3, left CR0C/CR0D at 0, and the picture did not
 move. PR0A (GR09) = 0x10 is only the CPU window at +64KiB
 (`wd_selftest_banks`). `WD24X_DOOM_FLIP=1` now writes CR0C/CR0D for
-the page just drawn and PR0A for the other page. It does not write
+the page just drawn and PR0A for the page after that. It does not write
 PR16 or PR3. KD_GRAPHICS stays on so vgacon does not rewrite CR0C/D.
-The CRTC loads that start at vertical retrace, so the flip does not
-poll 3DA. `WD24X_DOOM_VSYNC` is accepted and ignored. A retrace poll
-would be up to one 70 Hz field, about 7 ms on average, and it is not
-in this path. The first flip also unlocks (four writes). Later flips
-are CR0C, CR0D, and PR0A. That is not a 64000-byte copy.
+The CRTC loads that start at vertical retrace (datasheet 10.12).
+3DA bit 3 is that retrace (datasheet 15.8). go5 wrote CR0C and PR0A
+and returned at once, so Doom drew the page the beam was still
+finishing. There are now three pages. The page drawn next is neither
+the one just published nor the one before it. PR0A 0x20 is byte
+131072 by the same shift as 0x10, and CR0C 0x80 is that byte in
+doubleword units. The start bytes are written only while bit 3 is
+set. `WD24X_DOOM_VSYNC` is still only echoed. The wait is the one
+retrace before the write, not a second poll. The first flip also
+unlocks (four writes). Later flips are CR0C, CR0D, and PR0A. Doom
+issues one flip before the first pixel so that pixel is not stored
+on the scanned page. That is not a 64000-byte copy.
 `sh docs/s6d-doom-run.sh timedemo13hflip` is the map path with flip
-on and vsync off. `sh docs/s6d-scanpat-run.sh pages` is the short
-check: page 0 solid red, page 1 solid green, and the two register
-lines. The panel has not been seen with this start address yet.
+on. `sh docs/s6d-scanpat-run.sh pages` is the short check: red with
+a white block at the top left, green with one at the top right, blue
+with one in the middle, and the three register lines. Do that before
+the timedemo.
 
 On `2fe57de` that run printed `WD24X-DOOM flip 0 vsync 0` and the
 picture still ghosted. The `0` is the page, not the switch: drawing
