@@ -21,18 +21,16 @@ int main(void)
 	  "CPU +128K is the same VRAM as CRTC 0x8000");
 	T((0x10000u << 2) == 262144u, "PR3 CA16 is 256KiB in doubleword mode");
 
-	/* go5: two pages, start written, CPU aimed at the page that was
-	 * showing, ioctl returned before 3DA bit 3. That draw is the ghost.
-	 */
+	/* go5: two pages, CPU aimed at the page the beam was still on. */
 	T(!wd24_flip_draw_ok(1, 0, 0, 0), "go5 draw is before the sample");
-	T(!wd24_flip_draw_ok(1, 0, 0, 1), "two pages draw the previous page");
+	T(wd24_flip_draw_ok(1, 0, 0, 1), "after the sample the old page is free");
 	T(!wd24_flip_draw_ok(0, 0, 1, 1), "draw on the page just published");
 
 	old = 0;
 	wd24_flip_step(0, &s);
 	T(s.show == 0 && s.cpu == 1 && s.cr0c == 0 && s.cr0d == 0 &&
 	  s.pr0a == 0x10, "after page 0: start stays 0, CPU at +64K");
-	T(!wd24_flip_draw_ok(s.show, s.cpu, old, 0), "page 0 not released yet");
+	T(wd24_flip_draw_ok(s.show, s.cpu, old, 0), "page 1 is free before the sample");
 	T(wd24_flip_draw_ok(s.show, s.cpu, old, 1), "page 1 is hidden once sampled");
 	old = s.show;
 	wd24_flip_step(s.cpu, &s);
@@ -51,6 +49,35 @@ int main(void)
 	T(s.show == 0 && s.cr0c == 0, "the step after that returns the start to 0");
 	T(wd24_flip_writes(1) == 3, "hot flip is CR0C, CR0D, PR0A");
 	T(wd24_flip_writes(0) == 7, "cold flip adds the four unlock writes");
+	{
+		struct wd24_flip_beam b;
+		unsigned int cpu;
+
+		wd24_flip_beam_init(&b);
+		cpu = 0;
+		wd24_flip_step(cpu, &s);
+		T(!wd24_flip_needs_wait(&b, s.show, s.cpu), "first page is free");
+		wd24_flip_beam_arm(&b, s.show, 0);
+		wd24_flip_beam_note(&b, 19);
+		T(b.fresh == 1, "19 ms has not released the beam");
+		wd24_flip_beam_note(&b, 20);
+		T(b.fresh == 0 && b.scanning == 0, "20 ms moves the beam");
+		cpu = s.cpu;
+		wd24_flip_step(cpu, &s);
+		T(!wd24_flip_needs_wait(&b, s.show, s.cpu), "second page is free");
+		wd24_flip_beam_arm(&b, s.show, 0);
+		/* No field yet. The beam is still on page 0. */
+		cpu = s.cpu;
+		wd24_flip_step(cpu, &s);
+		T(s.cpu == 0, "third draw returns to page 0");
+		T(wd24_flip_needs_wait(&b, s.show, s.cpu),
+		  "page 0 is still on the beam");
+		wd24_flip_beam_note(&b, 20);
+		T(!wd24_flip_needs_wait(&b, s.show, s.cpu),
+		  "after a field page 0 is free");
+		T(!wd24_flip_beam_advanced(19) && wd24_flip_beam_advanced(20),
+		  "field edge is 20 ms");
+	}
 	printf("test_flip: %d passed, %d failed\n", passes, fails);
 	return fails ? 1 : 0;
 }

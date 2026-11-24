@@ -61,9 +61,10 @@ struct wd24s6d_present {
 /*
  * Show the 64K page just drawn and point the A0000 window at the next
  * one. Three pages: cr0c/cr0d are 0x0000, 0x4000, or 0x8000, and pr0a
- * is 0x00, 0x10, or 0x20. The start bytes are written only after 3DA
- * bit 3 has been seen. late stays 0. vsync is echoed and does not
- * add a second wait. Only valid in the 320x200-8 session.
+ * is 0x00, 0x10, or 0x20. The ioctl waits for 3DA bit 3 only when
+ * the CPU page is still the one on the beam. late stays 0. vsync is
+ * echoed and does not add a second wait. Only valid in the
+ * 320x200-8 session.
  */
 struct wd24s6d_flip {
 	__u32 vsync;

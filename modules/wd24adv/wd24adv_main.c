@@ -2033,6 +2033,9 @@ static struct wd24s6b *s6d_b;
 static struct fb_info *s6d_info;
 static bool s6d_armed, s6d_busy, s6d_13h;
 static unsigned int flip_cpu;
+static struct wd24_flip_beam flip_beam;
+static unsigned long flip_arm_jiff;
+static int flip_arm_set;
 static int flip_used;
 static unsigned int flip_scans;
 static int flip_hot;
@@ -2249,6 +2252,8 @@ static void s6d_vma_close(struct vm_area_struct *vma)
 		hw->be->end(hw);
 		flip_used = 0;
 		flip_cpu = 0;
+		wd24_flip_beam_init(&flip_beam);
+		flip_arm_set = 0;
 		flip_scans = 0;
 		flip_hot = 0;
 		if (rerr)
@@ -3127,18 +3132,41 @@ static int s6d_present_13h(const u8 *src, u32 *nsw)
  * lock again. Drop hw before console_lock: the trial worker takes
   * console_lock, then hw_lock.
   */
-/* 3DA bit 3, capped. The page flip waits for this before CR0C/CR0D. */
+/* 3DA bit 3, capped. Used only when the CPU page is still scanned. */
 static int wd24_wait_vsync(void);
 
-/* Caller holds hw_lock. Does not take console_lock. CR0C/CR0D are
- * written only while 3DA bit 3 is set (datasheet 15.8, 10.12). The
- * CPU bank is the page after the one published, so a sample that
- * lands on the following field is not the page Doom draws next.
+/* One read of 3DA bit 3. 1 in retrace, 0 in active display, -1 if the
+ * port is not there. Does not spin.
+ */
+static int wd24_retrace_bit(void)
+{
+	if (!hw || !hw->io || !hw->io->inb)
+		return -1;
+	return !!(hw->io->inb(hw->io->priv, 0x3da) & 0x08);
+}
+
+static unsigned int flip_elapsed_ms(void)
+{
+	unsigned long d;
+
+	if (!flip_arm_set)
+		return 0;
+	d = jiffies - flip_arm_jiff;
+	/* 32-bit jiffies: do not multiply a long gap by 1000 first. */
+	return (unsigned int)((d / HZ) * 1000ul + (d % HZ) * 1000ul / HZ);
+}
+
+/* Caller holds hw_lock. Does not take console_lock. The wait is
+ * 3DA bit 3 (datasheet 15.8) and only when wd24_flip_needs_wait says
+ * the CPU page is still on the beam. A free page skips the wait.
+ * CR0C/CR0D are still the refresh start (datasheet 10.12).
  */
 static int s6d_flip_now(struct wd24s6d_flip *req)
 {
 	struct wd24_flip_step step;
 	int err = 0;
+	int waited = 0;
+	int bit;
 
 	if (!s6d_13h || !s6d_armed || !hw || hw->in_text || !s6d_st ||
 	    !s6d_st->active || s6d_st->stopping)
@@ -3147,9 +3175,17 @@ static int s6d_flip_now(struct wd24s6d_flip *req)
 		return -EINVAL;
 	wd24_flip_step(flip_cpu, &step);
 	req->late = 0;
-	err = wd24_wait_vsync();
-	if (err)
-		return err;
+	wd24_flip_beam_note(&flip_beam, flip_elapsed_ms());
+	bit = wd24_retrace_bit();
+	if (wd24_flip_needs_wait(&flip_beam, step.show, step.cpu)) {
+		err = wd24_wait_vsync();
+		if (err)
+			return err;
+		waited = 1;
+	} else if (bit == 1) {
+		/* Already in retrace, so the start write is not mid-line. */
+		waited = 1;
+	}
 	hw->be->begin(hw);
 	if (!flip_hot)
 		err = wd24_unlock(hw);
@@ -3163,6 +3199,9 @@ static int s6d_flip_now(struct wd24s6d_flip *req)
 	if (err)
 		return err;
 	flip_cpu = step.cpu;
+	wd24_flip_beam_arm(&flip_beam, step.show, waited);
+	flip_arm_set = 1;
+	flip_arm_jiff = jiffies;
 	flip_used = 1;
 	flip_hot = 1;
 	req->show = step.show;
@@ -3599,6 +3638,8 @@ static void s6d_arm(const struct wd24_mode *m)
 	s6d_scan_frame = false;
 	s6d_scan_unmap = false;
 	flip_cpu = 0;
+	wd24_flip_beam_init(&flip_beam);
+	flip_arm_set = 0;
 	flip_scans = 0;
 	flip_hot = 0;
 	s6d_latch_noted = 0;

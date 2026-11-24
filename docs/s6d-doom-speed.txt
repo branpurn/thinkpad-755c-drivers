@@ -214,14 +214,21 @@ and returned at once, so Doom drew the page the beam was still
 finishing. There are now three pages. The page drawn next is neither
 the one just published nor the one before it. PR0A 0x20 is byte
 131072 by the same shift as 0x10, and CR0C 0x80 is that byte in
-doubleword units. The start bytes are written only while bit 3 is
-set. `WD24X_DOOM_VSYNC` is still only echoed. The wait is the one
-retrace before the write, not a second poll. The first flip also
+doubleword units. The ioctl waits for bit 3 only when the CPU page
+is still the one on the beam. With three pages that is not the usual
+case: the page drawn next is free, and the flip does not stall for a
+field. A start write that does not wait can still meet the beam
+mid-line.
+`WD24X_DOOM_VSYNC` is still only echoed. The first flip also
 unlocks (four writes). Later flips are CR0C, CR0D, and PR0A. Doom
 issues one flip before the first pixel so that pixel is not stored
 on the scanned page. That is not a 64000-byte copy.
 `sh docs/s6d-doom-run.sh timedemo13hflip` is the map path with flip
-on. `sh docs/s6d-scanpat-run.sh pages` is the short check: red with
+on. `WD24X_DOOM_FRAMESTATS=1` adds a CLOCK_MONOTONIC interval
+histogram and a render / copy / flip split on stderr at exit.
+Unset, those samples are not taken. `sh docs/s6d-go7-run.sh` is
+that timedemo plus about a minute of E1M1 with the switch on.
+`sh docs/s6d-scanpat-run.sh pages` is the short check: red with
 a white block at the top left, green with one at the top right, blue
 with one in the middle, and the three register lines. Do that before
 the timedemo.

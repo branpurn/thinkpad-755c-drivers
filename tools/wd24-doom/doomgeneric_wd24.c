@@ -42,6 +42,7 @@
 #include "wd24x-doom-present.h"
 #include "wd24x-doom-view.h"
 #include "wd24x-doom-time.h"
+#include "wd24x-doom-framestats.h"
 #include "wd24x-tty-own.h"
 #include "../../modules/wd24adv/wd24adv_ioctl.h"
 
@@ -79,6 +80,15 @@ static volatile sig_atomic_t got_sig;
 static int bars_sent;
 static int sum_frames;
 static struct wd24x_doom_time doom_time;
+static int fs_on;
+static int fs_dumped;
+static unsigned fs_presents;
+static int fs_have_prev;
+static int fs_have_tic;
+static int fs_prev_tic;
+static uint64_t fs_prev;
+static struct wd24x_doom_fs fs;
+extern int gametic;
 
 static int time_of(void)
 {
@@ -100,6 +110,53 @@ static uint64_t mono_ns(void)
 	if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
 		return 0;
 	return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+static int fs_enabled(void)
+{
+	const char *e = getenv("WD24X_DOOM_FRAMESTATS");
+
+	return e && e[0] == '1' && !e[1];
+}
+
+static void fs_dump(void)
+{
+	uint16_t sorted[WD24X_FS_CAP];
+	unsigned n, i;
+
+	if (!fs_on || fs_dumped)
+		return;
+	fs_dumped = 1;
+	n = fs.n;
+	if (n > WD24X_FS_CAP)
+		n = WD24X_FS_CAP;
+	if (n)
+		memcpy(sorted, fs.ms, n * sizeof(sorted[0]));
+	wd24x_fs_sort(sorted, n);
+	fprintf(stderr,
+		"WD24X-DOOM framestats frames %u intervals %u min %u med %u p95 %u p99 %u max %u over1 %u over2 %u render_ms %llu copy_ms %llu flip_ms %llu\n",
+		fs_presents, fs.frames,
+		wd24x_fs_pct(sorted, n, 0),
+		wd24x_fs_pct(sorted, n, 50),
+		wd24x_fs_pct(sorted, n, 95),
+		wd24x_fs_pct(sorted, n, 99),
+		wd24x_fs_pct(sorted, n, 100),
+		fs.over1, fs.over2,
+		(unsigned long long)(fs.render_ns / 1000000ull),
+		(unsigned long long)(fs.copy_ns / 1000000ull),
+		(unsigned long long)(fs.flip_ns / 1000000ull));
+	fprintf(stderr, "WD24X-DOOM framestats tics");
+	for (i = 0; i < WD24X_FS_TICS; i++)
+		fprintf(stderr, " %u:%u", i, fs.tics[i]);
+	fprintf(stderr, "\nWD24X-DOOM framestats hist");
+	for (i = 0; i < WD24X_FS_BUCKETS; i++) {
+		if (i + 1u < WD24X_FS_BUCKETS)
+			fprintf(stderr, " <%u:%u", wd24x_fs_edge[i], fs.hist[i]);
+		else
+			fprintf(stderr, " >=%u:%u", wd24x_fs_edge[i - 1u],
+				fs.hist[i]);
+	}
+	fprintf(stderr, "\n");
 }
 
 static void time_line(void)
@@ -186,6 +243,7 @@ static void restore_and_signal(void)
 
 	if (!sig)
 		return;
+	fs_dump();
 	kd_release();
 	wd24x_tty_own_end(&tty_own);
 	signal(sig, SIG_DFL);
@@ -511,6 +569,11 @@ static int flip_once(void)
 
 void DG_Init(void)
 {
+	if (!fs_on && fs_enabled()) {
+		fs_on = 1;
+		wd24x_fs_clear(&fs);
+		atexit(fs_dump);
+	}
 	const char *present_s = getenv("WD24X_DOOM_PRESENT");
 	const char *dev;
 
@@ -644,8 +707,11 @@ void DG_DrawFrame(void)
 {
 	const uint8_t *idx;
 	uint64_t t_enter = 0, t_pal = 0, t_left = 0;
+	uint64_t fs_enter = 0, fs_flip = 0;
 
 	restore_and_signal();
+	if (fs_on)
+		fs_enter = mono_ns();
 	if (!DG_ScreenBuffer)
 		return;
 	idx = (const uint8_t *)DG_ScreenBuffer;
@@ -731,10 +797,45 @@ void DG_DrawFrame(void)
 		if (fb)
 			wd24x_doom_emit(fb, 0, present, WD24X_DOOM_FRAME, NULL);
 	}
+	if (fs_on)
+		fs_flip = mono_ns();
 	if (do_flip && !fb_fake && fb_fd >= 0 &&
 	    (fb_aperture || fb_apcopy || use_13h) && flip_once() != 0) {
 		printf("WD24X-DOOM flip refused\n");
 		do_flip = 0;
+	}
+	if (fs_on) {
+		uint64_t now = mono_ns();
+		uint64_t render = 0, copy = 0, flip = 0;
+		unsigned tics = 0;
+
+		if (fs_have_prev && fs_enter >= fs_prev)
+			render = fs_enter - fs_prev;
+		if (fs_flip >= fs_enter)
+			copy = fs_flip - fs_enter;
+		if (now >= fs_flip)
+			flip = now - fs_flip;
+		fs_presents++;
+		if (fs_have_prev && now >= fs_prev) {
+			unsigned gap = (unsigned)((now - fs_prev) / 1000000ull);
+
+			if (fs_have_tic) {
+				int d = gametic - fs_prev_tic;
+
+				if (d < 0)
+					d = 0;
+				tics = (unsigned)d;
+			}
+			wd24x_fs_add(&fs, gap, tics, render, copy, flip);
+		} else {
+			fs.render_ns += render;
+			fs.copy_ns += copy;
+			fs.flip_ns += flip;
+		}
+		fs_prev = now;
+		fs_have_prev = 1;
+		fs_prev_tic = gametic;
+		fs_have_tic = 1;
 	}
 	if (sum_frames)
 		present_sum = fnv(present, WD24X_DOOM_FRAME);
@@ -753,15 +854,26 @@ void DG_DrawFrame(void)
 
 void DG_SleepMs(uint32_t ms)
 {
+	/* I_Sleep(1) is the tic-wait yield. Without high-res timers a
+	 * 1 ms sleep waits for the next periodic tick. That insert is
+	 * not used here.
+	 */
 	(void)ms;
 }
 
 uint32_t DG_GetTicksMs(void)
 {
-	struct timeval tv;
+	struct timespec ts;
 
-	gettimeofday(&tv, NULL);
-	return (uint32_t)(tv.tv_sec * 1000u + tv.tv_usec / 1000u);
+	/* Monotonic, so a wall-clock step does not move the tic. */
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+		return wd24x_doom_ms_of((uint64_t)ts.tv_sec, (uint32_t)ts.tv_nsec);
+	{
+		struct timeval tv;
+
+		gettimeofday(&tv, NULL);
+		return (uint32_t)(tv.tv_sec * 1000u + tv.tv_usec / 1000u);
+	}
 }
 
 int DG_GetKey(int *pressed, unsigned char *key)

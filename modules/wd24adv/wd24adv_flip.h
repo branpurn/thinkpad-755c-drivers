@@ -41,8 +41,9 @@
  * pages that other page is the one the beam is still finishing, for
  * up to one 70 Hz field. This step keeps three pages, so the page
  * drawn next is neither the one just published nor the one before
- * it. The start bytes are written only while bit 3 is set, so the
- * fetch address does not change in the middle of a line.
+ * it. The flip waits for bit 3 only when that next page is still
+ * the one on the beam. A free page does not stall the frame. A
+ * start write that does not wait can meet the beam mid-line.
  */
 #ifndef WD24ADV_FLIP_H
 #define WD24ADV_FLIP_H
@@ -101,23 +102,83 @@ static inline void wd24_flip_step(unsigned int cpu_page, struct wd24_flip_step *
 	o->pr0a = (u8)(cpu * WD24_FLIP_PR0A_PAGE1);
 }
 
-/* latched is 1 only after 3DA bit 3 has been seen and the start bytes
- * have been written. old is the page that was showing before this
- * write. Drawing that page before the sample is the go5 ghost: two
- * pages make it the page the CPU is given next.
+/* One field at 70 Hz is about 14 ms. 20 ms is the host-side stand-in
+ * for "a retrace has happened since the start was written".
+ */
+#define WD24_FLIP_FIELD_MS	20u
+
+struct wd24_flip_beam {
+	unsigned int scanning;	/* page the beam is still on */
+	unsigned int pending;	/* last start written, not yet known latched */
+	int fresh;		/* pending is newer than scanning */
+};
+
+static inline void wd24_flip_beam_init(struct wd24_flip_beam *b)
+{
+	b->scanning = 0;
+	b->pending = 0;
+	b->fresh = 0;
+}
+
+static inline int wd24_flip_beam_advanced(unsigned int elapsed_ms)
+{
+	return elapsed_ms >= WD24_FLIP_FIELD_MS;
+}
+
+/* A field since the write moves the beam onto the written page. */
+static inline void wd24_flip_beam_note(struct wd24_flip_beam *b,
+				       unsigned int elapsed_ms)
+{
+	if (b->fresh && wd24_flip_beam_advanced(elapsed_ms)) {
+		b->scanning = b->pending;
+		b->fresh = 0;
+	}
+}
+
+/* 1 when the CPU page is the one just published or the one the beam
+ * may still be scanning. A third page is neither, so the answer is 0
+ * and the flip does not block.
+ */
+static inline int wd24_flip_needs_wait(const struct wd24_flip_beam *b,
+				       unsigned int show, unsigned int cpu)
+{
+	if (!b || show >= WD24_FLIP_PAGES || cpu >= WD24_FLIP_PAGES)
+		return 1;
+	if (cpu == show)
+		return 1;
+	if (cpu == b->scanning)
+		return 1;
+	if (b->fresh && cpu == b->pending)
+		return 1;
+	return 0;
+}
+
+static inline void wd24_flip_beam_arm(struct wd24_flip_beam *b,
+				      unsigned int show, int waited)
+{
+	b->pending = show;
+	if (waited) {
+		b->scanning = show;
+		b->fresh = 0;
+	} else {
+		b->fresh = 1;
+	}
+}
+
+/* latched is 1 after a field (or an in-retrace write) has moved the
+ * beam onto the page this call publishes. old is the page that was
+ * scanning before that. go5 aimed the CPU at old before the sample.
  */
 static inline int wd24_flip_draw_ok(unsigned int show, unsigned int cpu,
 				    unsigned int old, int latched)
 {
-	if (show >= WD24_FLIP_PAGES || cpu >= WD24_FLIP_PAGES)
-		return 0;
-	if (cpu == show)
-		return 0;
-	if (!latched)
-		return 0;
-	if (cpu == old)
-		return 0;
-	return 1;
+	struct wd24_flip_beam b;
+
+	wd24_flip_beam_init(&b);
+	b.scanning = latched ? show : old;
+	b.pending = show;
+	b.fresh = latched ? 0 : 1;
+	return !wd24_flip_needs_wait(&b, show, cpu);
 }
 
 #endif
